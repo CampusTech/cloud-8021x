@@ -70,6 +70,7 @@ terraform apply
 |--------|-------------|---------|
 | `radius-shared-secret-<office>` | Terraform | Per-office shared secret between APs and RADIUS |
 | `okta-ca-cert` | Terraform | Okta Intermediate CA for client cert validation |
+| `okta-root-ca-cert` | Terraform (optional) | Okta Root CA for full chain validation |
 | `radius-server-ca-key` | Startup script | Self-signed CA private key |
 | `radius-server-ca-cert` | Startup script | Self-signed CA certificate (upload to Jamf) |
 | `radius-server-key` | Startup script | RADIUS server private key |
@@ -89,7 +90,8 @@ See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key va
 |----------|----------|-------------|
 | `billing_account_id` | Yes | GCP billing account to link |
 | `radius_clients` | Yes | Map of offices with CIDRs (secrets auto-generated) |
-| `okta_ca_cert_pem` | Yes | Okta CA cert PEM content |
+| `okta_ca_cert_pem` | Yes | Okta Intermediate CA cert PEM content |
+| `okta_root_ca_cert_pem` | No | Okta Root CA cert PEM (enables full chain validation) |
 | `datadog_api_key` | Yes | Datadog API key for monitoring agent |
 | `ssh_allowed_cidrs` | No | IPs for SSH access (default: GCP IAP) |
 | `secondary_zone` | No | Zone for secondary VM (default: `us-east4-c`) |
@@ -134,6 +136,24 @@ Configure your access points (UniFi, Meraki, or any 802.1X-capable AP) with:
    - Trust: Add the server CA cert above
    - Trusted Server Certificate Names: `radius.example.com` (must match `server_cert_cn`)
    - Disable Private MAC Address: recommended for consistent device tracking
+
+### Okta Root CA (Optional)
+
+For full chain validation (client cert → Intermediate CA → Root CA), you can provide the Okta Root CA certificate via the `okta_root_ca_cert_pem` variable. Without it, FreeRADIUS trusts only the Intermediate CA directly — this works, but won't survive an Intermediate CA re-key by Okta.
+
+To obtain the Root CA from your Okta admin console ([source](https://andrewdoering.org/blog/2023/obtaining-okta-root-ca/)):
+
+1. Log into your Okta Admin Dashboard
+2. In a new tab (same session), navigate to:
+   ```
+   https://<your-org>-admin.okta.com/api/v1/certificateAuthorities?type=ROOT
+   ```
+3. Copy the `id` value from the JSON response
+4. In another tab, navigate to:
+   ```
+   https://<your-org>-admin.okta.com/api/v1/certificateAuthorities/<id>/cert
+   ```
+5. A `.cer` file will download — paste its PEM contents into `okta_root_ca_cert_pem` in your `terraform.tfvars`
 
 ## Post-Deployment
 

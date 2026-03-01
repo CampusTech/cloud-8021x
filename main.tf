@@ -167,6 +167,30 @@ resource "google_secret_manager_secret_version" "okta_ca_cert" {
 }
 
 # -----------------------------------------------------------------------------
+# Secret Manager — Okta Root CA certificate (optional)
+# Enables full chain validation: client cert → Intermediate → Root.
+# Without this, FreeRADIUS trusts only the Intermediate CA directly.
+# -----------------------------------------------------------------------------
+
+resource "google_secret_manager_secret" "okta_root_ca_cert" {
+  count     = var.okta_root_ca_cert_pem != "" ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = "okta-root-ca-cert"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "okta_root_ca_cert" {
+  count       = var.okta_root_ca_cert_pem != "" ? 1 : 0
+  secret      = google_secret_manager_secret.okta_root_ca_cert[0].id
+  secret_data = var.okta_root_ca_cert_pem
+}
+
+# -----------------------------------------------------------------------------
 # Secret Manager — Datadog API key
 # -----------------------------------------------------------------------------
 

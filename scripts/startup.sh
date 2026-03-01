@@ -14,6 +14,7 @@ echo "=== FreeRADIUS bootstrap started at $(date) ==="
 PROJECT_ID="${project_id}"
 SERVER_CERT_CN="${server_cert_cn}"
 SERVER_CERT_ORG="${server_cert_org}"
+HAS_ROOT_CA="${has_root_ca}"
 RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
 
@@ -59,11 +60,20 @@ CERT_DIR="$RADDB/certs"
 # ---------------------------------------------------------------------------
 # 3. Retrieve Okta CA certificate from Secret Manager
 # ---------------------------------------------------------------------------
-echo "=== Retrieving Okta CA certificate ==="
+echo "=== Retrieving Okta CA certificate(s) ==="
 
 gcloud secrets versions access latest \
     --secret=okta-ca-cert \
     --project="$PROJECT_ID" > "$CERT_DIR/okta-ca.pem"
+
+# If the Root CA is provided, append it to build the full trust chain
+if [ "$HAS_ROOT_CA" = "true" ]; then
+    echo "Fetching Okta Root CA certificate..."
+    gcloud secrets versions access latest \
+        --secret=okta-root-ca-cert \
+        --project="$PROJECT_ID" >> "$CERT_DIR/okta-ca.pem"
+    echo "Full CA chain: Intermediate + Root"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. RADIUS server certificates

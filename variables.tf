@@ -87,6 +87,13 @@ variable "okta_ca_cert_pem" {
   sensitive   = true
 }
 
+variable "okta_root_ca_cert_pem" {
+  description = "Okta Root CA certificate in PEM format (optional — enables full chain validation)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "datadog_api_key" {
   description = "Datadog API key for the monitoring agent"
   type        = string

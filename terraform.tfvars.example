@@ -57,6 +57,16 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # Paste the full PEM content, or use: okta_ca_cert_pem = file("freeradius/freeradius-wifi-auth/certs/okta-ca.pem")
 okta_ca_cert_pem = <<-EOT
 -----BEGIN CERTIFICATE-----
-PASTE YOUR OKTA CA CERTIFICATE HERE
+PASTE YOUR OKTA INTERMEDIATE CA CERTIFICATE HERE
 -----END CERTIFICATE-----
 EOT
+
+# Okta Root CA certificate (optional, PEM format)
+# Enables full chain validation: client cert → Intermediate → Root.
+# Without this, FreeRADIUS trusts only the Intermediate CA directly (still works).
+# See README for instructions on obtaining this from your Okta admin console.
+# okta_root_ca_cert_pem = <<-EOT
+# -----BEGIN CERTIFICATE-----
+# PASTE YOUR OKTA ROOT CA CERTIFICATE HERE
+# -----END CERTIFICATE-----
+# EOT
