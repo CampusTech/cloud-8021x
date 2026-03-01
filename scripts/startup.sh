@@ -642,6 +642,29 @@ touch /var/log/freeradius/radius-auth.json
 chown freerad:freerad /var/log/freeradius/radius-auth.json
 chmod 640 /var/log/freeradius/radius-auth.json
 
+# Configure JSON accounting log (session start/stop/update with usage data)
+cat > "$RADDB/mods-available/acct_log" << 'ACCTLOGEOF'
+linelog acct_log {
+    filename = /var/log/freeradius/radius-acct.json
+    permissions = 0640
+
+    format = ""
+    reference = "messages.%%{Acct-Status-Type}"
+
+    messages {
+        Start = "{\"timestamp\":\"%S\",\"event\":\"Acct-Start\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\"}"
+        Stop = "{\"timestamp\":\"%S\",\"event\":\"Acct-Stop\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets},\"terminate_cause\":\"%%{Acct-Terminate-Cause}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\"}"
+        Interim-Update = "{\"timestamp\":\"%S\",\"event\":\"Acct-Update\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets},\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\"}"
+    }
+}
+ACCTLOGEOF
+
+ln -sf "$RADDB/mods-available/acct_log" "$RADDB/mods-enabled/acct_log"
+
+touch /var/log/freeradius/radius-acct.json
+chown freerad:freerad /var/log/freeradius/radius-acct.json
+chmod 640 /var/log/freeradius/radius-acct.json
+
 # ---------------------------------------------------------------------------
 # 11. Configure default virtual server (site)
 #     Clean EAP-TLS-only site with SQL accounting and JSON logging.
@@ -655,6 +678,13 @@ POSTAUTH_MODULES=""
 [ "$HAS_UNIFI_LOOKUP" = "true" ] && POSTAUTH_MODULES="$${POSTAUTH_MODULES}unifi_lookup
         "
 POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
+
+# Build accounting section — conditionally include UniFi lookup for enrichment
+ACCT_MODULES=""
+[ "$HAS_UNIFI_LOOKUP" = "true" ] && ACCT_MODULES="unifi_lookup
+        "
+ACCT_MODULES="$${ACCT_MODULES}sql
+        acct_log"
 
 cat > "$RADDB/sites-available/default" << SITEEOF
 server default {
@@ -686,7 +716,7 @@ server default {
     }
 
     accounting {
-        sql
+        $ACCT_MODULES
     }
 
     post-auth {
@@ -771,6 +801,15 @@ logs:
     path: /var/log/freeradius/radius-auth.json
     source: freeradius
     service: radius-auth
+    log_processing_rules:
+      - type: exclude_at_match
+        name: exclude_empty
+        pattern: "^$"
+
+  - type: file
+    path: /var/log/freeradius/radius-acct.json
+    source: freeradius
+    service: radius-acct
     log_processing_rules:
       - type: exclude_at_match
         name: exclude_empty
