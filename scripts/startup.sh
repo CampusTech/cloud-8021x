@@ -393,7 +393,187 @@ JAMFCREDEOF
     mkdir -p /tmp/jamf-token
     chown freerad:freerad /tmp/jamf-token
 
-    echo "Jamf credentials configured."
+    # Deploy the Jamf device cache script (bulk inventory pull)
+    cat > /usr/local/bin/jamf-device-cache.sh << 'JAMFCACHEEOF'
+#!/bin/bash
+# Fetches all Jamf inventory, builds serial -> device info cache.
+# Called on boot and every 30 minutes via cron.
+set -uo pipefail
+
+CRED_FILE="/etc/freeradius/3.0/jamf-credentials.json"
+CACHE_FILE="/etc/freeradius/3.0/jamf-device-cache.json"
+TOKEN_CACHE="/tmp/jamf-token/token.json"
+
+[ -f "$CRED_FILE" ] || exit 0
+
+JAMF_URL=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['url'])")
+CLIENT_ID=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['client_id'])")
+CLIENT_SECRET=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['client_secret'])")
+
+# Get OAuth2 token (check cache first)
+get_token() {
+    if [ -f "$TOKEN_CACHE" ]; then
+        EXPIRES=$(python3 -c "import json; print(json.load(open('$TOKEN_CACHE')).get('expires_at',0))" 2>/dev/null || echo 0)
+        NOW=$(date +%s)
+        if [ "$NOW" -lt "$EXPIRES" ]; then
+            python3 -c "import json; print(json.load(open('$TOKEN_CACHE'))['access_token'])"
+            return
+        fi
+    fi
+    RESP=$(curl -sf --connect-timeout 5 --max-time 10 \
+        -X POST "$JAMF_URL/api/v1/oauth/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET") || return 1
+    TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+    EXPIRES_IN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('expires_in',300))")
+    NOW=$(date +%s)
+    echo "{\"access_token\":\"$TOKEN\",\"expires_at\":$((NOW + EXPIRES_IN - 30))}" > "$TOKEN_CACHE"
+    echo "$TOKEN"
+}
+
+TOKEN=$(get_token) || exit 0
+[ -n "$TOKEN" ] || exit 0
+
+# Paginate through all inventory
+python3 << PYEOF
+import json, urllib.request, sys
+
+token = "$TOKEN"
+url = "$JAMF_URL"
+cache = {}
+page = 0
+page_size = 100
+import time
+now = int(time.time())
+
+while True:
+    api_url = (
+        f"{url}/api/v3/computers-inventory"
+        f"?section=GENERAL&section=HARDWARE&section=USER_AND_LOCATION"
+        f"&page={page}&page-size={page_size}"
+    )
+    req = urllib.request.Request(api_url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except Exception as e:
+        print(f"API error on page {page}: {e}", file=sys.stderr)
+        break
+    data = json.loads(resp.read())
+    results = data.get("results", [])
+    if not results:
+        break
+    for device in results:
+        serial = (device.get("hardware") or {}).get("serialNumber") or ""
+        if not serial:
+            continue
+        cache[serial] = {
+            "email": (device.get("userAndLocation") or {}).get("email") or "",
+            "device_name": (device.get("general") or {}).get("name") or "",
+            "device_model": (device.get("hardware") or {}).get("model") or "",
+            "ts": now,
+        }
+    total_count = data.get("totalCount", 0)
+    if (page + 1) * page_size >= total_count:
+        break
+    page += 1
+
+with open("$${CACHE_FILE}.tmp", "w") as f:
+    json.dump(cache, f)
+import os
+os.replace("$${CACHE_FILE}.tmp", "$CACHE_FILE")
+print(f"Jamf cache: {len(cache)} devices")
+PYEOF
+JAMFCACHEEOF
+    chmod 755 /usr/local/bin/jamf-device-cache.sh
+
+    # Run initial cache build
+    /usr/local/bin/jamf-device-cache.sh || true
+
+    # Set up cron to refresh cache every 30 minutes
+    echo "*/30 * * * * root /usr/local/bin/jamf-device-cache.sh" > /etc/cron.d/jamf-device-cache
+    chmod 644 /etc/cron.d/jamf-device-cache
+
+    # Deploy single-device fetch script (for cache misses)
+    cat > /usr/local/bin/jamf-device-fetch.sh << 'JAMFFETCHEOF'
+#!/bin/bash
+# Fetches a single device from Jamf by serial, updates the cache file.
+# Called from FreeRADIUS Python module via subprocess on cache miss.
+set -uo pipefail
+
+SERIAL="$1"
+CRED_FILE="/etc/freeradius/3.0/jamf-credentials.json"
+CACHE_FILE="/etc/freeradius/3.0/jamf-device-cache.json"
+TOKEN_CACHE="/tmp/jamf-token/token.json"
+
+[ -n "$SERIAL" ] || exit 1
+[ -f "$CRED_FILE" ] || exit 0
+
+JAMF_URL=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['url'])")
+CLIENT_ID=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['client_id'])")
+CLIENT_SECRET=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['client_secret'])")
+
+# Get OAuth2 token (check cache first)
+if [ -f "$TOKEN_CACHE" ]; then
+    EXPIRES=$(python3 -c "import json; print(json.load(open('$TOKEN_CACHE')).get('expires_at',0))" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+    if [ "$NOW" -lt "$EXPIRES" ]; then
+        TOKEN=$(python3 -c "import json; print(json.load(open('$TOKEN_CACHE'))['access_token'])")
+    fi
+fi
+if [ -z "$${TOKEN:-}" ]; then
+    RESP=$(curl -sf --connect-timeout 5 --max-time 10 \
+        -X POST "$JAMF_URL/api/v1/oauth/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET") || exit 0
+    TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+    EXPIRES_IN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('expires_in',300))")
+    NOW=$(date +%s)
+    echo "{\"access_token\":\"$TOKEN\",\"expires_at\":$((NOW + EXPIRES_IN - 30))}" > "$TOKEN_CACHE"
+fi
+
+# Fetch single device
+ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$SERIAL'))")
+RESP=$(curl -sf --connect-timeout 5 --max-time 10 \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Accept: application/json" \
+    "$JAMF_URL/api/v3/computers-inventory?section=GENERAL&section=HARDWARE&section=USER_AND_LOCATION&filter=hardware.serialNumber%3D%3D%22$${ENCODED}%22&page-size=1") || exit 0
+
+# Update cache file
+python3 << PYEOF
+import json, os, time, sys
+
+serial = "$SERIAL"
+data = json.loads('''$RESP''')
+results = data.get("results", [])
+if not results:
+    sys.exit(0)
+
+device = results[0]
+entry = {
+    "email": (device.get("userAndLocation") or {}).get("email") or "",
+    "device_name": (device.get("general") or {}).get("name") or "",
+    "device_model": (device.get("hardware") or {}).get("model") or "",
+    "ts": int(time.time()),
+}
+
+cache = {}
+if os.path.isfile("$CACHE_FILE"):
+    with open("$CACHE_FILE") as f:
+        cache = json.load(f)
+
+cache[serial] = entry
+tmp = "$${CACHE_FILE}.tmp"
+with open(tmp, "w") as f:
+    json.dump(cache, f)
+os.replace(tmp, "$CACHE_FILE")
+PYEOF
+JAMFFETCHEOF
+    chmod 755 /usr/local/bin/jamf-device-fetch.sh
+
+    echo "Jamf credentials and cache configured."
 fi
 
 # ---------------------------------------------------------------------------
@@ -515,97 +695,92 @@ import radiusd
 import json
 import os
 import time
-import urllib.request
-import urllib.parse
+import threading
+import subprocess
 
 JAMF_CRED_FILE = "/etc/freeradius/3.0/jamf-credentials.json"
-JAMF_TOKEN_CACHE = "/tmp/jamf-token/token.json"
+JAMF_DEVICE_CACHE = "/etc/freeradius/3.0/jamf-device-cache.json"
+JAMF_FETCH_SCRIPT = "/usr/local/bin/jamf-device-fetch.sh"
+JAMF_CACHE_TTL = 3600  # 1 hour
 UNIFI_CACHE_FILE = "/etc/freeradius/3.0/unifi-ap-cache.json"
+
+# In-memory device cache — loaded from disk on startup and periodically
+_jamf_cache = {}      # serial -> {"email":..., "device_name":..., "device_model":..., "ts": epoch}
+_jamf_cache_lock = threading.Lock()
+_jamf_cache_mtime = 0  # last mtime of disk cache when we loaded it
+_pending_lookups = set()  # serials currently being fetched in background
+_pending_lock = threading.Lock()
+
+
+def _load_cache_from_disk():
+    """Load the Jamf device cache from disk into memory if it changed."""
+    global _jamf_cache, _jamf_cache_mtime
+    try:
+        if not os.path.isfile(JAMF_DEVICE_CACHE):
+            return
+        mtime = os.path.getmtime(JAMF_DEVICE_CACHE)
+        if mtime == _jamf_cache_mtime:
+            return  # no change
+        with open(JAMF_DEVICE_CACHE, "r") as f:
+            data = json.load(f)
+        with _jamf_cache_lock:
+            _jamf_cache = data
+            _jamf_cache_mtime = mtime
+        radiusd.radlog(radiusd.L_INFO,
+            f"Loaded Jamf cache from disk: {len(data)} devices")
+    except Exception as e:
+        radiusd.radlog(radiusd.L_ERR, f"Failed to load Jamf cache from disk: {e}")
+
+
+def _jamf_background_fetch(serial):
+    """Background thread: call external script to fetch a single device."""
+    try:
+        subprocess.run(
+            [JAMF_FETCH_SCRIPT, serial],
+            timeout=15, capture_output=True,
+        )
+        # Reload cache from disk to pick up the new entry
+        _load_cache_from_disk()
+    except Exception as e:
+        radiusd.radlog(radiusd.L_ERR, f"Jamf background fetch failed for {serial}: {e}")
+    finally:
+        with _pending_lock:
+            _pending_lookups.discard(serial)
 
 
 def instantiate(p):
     radiusd.radlog(radiusd.L_INFO, "radius_lookups module loaded")
+    _load_cache_from_disk()
     return 0
 
 
-def _get_jamf_token(creds):
-    """Get or refresh Jamf OAuth2 token with file-based caching."""
+def _get_cached_jamf(serial):
+    """Read Jamf data from in-memory cache. Returns dict or None.
+    If cache miss or expired, kicks off a background fetch via external script."""
+    # Reload from disk if file changed (picks up cron updates)
+    _load_cache_from_disk()
+
     now = int(time.time())
 
-    # Check cached token
-    try:
-        with open(JAMF_TOKEN_CACHE, "r") as f:
-            cached = json.load(f)
-        if now < cached.get("expires_at", 0):
-            return cached["access_token"]
-    except Exception:
-        pass
+    with _jamf_cache_lock:
+        entry = _jamf_cache.get(serial)
 
-    # Request new token
-    data = urllib.parse.urlencode({
-        "grant_type": "client_credentials",
-        "client_id": creds["client_id"],
-        "client_secret": creds["client_secret"],
-    }).encode()
-    req = urllib.request.Request(
-        f"{creds['url']}/api/v1/oauth/token",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    resp = urllib.request.urlopen(req, timeout=5)
-    result = json.loads(resp.read())
+    if entry and (now - entry.get("ts", 0)) < JAMF_CACHE_TTL:
+        return entry
 
-    token = result.get("access_token")
-    if not token:
-        return None
+    # Cache miss or expired — trigger background fetch if not already pending
+    if os.path.isfile(JAMF_FETCH_SCRIPT):
+        with _pending_lock:
+            if serial not in _pending_lookups:
+                _pending_lookups.add(serial)
+                t = threading.Thread(target=_jamf_background_fetch, args=(serial,),
+                                     daemon=True)
+                t.start()
 
-    expires_in = result.get("expires_in", 300)
-    cache_data = {"access_token": token, "expires_at": now + expires_in - 30}
-    try:
-        with open(JAMF_TOKEN_CACHE, "w") as f:
-            json.dump(cache_data, f)
-    except Exception:
-        pass
-
-    return token
-
-
-def _jamf_lookup(serial):
-    """Look up device info from Jamf Pro API. Returns dict or None."""
-    if not os.path.isfile(JAMF_CRED_FILE):
-        return None
-
-    with open(JAMF_CRED_FILE, "r") as f:
-        creds = json.load(f)
-
-    token = _get_jamf_token(creds)
-    if not token:
-        return None
-
-    encoded_serial = urllib.parse.quote(serial)
-    url = (
-        f"{creds['url']}/api/v3/computers-inventory"
-        f"?section=GENERAL&section=HARDWARE&section=USER_AND_LOCATION"
-        f"&filter=hardware.serialNumber%3D%3D%22{encoded_serial}%22"
-        f"&page-size=1"
-    )
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    })
-    resp = urllib.request.urlopen(req, timeout=5)
-    data = json.loads(resp.read())
-
-    results = data.get("results", [])
-    if not results:
-        return None
-
-    device = results[0]
-    return {
-        "email": (device.get("userAndLocation") or {}).get("email") or "",
-        "device_name": (device.get("general") or {}).get("name") or "",
-        "device_model": (device.get("hardware") or {}).get("model") or "",
-    }
+    # Return stale data if available (better than nothing)
+    if entry:
+        return entry
+    return None
 
 
 def _unifi_lookup(called_station_id):
@@ -665,29 +840,28 @@ def _get_attr(p, attr_name):
 
 
 def post_auth(p):
-    """Post-auth: Jamf device lookup + UniFi AP/site lookup."""
+    """Post-auth: Jamf device lookup (from cache) + UniFi AP/site lookup."""
     try:
         user_name = _get_attr(p, "User-Name")
         called_station = _get_attr(p, "Called-Station-Id")
 
         reply_attrs = []
 
-        # Jamf lookup — extract serial from User-Name (it's the raw serial
-        # at this point, before we rewrite it to "email - serial")
+        # Jamf lookup — read from local cache (instant, no API call)
         serial = user_name.strip()
         if serial:
             try:
-                jamf = _jamf_lookup(serial)
+                jamf = _get_cached_jamf(serial)
                 if jamf:
-                    if jamf["device_name"]:
+                    if jamf.get("device_name"):
                         reply_attrs.append(("Filter-Id", jamf["device_name"]))
-                    if jamf["device_model"]:
+                    if jamf.get("device_model"):
                         reply_attrs.append(("Login-LAT-Node", jamf["device_model"]))
-                    if jamf["email"]:
+                    if jamf.get("email"):
                         reply_attrs.append(("Reply-Message", jamf["email"]))
                         reply_attrs.append(("User-Name", f"{jamf['email']} - {serial}"))
             except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Jamf lookup failed: {e}")
+                radiusd.radlog(radiusd.L_ERR, f"Jamf cache read failed: {e}")
 
         # Extract SSID from Called-Station-Id (format: "AA-BB-CC-DD-EE-FF:SSID")
         if called_station and ":" in called_station:
