@@ -17,6 +17,8 @@ SERVER_CERT_ORG="${server_cert_org}"
 HAS_ROOT_CA="${has_root_ca}"
 HAS_JAMF_LOOKUP="${has_jamf_lookup}"
 HAS_UNIFI_LOOKUP="${has_unifi_lookup}"
+REWRITE_USERNAME="${rewrite_username}"
+REWRITE_USERNAME_SEPARATOR="${rewrite_username_separator}"
 RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
 
@@ -859,7 +861,6 @@ def post_auth(p):
                         reply_attrs.append(("Login-LAT-Node", jamf["device_model"]))
                     if jamf.get("email"):
                         reply_attrs.append(("Reply-Message", jamf["email"]))
-                        reply_attrs.append(("User-Name", f"{jamf['email']} - {serial}"))
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"Jamf cache read failed: {e}")
 
@@ -1027,6 +1028,19 @@ echo "=== Configuring default virtual server ==="
 POSTAUTH_MODULES=""
 if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
     POSTAUTH_MODULES="radius_lookups
+        "
+fi
+# Set reply:User-Name to "email - serial" for NAS display (e.g. UniFi 802.1X Identity).
+# This must be done via unlang, not rlm_python3, because rlm_python3 silently ignores
+# User-Name in its return dict. The Python module stores the email in Reply-Message;
+# unlang reads it and builds the enriched identity. The EAP module's mod_post_auth
+# preserves an existing reply:User-Name (per RFC 3579).
+if [ "$REWRITE_USERNAME" = "true" ]; then
+    POSTAUTH_MODULES="$${POSTAUTH_MODULES}if (&reply:Reply-Message) {
+            update reply {
+                User-Name := \"%%{reply:Reply-Message}$${REWRITE_USERNAME_SEPARATOR}%%{User-Name}\"
+            }
+        }
         "
 fi
 POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"

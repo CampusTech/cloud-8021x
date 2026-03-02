@@ -108,6 +108,8 @@ See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key va
 | `jamf_url` | No | Jamf Pro URL — enables device lookup in auth logs |
 | `jamf_client_id` | No | Jamf Pro API Client ID (requires Read Computers) |
 | `jamf_client_secret` | No | Jamf Pro API Client Secret |
+| `rewrite_username` | No | Set reply:User-Name to `email - serial` in Access-Accept (default: `false`) |
+| `rewrite_username_separator` | No | Separator between email and serial in rewritten User-Name (default: ` - `) |
 | `unifi_url` | No | UniFi API URL — enables AP/site name in auth logs |
 | `unifi_api_key` | No | UniFi API key (read-only access) |
 | `datadog_app_key` | No | Datadog Application key — enables Terraform-managed dashboard |

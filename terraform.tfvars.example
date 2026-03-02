@@ -60,6 +60,8 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # jamf_url           = "https://yourorg.jamfcloud.com"
 # jamf_client_id     = "your-api-client-id"
 # jamf_client_secret = "your-api-client-secret"
+# rewrite_username   = true     # set reply:User-Name to "email<sep>serial" in Access-Accept (shown as 802.1X Identity in UniFi)
+# rewrite_username_separator = " - "  # separator between email and serial (default: " - ")
 
 # Okta Intermediate CA certificate (PEM format)
 # This is the trust anchor for SCEP client certs issued via Jamf/Okta.

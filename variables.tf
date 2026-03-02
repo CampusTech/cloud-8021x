@@ -120,6 +120,18 @@ variable "unifi_api_key" {
   sensitive   = true
 }
 
+variable "rewrite_username" {
+  description = "Rewrite reply:User-Name to 'email - serial' in Access-Accept (requires Jamf lookup). Shown as 802.1X Identity in UniFi."
+  type        = bool
+  default     = false
+}
+
+variable "rewrite_username_separator" {
+  description = "Separator between email and serial in the rewritten User-Name (default: ' - ')"
+  type        = string
+  default     = " - "
+}
+
 variable "datadog_api_key" {
   description = "Datadog API key for the monitoring agent"
   type        = string
