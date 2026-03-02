@@ -137,7 +137,7 @@ Client chain (device identity):
 ```
 MacBook              WiFi AP              FreeRADIUS
   │                    │                     │
-  │── 802.1X Start ──>│                      │
+  │── 802.1X Start ──> │                      │
   │                    │── Access-Request ─> │
   │                    │  (User-Name=serial) │
   │                    │                     │
@@ -163,7 +163,7 @@ MacBook              WiFi AP              FreeRADIUS
   │                    │     Write auth JSON │
   │                    │                     │
   │                    │<── Access-Accept ──-│
-  │<── WiFi Connected─│                      │
+  │<── WiFi Connected─ │                     │
   │                    │                     │
   │                    │── Acct-Start ─────> │
   │                    │                     │
