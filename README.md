@@ -77,9 +77,11 @@ terraform apply
 | `radius-server-cert` | Startup script | RADIUS server certificate |
 | `radius-dh-params` | Startup script | Diffie-Hellman parameters |
 | `datadog-api-key` | Terraform | Datadog Agent API key |
-| `jamf-url` | Terraform (optional) | Jamf Pro base URL for device owner lookup |
+| `jamf-url` | Terraform (optional) | Jamf Pro base URL for device lookup |
 | `jamf-client-id` | Terraform (optional) | Jamf Pro API Client ID |
 | `jamf-client-secret` | Terraform (optional) | Jamf Pro API Client Secret |
+| `unifi-url` | Terraform (optional) | UniFi API URL for AP/site lookup |
+| `unifi-api-key` | Terraform (optional) | UniFi API key |
 
 Server certs are generated on first boot and stored in Secret Manager so they persist across VM replacements. You only need to upload `radius-server-ca-cert` to Jamf once.
 
@@ -102,9 +104,11 @@ See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key va
 | `server_cert_cn` | Yes | Server cert CN (e.g. `radius.example.com`) |
 | `server_cert_org` | Yes | Organization name for CA cert subject (e.g. `Acme Corp`) |
 | `datadog_site` | No | Datadog site (default: `us5.datadoghq.com`) |
-| `jamf_url` | No | Jamf Pro URL — enables device owner lookup in auth logs |
+| `jamf_url` | No | Jamf Pro URL — enables device lookup in auth logs |
 | `jamf_client_id` | No | Jamf Pro API Client ID (requires Read Computers) |
 | `jamf_client_secret` | No | Jamf Pro API Client Secret |
+| `unifi_url` | No | UniFi API URL — enables AP/site name in auth logs |
+| `unifi_api_key` | No | UniFi API key (read-only access) |
 
 ### Access Point RADIUS Setup
 
@@ -161,12 +165,14 @@ To obtain the Root CA from your Okta admin console ([source](https://andrewdoeri
    ```
 5. A `.cer` file will download — paste its PEM contents into `okta_root_ca_cert_pem` in your `terraform.tfvars`
 
-### Jamf Device Owner Lookup (Optional)
+### Jamf Device Lookup (Optional)
 
-When EAP-TLS authenticates a device, the outer identity is the serial number (e.g. `H176YHQ9XV`). If you provide Jamf Pro API credentials, FreeRADIUS will query Jamf in post-auth to resolve the serial to the assigned user's email. This:
+When EAP-TLS authenticates a device, the outer identity is the serial number (e.g. `H176YHQ9XV`). If you provide Jamf Pro API credentials, FreeRADIUS will query Jamf in post-auth to resolve the serial to device details. This adds the following fields to the JSON auth log:
 
-- Adds `serial` and `device_owner` (email) as separate fields in the JSON auth log
-- Overwrites the RADIUS `User-Name` in the reply so UniFi and accounting show the email instead of the serial
+- `device_owner` — assigned user's email from Jamf
+- `device_name` — device name (e.g. `Robbie's MacBook Pro`)
+- `device_model` — hardware model (e.g. `MacBook Pro (16-inch, 2024) M4 Max`)
+- Overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
 
 Auth never blocks on the lookup — if Jamf is unreachable or the device isn't found, the serial is used as-is.
 
@@ -184,6 +190,25 @@ Auth never blocks on the lookup — if Jamf is unreachable or the device isn't f
    ```
 
 3. `terraform apply` — creates 3 new secrets in Secret Manager and updates the startup script
+
+### UniFi AP/Site Lookup (Optional)
+
+If you provide UniFi API credentials, FreeRADIUS will resolve the access point and site name for each authentication. A cache script queries the UniFi API every 5 minutes and builds a local MAC-to-AP lookup table. The Python module matches the client's BSSID (from `Called-Station-Id`) to the AP's base MAC using fuzzy matching (last-byte offset 0-7). This adds to the JSON auth log:
+
+- `ap_name` — access point name (e.g. `Lobby`)
+- `site_name` — UniFi site name (e.g. `32 Avenue of the Americas`)
+
+**Setup:**
+
+1. In UniFi, create an **API Key** (Settings → Admins & Users → API Keys) with read-only access
+
+2. Add to your `terraform.tfvars`:
+   ```hcl
+   unifi_url     = "https://unifi.ui.com"
+   unifi_api_key = "your-api-key"
+   ```
+
+3. `terraform apply` — creates 2 new secrets in Secret Manager and enables the cache cron job
 
 ## Post-Deployment
 
