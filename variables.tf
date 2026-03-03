@@ -132,6 +132,18 @@ variable "rewrite_username_separator" {
   default     = " - "
 }
 
+variable "tls_session_cache" {
+  description = "Enable TLS session caching for faster EAP-TLS re-authentication"
+  type        = bool
+  default     = true
+}
+
+variable "tls_session_cache_lifetime" {
+  description = "TLS session cache lifetime in seconds (default: 24 hours)"
+  type        = number
+  default     = 86400
+}
+
 variable "datadog_api_key" {
   description = "Datadog API key for the monitoring agent"
   type        = string

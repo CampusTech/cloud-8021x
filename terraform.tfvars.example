@@ -63,6 +63,10 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # rewrite_username   = true     # set reply:User-Name to "email<sep>serial" in Access-Accept (shown as 802.1X Identity in UniFi)
 # rewrite_username_separator = " - "  # separator between email and serial (default: " - ")
 
+# TLS session caching — speeds up EAP-TLS re-authentication by resuming TLS sessions
+# tls_session_cache          = true   # default: true (set false to disable)
+# tls_session_cache_lifetime = 86400  # cache lifetime in seconds (default: 24 hours)
+
 # Okta Intermediate CA certificate (PEM format)
 # This is the trust anchor for SCEP client certs issued via Jamf/Okta.
 # Paste the full PEM content, or use: okta_ca_cert_pem = file("freeradius/freeradius-wifi-auth/certs/okta-ca.pem")

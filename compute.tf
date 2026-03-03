@@ -113,6 +113,8 @@ locals {
     has_unifi_lookup           = var.unifi_api_key != ""
     rewrite_username           = var.rewrite_username && var.jamf_url != ""
     rewrite_username_separator = var.rewrite_username_separator
+    tls_session_cache          = var.tls_session_cache
+    tls_session_cache_lifetime = var.tls_session_cache_lifetime
     datadog_site               = var.datadog_site
     radius_clients_json = jsonencode({
       for k, v in var.radius_clients : k => {
