@@ -180,14 +180,18 @@ echo "=== Setting up Smallstep step-ca ==="
 export STEPPATH=/etc/step-ca
 mkdir -p "$STEPPATH/db" "$STEPPATH/certs" "$STEPPATH/config" "$STEPPATH/secrets"
 
-# Install step-ca + step CLI.
+# Install step-ca + step CLI. GitHub release assets carry a Debian revision
+# suffix ("-1"), e.g. step-ca_0.30.2-1_amd64.deb — the bare
+# step-ca_<ver>_amd64.deb name 404s. Pin both to a known-good release.
 if ! command -v step-ca >/dev/null 2>&1; then
-  STEP_CLI_VERSION="0.28.2"
-  STEP_CA_VERSION="0.28.1"
-  curl -fsSL "https://dl.smallstep.com/cli/docs-ca-install/latest/step-cli_amd64.deb" -o /tmp/step-cli.deb || \
-    curl -fsSL "https://github.com/smallstep/cli/releases/download/v$${STEP_CLI_VERSION}/step-cli_$${STEP_CLI_VERSION}_amd64.deb" -o /tmp/step-cli.deb
-  curl -fsSL "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}_amd64.deb" -o /tmp/step-ca.deb
+  STEP_CLI_VERSION="0.30.2"
+  STEP_CA_VERSION="0.30.2"
+  STEP_DEB_REVISION="1"
+  curl -fsSL "https://github.com/smallstep/cli/releases/download/v$${STEP_CLI_VERSION}/step-cli_$${STEP_CLI_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-cli.deb
+  curl -fsSL "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-ca.deb
+  # Install both together so dependencies resolve; fail loudly if either is missing.
   dpkg -i /tmp/step-cli.deb /tmp/step-ca.deb || apt-get -fy install
+  command -v step-ca >/dev/null 2>&1 || { echo "FATAL: step-ca install failed" >&2; exit 1; }
 fi
 
 # Fetch DB password + SCEP challenge from Secret Manager.
