@@ -1109,3 +1109,32 @@ Append the recorded ACME directory URL, SCEP URL, SCEP GetCACert SHA-1, and CA r
 **Type/name consistency:** provisioner names default `wifi` used consistently in `ca.json`, outputs, and URLs; KMS key names `ca-signing`/`scep-decrypter` match between Task 2 resources and the `cloudkms:` URIs in Task 6; secret IDs (`smallstep-ca-cert`, `smallstep-scep-challenge`, `smallstep-db-password`) match between Tasks 3-4 and the startup script in Task 7; `radius_trust_mode` values `okta`/`smallstep` match the validation, the template, and Task 10.
 
 **Out-of-scope correctly deferred:** webhook service (Plan 2), MDM profiles + cutover flip (Plan 3).
+
+---
+
+## Verified post-apply values (recorded during execution — inputs for Plans 2 & 3)
+
+Applied to project `campus-cloud-8021x-42e6` on 2026-06-02. `enable_smallstep_ca=true`, `radius_trust_mode=okta` (RADIUS still trusts Okta; Wi-Fi untouched), `acme_authorizing_webhook_url=""` (empty until Plan 2 — **do not enrol real devices yet**).
+
+- **Load balancer IP:** `8.233.40.66` → DNS A-record `ca.campusgroup.co` (Cloudflare, DNS-only/grey cloud).
+- **ACME directory URL:** `https://ca.campusgroup.co/acme/wifi-acme/directory`
+- **SCEP URL:** `https://ca.campusgroup.co/scep/wifi-scep`
+- **Windows `CAThumbprint`** (SHA-1 of the cert step-ca's SCEP `GetCACert` returns = the **intermediate**): `E51B7A17D0F8917398 45440D 707DEFE1560D3E8C` → no-spaces: `E51B7A17D0F891739845440D707DEFE1560D3E8C`
+- **RADIUS server-trust root SHA-1** (Windows WlanXml `TrustedRootCA`): `0B9FCA27B44DB06511F7EE39DB5AC97506702E22`
+- **GetCACert wire format:** this single-CA SCEP responder returns the issuing cert as **raw DER X.509** (content-type `application/x-x509-ca-cert`), NOT a PKCS#7 bundle. Parse with `openssl x509 -inform DER`, not `openssl pkcs7`. (If Plan 3 tooling needs PKCS#7: `openssl crl2pkcs7 -nocrl -certfile cert.der`.)
+- **CA topology:** local EC P-256 **root** (key generated once on first init, then discarded) signs a **Cloud KMS HSM-backed intermediate** (`ca-signing` key). Root cert in secret `smallstep-ca-cert`, intermediate cert in secret `smallstep-intermediate-cert`. The KMS HSM key is the only live private key.
+- **step-ca verified HEALTHY active-active on BOTH VMs** (primary `radius-primary`/us-east4-a, secondary `radius-secondary`/us-east4-c) against shared Cloud SQL `10.66.0.2`. Both serve identical GetCACert fingerprints.
+- **Public endpoint:** pending the Google-managed TLS cert going ACTIVE (DNS record created; cert was PROVISIONING at finish). Post-merge: confirm `curl https://ca.campusgroup.co/acme/wifi-acme/directory` once cert is ACTIVE.
+
+## Deviations from the written plan (discovered + fixed during execution)
+
+The subagent-driven execution surfaced six issues the paper plan got wrong; all fixed on-branch:
+
+1. **Cloud SQL tier vs HA:** `db-f1-micro` (shared-core) cannot use `availability_type=REGIONAL` — default bumped to `db-custom-1-3840`. (commit a645ebf)
+2. **Least-privilege IAM:** `roles/secretmanager.admin` on the CA-cert secret narrowed to `secretVersionManager` + `secretAccessor`. (d4803e8)
+3. **templatefile escaping:** the plan's guidance to write bare shell vars as `$$VAR` was wrong — `$$` only escapes before `{`. Bare vars use single `$`; only `$${...}` brace forms are escaped. (corrected within 04f80f4)
+4. **KMS init topology:** step-ca 0.30.2 `step ca init --kms` cannot bind a pre-created KMS key. Replaced with `step certificate create` building a local root that signs a KMS-backed intermediate; persist BOTH certs in Secret Manager so the 2nd VM / reboots restore (not re-init). Added `smallstep-intermediate-cert` secret. (060dbdd, e4c051b)
+5. **Provisioner name collision:** step-ca rejects duplicate provisioner names even across types — ACME + SCEP both `wifi` prevented startup. Defaults → `wifi-acme` / `wifi-scep` (changes the URL paths above). Also added `--force` to the cert-create calls. (4265a27)
+6. **Install URL/version:** pinned `step-ca` 0.28.1 deb 404s and the asset name omitted the Debian `-1` revision — step-ca never installed on a fresh boot. Pinned 0.30.2 with verified `_0.30.2-1_amd64.deb` asset names. (66aa7bc)
+
+**Known remaining limitation:** two VMs booting simultaneously could both hit the CA-init branch (no distributed lock). Acceptable for now; noted in startup.sh. A real fix would use a lock or a one-shot init job.
