@@ -239,7 +239,7 @@ else
   step certificate create "CampusGroup Wi-Fi Root CA" \
     "$STEPPATH/certs/root_ca.crt" "$STEPPATH/secrets/root_ca_key" \
     --profile root-ca --kty EC --curve P-256 \
-    --no-password --insecure || true
+    --no-password --insecure --force || true
   # Intermediate: public key sourced from the Cloud KMS signing key; signed by
   # the local root. /dev/null for the key output because the private key lives in
   # Cloud KMS, never on disk.
@@ -248,7 +248,7 @@ else
     --profile intermediate-ca \
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
-    --no-password --insecure || true
+    --no-password --insecure --force || true
   if [ -f "$STEPPATH/certs/root_ca.crt" ] && [ -f "$STEPPATH/certs/intermediate_ca.crt" ]; then
     # Publish BOTH certs so reboots / the 2nd VM restore a matching chain.
     gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \

@@ -201,15 +201,15 @@ variable "smallstep_ca_dns_name" {
 }
 
 variable "smallstep_acme_provisioner_name" {
-  description = "Name of the step-ca ACME provisioner (also the URL path segment: /acme/<name>/directory)."
+  description = "Name of the step-ca ACME provisioner (also the URL path segment: /acme/<name>/directory). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_scep_provisioner_name."
   type        = string
-  default     = "wifi"
+  default     = "wifi-acme"
 }
 
 variable "smallstep_scep_provisioner_name" {
-  description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>)."
+  description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_acme_provisioner_name."
   type        = string
-  default     = "wifi"
+  default     = "wifi-scep"
 }
 
 variable "acme_authorizing_webhook_url" {
