@@ -182,3 +182,73 @@ resource "google_service_networking_connection" "smallstep" {
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.smallstep_psa[0].name]
 }
+
+# --- SCEP static challenge (Fleet proxies a per-host challenge in front; this
+#     is the upstream secret step-ca itself checks). ---------------------------
+resource "random_password" "smallstep_scep_challenge" {
+  count   = local.smallstep_enabled
+  length  = 40
+  special = false
+}
+
+resource "google_secret_manager_secret" "smallstep_scep_challenge" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-scep-challenge"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "smallstep_scep_challenge" {
+  count       = local.smallstep_enabled
+  secret      = google_secret_manager_secret.smallstep_scep_challenge[0].id
+  secret_data = random_password.smallstep_scep_challenge[0].result
+}
+
+# --- CA root cert: created empty, populated by the VM on first init, read back
+#     out for distribution (RADIUS trust bundle, MDM profiles). ----------------
+resource "google_secret_manager_secret" "smallstep_ca_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-ca-cert"
+  replication {
+    auto {}
+  }
+}
+
+# --- Secret IAM: VM SA can read challenge + read/write the CA cert. -----------
+resource "google_secret_manager_secret_iam_member" "smallstep_scep_challenge" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_scep_challenge[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_admin" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_ca_cert[0].secret_id
+  # secretVersionManager lets the VM add a new version on first init; accessor
+  # lets it (and Terraform via data source) read it back.
+  role   = "roles/secretmanager.admin"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+# --- Firewall: step-ca HTTPS listener reachable by the GCP load-balancer +
+#     health-check ranges (the public front door is the GCLB in Task 5). ------
+resource "google_compute_firewall" "allow_stepca_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "allow-stepca-lb"
+  network = google_compute_network.radius.id
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8443"]
+  }
+
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  target_tags   = ["radius-server"]
+}
