@@ -197,6 +197,15 @@ fi
 # Fetch DB password + SCEP challenge from Secret Manager.
 SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
 SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
+%{ if acme_webhook_url != "" ~}
+# ACME authorizing webhook signing secret. step-ca's ca.json "secret" field is
+# base64; step-ca base64-DECODES it and HMACs the request body with the raw
+# bytes. The webhook service receives the SAME raw secret (via its env) and
+# HMACs with it directly — so both sides key on identical bytes. The Secret
+# Manager value `acme-webhook-signing-secret` holds the RAW secret; we base64
+# it only for ca.json here.
+ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}" | base64 -w0)"
+%{ endif ~}
 
 # Reuse an existing CA if one was already published to Secret Manager;
 # otherwise initialize a new KMS-backed CA and publish BOTH certs.
@@ -293,7 +302,8 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
             "name": "authorize",
             "url": "${acme_webhook_url}",
             "kind": "AUTHORIZING",
-            "certType": "ALL"
+            "certType": "ALL",
+            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
           }
         ],
 %{ endif ~}
