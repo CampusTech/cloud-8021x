@@ -231,8 +231,9 @@ ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-w
 # known limitation for now; a real fix would take a distributed lock (out of
 # scope).
 if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
-  echo "Existing Smallstep CA found — restoring root + intermediate certs."
+  echo "Existing Smallstep CA found — restoring root + intermediate + SCEP decrypter certs."
   gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >"$STEPPATH/certs/root_ca.crt"
+  gcloud secrets versions access latest --secret=smallstep-scep-decrypter-cert --project="${project_id}" >"$STEPPATH/certs/scep_decrypter.crt"
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
 else
@@ -264,17 +265,31 @@ else
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
     --no-password --insecure --force
-  # Single gate: only publish secrets + discard the root key once BOTH certs
+  # SCEP decrypter cert: leaf whose public key is the Cloud KMS scep-decrypter
+  # RSA key; clients encrypt SCEP requests to it, step-ca decrypts with the KMS
+  # key. step-ca's SCEP provisioner requires BOTH decrypterCertificate and
+  # decrypterKeyURI. /dev/null key output — the private key lives in Cloud KMS.
+  # Signed by the ROOT (root_ca.crt + root_ca_key), which still exists here; the
+  # intermediate's private key is in KMS so it can't sign locally. This MUST run
+  # before the `rm -f "$STEPPATH/secrets/root_ca_key"` below.
+  step certificate create "CampusGroup Wi-Fi SCEP Decrypter" \
+    "$STEPPATH/certs/scep_decrypter.crt" /dev/null \
+    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_scep_key_uri}" \
+    --not-after 87600h --no-password --insecure --force
+  # Single gate: only publish secrets + discard the root key once ALL certs
   # genuinely exist and are non-empty. On failure, leave files in place and abort.
-  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] || {
-    echo "FATAL: Smallstep CA bootstrap did not produce both certificates" >&2
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce all certificates" >&2
     exit 1
   }
-  # Publish BOTH certs so reboots / the 2nd VM restore a matching chain.
+  # Publish ALL certs so reboots / the 2nd VM restore a matching chain.
   gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/root_ca.crt"
   gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/intermediate_ca.crt"
+  gcloud secrets versions add smallstep-scep-decrypter-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/scep_decrypter.crt"
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
@@ -289,6 +304,9 @@ fi
 # serial (attestationData.permanentIdentifier) against Fleet. The SCEP
 # provisioner is intentionally NOT webhook-gated; it authenticates with the
 # static challenge, so the webhook never receives a serial-less SCEP request.
+#
+# step-ca's SCEP provisioner wants decrypterCertificate as base64-encoded PEM.
+SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -327,6 +345,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
         "minimumPublicKeyLength": 2048,
         "encryptionAlgorithmIdentifier": 2,
+        "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyURI": "${smallstep_scep_key_uri}"
       }
     ]

@@ -277,6 +277,39 @@ resource "google_secret_manager_secret_iam_member" "smallstep_intermediate_cert_
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# --- SCEP decrypter cert: an X.509 leaf whose public key is the Cloud KMS
+#     scep-decrypter RSA key. step-ca's SCEP provisioner requires BOTH a
+#     decrypterCertificate AND a decrypterKeyURI; clients encrypt SCEP requests
+#     to this cert and step-ca decrypts with the KMS private key. Created empty,
+#     populated by the first VM at CA init (signed by the root before the local
+#     root key is discarded), and restored by the 2nd VM / any reboot. ----------
+resource "google_secret_manager_secret" "smallstep_scep_decrypter_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-scep-decrypter-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_scep_decrypter_cert[0].secret_id
+  # Lets the VM add a new version when it first initializes the CA.
+  role   = "roles/secretmanager.secretVersionManager"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_scep_decrypter_cert[0].secret_id
+  # Lets the VM (and Terraform via data source) read the decrypter cert back.
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Firewall: step-ca HTTPS listener reachable by the GCP load-balancer +
 #     health-check ranges (the public front door is the GCLB in Task 5). ------
 resource "google_compute_firewall" "allow_stepca_lb" {
