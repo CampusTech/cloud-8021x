@@ -94,4 +94,4 @@ EOT
 # smallstep_acme_provisioner_name  = "wifi"
 # smallstep_scep_provisioner_name  = "wifi"
 # acme_authorizing_webhook_url     = ""          # set to the Plan 2 webhook before enabling ACME
-# smallstep_db_tier                = "db-f1-micro"
+# smallstep_db_tier                = "db-custom-1-3840"  # standard tier required for REGIONAL HA

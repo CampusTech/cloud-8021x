@@ -219,7 +219,7 @@ variable "acme_authorizing_webhook_url" {
 }
 
 variable "smallstep_db_tier" {
-  description = "Cloud SQL machine tier for the step-ca ACME state database."
+  description = "Cloud SQL machine tier for the step-ca ACME state database. Must be a standard (non-shared-core) tier because availability_type is REGIONAL (HA); db-f1-micro/shared-core tiers do not support REGIONAL and fail at apply."
   type        = string
-  default     = "db-f1-micro"
+  default     = "db-custom-1-3840"
 }
