@@ -198,6 +198,11 @@ variable "smallstep_ca_dns_name" {
   description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.campusgroup.co). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !var.enable_smallstep_ca || trimspace(var.smallstep_ca_dns_name) != ""
+    error_message = "smallstep_ca_dns_name must be set when enable_smallstep_ca is true."
+  }
 }
 
 variable "smallstep_acme_provisioner_name" {
@@ -210,6 +215,11 @@ variable "smallstep_scep_provisioner_name" {
   description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_acme_provisioner_name."
   type        = string
   default     = "wifi-scep"
+
+  validation {
+    condition     = var.smallstep_scep_provisioner_name != var.smallstep_acme_provisioner_name
+    error_message = "smallstep_scep_provisioner_name must differ from smallstep_acme_provisioner_name (step-ca rejects duplicate provisioner names even across types)."
+  }
 }
 
 variable "acme_authorizing_webhook_url" {

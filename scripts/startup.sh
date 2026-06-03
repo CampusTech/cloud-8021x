@@ -283,6 +283,12 @@ fi
 
 # Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
 # and SCEP provisioners.
+#
+# The AUTHORIZING webhook is attached ONLY to the ACME provisioner and uses
+# certType "X509" — it gates X509 issuance by checking the attested device
+# serial (attestationData.permanentIdentifier) against Fleet. The SCEP
+# provisioner is intentionally NOT webhook-gated; it authenticates with the
+# static challenge, so the webhook never receives a serial-less SCEP request.
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -308,7 +314,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
             "name": "authorize",
             "url": "${acme_webhook_url}",
             "kind": "AUTHORIZING",
-            "certType": "ALL",
+            "certType": "X509",
             "secret": "$${ACME_WEBHOOK_SECRET_B64}"
           }
         ],

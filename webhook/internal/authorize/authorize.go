@@ -32,17 +32,29 @@ func (a *Authorizer) Decide(ctx context.Context, serial string) bool {
 	}
 	host, err := a.lookup.LookupHostBySerial(ctx, serial)
 	if err != nil {
-		logrus.WithError(err).WithField("serial", serial).Warn("deny: fleet lookup failed (fail-closed)")
+		// Don't log the raw serial — it's a long-lived device identifier. A short
+		// suffix is enough to correlate during debugging without retaining the
+		// full ID in centralized logs.
+		logrus.WithError(err).WithField("serial_suffix", serialSuffix(serial)).Warn("deny: fleet lookup failed (fail-closed)")
 		return false
 	}
 	if host == nil || !host.Enrolled {
-		logrus.WithField("serial", serial).Info("deny: serial not an enrolled Fleet host")
+		logrus.WithField("serial_suffix", serialSuffix(serial)).Info("deny: serial not an enrolled Fleet host")
 		return false
 	}
 	if a.allowLabel != "" && !host.HasLabel(a.allowLabel) {
-		logrus.WithFields(logrus.Fields{"serial": serial, "required_label": a.allowLabel}).Info("deny: host lacks required label")
+		logrus.WithFields(logrus.Fields{"host_id": host.ID, "required_label": a.allowLabel}).Info("deny: host lacks required label")
 		return false
 	}
-	logrus.WithFields(logrus.Fields{"serial": serial, "host_id": host.ID}).Info("allow")
+	logrus.WithField("host_id", host.ID).Info("allow")
 	return true
+}
+
+// serialSuffix returns a short, non-identifying tail of the serial for log
+// correlation (avoids retaining the full long-lived device identifier).
+func serialSuffix(serial string) string {
+	if len(serial) <= 4 {
+		return "****"
+	}
+	return "***" + serial[len(serial)-4:]
 }

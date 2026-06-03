@@ -144,6 +144,6 @@ resource "google_cloud_run_v2_service_iam_member" "webhook_public" {
 }
 
 output "acme_webhook_url" {
-  description = "URL of the ACME authorizing webhook; set acme_authorizing_webhook_url to this + /authorize. Empty if disabled."
+  description = "Full URL of the ACME authorizing webhook authorize endpoint (already includes /authorize). Set acme_authorizing_webhook_url to this value. Empty if disabled."
   value       = var.enable_acme_webhook ? "${google_cloud_run_v2_service.webhook[0].uri}/authorize" : ""
 }

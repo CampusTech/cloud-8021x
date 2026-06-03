@@ -42,7 +42,7 @@ allows enrolled hosts.
 
 ## Build & run
 
-```
+```bash
 go test ./...
 go build .
 WEBHOOK_SIGNING_SECRET=... FLEET_API_BASE_URL=https://fleet.example FLEET_API_TOKEN=... ./acme-authz-webhook serve
