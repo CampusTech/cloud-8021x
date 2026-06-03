@@ -244,6 +244,39 @@ resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_accessor" 
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# --- CA intermediate cert: created empty, populated by the first VM alongside
+#     the root cert. step-ca 0.30.2 can't init against a pre-created KMS key, so
+#     a local root key signs a KMS-backed intermediate; the intermediate's
+#     public key is byte-identical to the KMS signing key. Both certs must be
+#     persisted so the 2nd VM / any reboot restores a chain that matches the
+#     live KMS signer (the only private key that stays alive). -----------------
+resource "google_secret_manager_secret" "smallstep_intermediate_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-intermediate-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_intermediate_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_intermediate_cert[0].secret_id
+  # Lets the VM add a new version when it first initializes the CA.
+  role   = "roles/secretmanager.secretVersionManager"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_intermediate_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_intermediate_cert[0].secret_id
+  # Lets the VM (and Terraform via data source) read the intermediate cert back.
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Firewall: step-ca HTTPS listener reachable by the GCP load-balancer +
 #     health-check ranges (the public front door is the GCLB in Task 5). ------
 resource "google_compute_firewall" "allow_stepca_lb" {

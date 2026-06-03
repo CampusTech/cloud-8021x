@@ -194,14 +194,34 @@ fi
 SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
 SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
 
-# Reuse an existing CA cert if one was already published to Secret Manager;
-# otherwise initialize a new KMS-backed CA and publish its root cert.
+# Reuse an existing CA if one was already published to Secret Manager;
+# otherwise initialize a new KMS-backed CA and publish BOTH certs.
+#
+# The CA topology: a LOCAL EC P-256 root key signs a KMS-backed INTERMEDIATE
+# (the intermediate's signer is the Cloud KMS HSM key). The local root key is
+# generated once, signs the intermediate, then is DISCARDED — the KMS HSM key
+# is the only live private key. Both the root cert AND the intermediate cert
+# must therefore persist: the intermediate cert's public key is byte-identical
+# to the KMS signing key, so a 2nd VM / reboot MUST restore the exact same
+# intermediate or step-ca serves a chain that doesn't match the live signer.
+#
+# We persist root_ca.crt -> smallstep-ca-cert and intermediate_ca.crt ->
+# smallstep-intermediate-cert (two separate secrets). The "already initialized"
+# signal is the smallstep-intermediate-cert secret having a usable version
+# (it's the newer secret; if it exists, both do).
+#
 # NOTE: we only ADD a secret version + READ it; we never modify the secret's
 # IAM or delete it (the VM SA holds secretVersionManager + secretAccessor only).
-if gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >/tmp/smallstep-ca.crt 2>/dev/null && [ -s /tmp/smallstep-ca.crt ]; then
-  echo "Existing Smallstep CA cert found — reusing."
-  cp /tmp/smallstep-ca.crt "$STEPPATH/certs/root_ca.crt"
-  cp /tmp/smallstep-ca.crt "$STEPPATH/certs/intermediate_ca.crt"
+#
+# RACE NOTE: two VMs booting simultaneously could both find neither secret
+# populated and both run init, producing divergent roots. This is an accepted
+# known limitation for now; a real fix would take a distributed lock (out of
+# scope).
+if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
+  echo "Existing Smallstep CA found — restoring root + intermediate certs."
+  gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >"$STEPPATH/certs/root_ca.crt"
+  # Stage the ROOT cert for the RADIUS-trust step later in this script.
+  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
 else
   echo "Initializing new KMS-backed Smallstep CA..."
   # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
@@ -229,11 +249,17 @@ else
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
     --no-password --insecure || true
-  if [ -f "$STEPPATH/certs/root_ca.crt" ]; then
+  if [ -f "$STEPPATH/certs/root_ca.crt" ] && [ -f "$STEPPATH/certs/intermediate_ca.crt" ]; then
+    # Publish BOTH certs so reboots / the 2nd VM restore a matching chain.
     gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
       --data-file="$STEPPATH/certs/root_ca.crt"
+    gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
+      --data-file="$STEPPATH/certs/intermediate_ca.crt"
+    # Stage the ROOT cert for the RADIUS-trust step later in this script.
     cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
   fi
+  # Discard the local root key — the KMS HSM key is the only live private key.
+  rm -f "$STEPPATH/secrets/root_ca_key"
 fi
 
 # Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
