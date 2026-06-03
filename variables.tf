@@ -241,12 +241,9 @@ variable "fleet_api_base_url" {
   default     = ""
 }
 
-variable "fleet_api_token" {
-  description = "Fleet API token (a read-only API-only user) the webhook uses to look up hosts by serial."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
+# NOTE: the Fleet API token is NOT a Terraform variable — it is a standing
+# credential added directly to the `fleet-api-token` Secret Manager secret
+# out-of-band (see webhook.tf), so it never passes through tfvars/CI/CLI.
 
 variable "webhook_allow_label" {
   description = "Optional Fleet label a host must carry for the webhook to allow issuance (e.g. test-pilots for a scoped pilot). Empty = any enrolled host is allowed."

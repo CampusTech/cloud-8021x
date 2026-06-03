@@ -46,20 +46,18 @@ resource "google_secret_manager_secret_version" "webhook_signing_secret" {
   secret_data = random_password.webhook_signing_secret[0].result
 }
 
-# Fleet API token.
-resource "google_secret_manager_secret" "fleet_api_token" {
+# Fleet API token — a standing credential created OUT-OF-BAND so it never
+# passes through tfvars/CI/CLI history. Create it (container + value) yourself
+# from an api-only observer user's token, BEFORE applying with the webhook
+# enabled:
+#   ~/.fleetctl/fleetctl user create --name 'ACME Webhook' --api-only   # prints token
+#   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
+#     --project=campus-cloud-8021x-42e6 --replication-policy=automatic --data-file=-
+# Terraform only REFERENCES it (data source) + grants the webhook SA access.
+data "google_secret_manager_secret" "fleet_api_token" {
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
   secret_id = "fleet-api-token"
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "fleet_api_token" {
-  count       = local.acme_webhook_enabled
-  secret      = google_secret_manager_secret.fleet_api_token[0].id
-  secret_data = var.fleet_api_token
 }
 
 # The webhook SA reads both secrets; the RADIUS VM SA reads the signing secret
@@ -83,7 +81,7 @@ resource "google_secret_manager_secret_iam_member" "webhook_signing_secret_radiu
 resource "google_secret_manager_secret_iam_member" "fleet_api_token_webhook" {
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
-  secret_id = google_secret_manager_secret.fleet_api_token[0].secret_id
+  secret_id = data.google_secret_manager_secret.fleet_api_token[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.webhook[0].email}"
 }
@@ -123,7 +121,7 @@ resource "google_cloud_run_v2_service" "webhook" {
         name = "FLEET_API_TOKEN"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.fleet_api_token[0].secret_id
+            secret  = data.google_secret_manager_secret.fleet_api_token[0].secret_id
             version = "latest"
           }
         }
