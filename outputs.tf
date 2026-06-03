@@ -38,3 +38,27 @@ output "unifi_radius_config" {
     shared_secrets      = { for k, v in google_secret_manager_secret.radius_secret : k => v.secret_id }
   }
 }
+
+# -----------------------------------------------------------------------------
+# Smallstep step-ca (only meaningful when enable_smallstep_ca = true)
+# -----------------------------------------------------------------------------
+
+output "smallstep_acme_directory_url" {
+  description = "ACME directory URL for MDM ACME payloads (macOS/iOS). Empty if disabled."
+  value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_dns_name}/acme/${var.smallstep_acme_provisioner_name}/directory" : ""
+}
+
+output "smallstep_scep_url" {
+  description = "SCEP URL for Fleet's custom_scep_proxy (Windows). Empty if disabled."
+  value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_dns_name}/scep/${var.smallstep_scep_provisioner_name}" : ""
+}
+
+output "smallstep_ca_cert_secret_id" {
+  description = "Secret Manager secret holding the Smallstep CA root cert PEM (for RADIUS trust + MDM root payloads). Empty if disabled."
+  value       = var.enable_smallstep_ca ? google_secret_manager_secret.smallstep_ca_cert[0].secret_id : ""
+}
+
+output "smallstep_lb_ip" {
+  description = "Public IP of the step-ca load balancer; point smallstep_ca_dns_name at this A record. Empty if disabled."
+  value       = var.enable_smallstep_ca ? google_compute_global_address.smallstep_lb[0].address : ""
+}
