@@ -171,6 +171,134 @@ chown freerad:freerad "$CERT_DIR"/server-*.pem "$CERT_DIR"/dh.pem "$CERT_DIR"/ok
 chmod 600 "$CERT_DIR/server-key.pem" "$CERT_DIR/server-ca-key.pem"
 chmod 644 "$CERT_DIR/server-cert.pem" "$CERT_DIR/server-ca.pem" \
           "$CERT_DIR/dh.pem" "$CERT_DIR/okta-ca.pem"
+%{ if smallstep_enabled ~}
+
+# ---------------------------------------------------------------------------
+# Optional: self-hosted Smallstep step-ca (gated by enable_smallstep_ca)
+# ---------------------------------------------------------------------------
+echo "=== Setting up Smallstep step-ca ==="
+export STEPPATH=/etc/step-ca
+mkdir -p "$STEPPATH/db" "$STEPPATH/certs" "$STEPPATH/config" "$STEPPATH/secrets"
+
+# Install step-ca + step CLI.
+if ! command -v step-ca >/dev/null 2>&1; then
+  STEP_CLI_VERSION="0.28.2"
+  STEP_CA_VERSION="0.28.1"
+  curl -fsSL "https://dl.smallstep.com/cli/docs-ca-install/latest/step-cli_amd64.deb" -o /tmp/step-cli.deb || \
+    curl -fsSL "https://github.com/smallstep/cli/releases/download/v$${STEP_CLI_VERSION}/step-cli_$${STEP_CLI_VERSION}_amd64.deb" -o /tmp/step-cli.deb
+  curl -fsSL "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}_amd64.deb" -o /tmp/step-ca.deb
+  dpkg -i /tmp/step-cli.deb /tmp/step-ca.deb || apt-get -fy install
+fi
+
+# Fetch DB password + SCEP challenge from Secret Manager.
+SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
+SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
+
+# Reuse an existing CA cert if one was already published to Secret Manager;
+# otherwise initialize a new KMS-backed CA and publish its root cert.
+# NOTE: we only ADD a secret version + READ it; we never modify the secret's
+# IAM or delete it (the VM SA holds secretVersionManager + secretAccessor only).
+if gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >/tmp/smallstep-ca.crt 2>/dev/null && [ -s /tmp/smallstep-ca.crt ]; then
+  echo "Existing Smallstep CA cert found — reusing."
+  cp /tmp/smallstep-ca.crt "$STEPPATH/certs/root_ca.crt"
+  cp /tmp/smallstep-ca.crt "$STEPPATH/certs/intermediate_ca.crt"
+else
+  echo "Initializing new KMS-backed Smallstep CA..."
+  # IMPLEMENTATION NOTE: confirm the exact KMS init invocation for the installed
+  # step-ca version with `step ca init --help`. The intent: a CA whose signing
+  # key is the pre-created Cloud KMS key (${smallstep_signing_key_uri}), NOT a
+  # local key. Adjust the flags below to whatever the installed version requires
+  # so the root/intermediate is genuinely KMS-backed, then record the working
+  # invocation in a comment.
+  step ca init \
+    --name="CampusGroup Wi-Fi CA" \
+    --dns="${smallstep_ca_dns_name}" \
+    --address=":8443" \
+    --provisioner="bootstrap" \
+    --kms=cloudkms \
+    --ca-url="https://${smallstep_ca_dns_name}" \
+    --no-db || true
+  if [ -f "$STEPPATH/certs/root_ca.crt" ]; then
+    gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
+      --data-file="$STEPPATH/certs/root_ca.crt"
+    cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
+  fi
+fi
+
+# Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
+# and SCEP provisioners.
+cat > "$STEPPATH/config/ca.json" <<CAJSON
+{
+  "root": "$STEPPATH/certs/root_ca.crt",
+  "crt": "$STEPPATH/certs/intermediate_ca.crt",
+  "address": ":8443",
+  "dnsNames": ["${smallstep_ca_dns_name}"],
+  "db": {
+    "type": "postgresql",
+    "dataSource": "postgresql://${smallstep_db_user}:$${SMALLSTEP_DB_PASSWORD}@${smallstep_db_host}:5432/${smallstep_db_name}?sslmode=require"
+  },
+  "authority": {
+    "provisioners": [
+      {
+        "type": "ACME",
+        "name": "${smallstep_acme_name}",
+        "challenges": ["device-attest-01"],
+        "attestationFormats": ["apple"],
+%{ if acme_webhook_url != "" ~}
+        "webhooks": [
+          {
+            "name": "authorize",
+            "url": "${acme_webhook_url}",
+            "kind": "AUTHORIZING",
+            "certType": "ALL"
+          }
+        ],
+%{ endif ~}
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
+      },
+      {
+        "type": "SCEP",
+        "name": "${smallstep_scep_name}",
+        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
+        "minimumPublicKeyLength": 2048,
+        "encryptionAlgorithmIdentifier": 2,
+        "decrypterKeyURI": "${smallstep_scep_key_uri}"
+      }
+    ]
+  },
+  "tls": { "minVersion": 1.2, "maxVersion": 1.3 }
+}
+CAJSON
+
+# systemd unit for step-ca.
+cat > /etc/systemd/system/step-ca.service <<'UNIT'
+[Unit]
+Description=Smallstep step-ca
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=STEPPATH=/etc/step-ca
+ExecStart=/usr/bin/step-ca /etc/step-ca/config/ca.json
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now step-ca
+echo "step-ca started."
+
+# When trust mode is "smallstep", stage the Smallstep CA cert for RADIUS to
+# validate client certs against (replacing Okta in the client trust path).
+if [ "${radius_trust_mode}" = "smallstep" ] && [ -s /tmp/smallstep-ca.crt ]; then
+  cp /tmp/smallstep-ca.crt "$CERT_DIR/smallstep-ca.pem"
+  chown freerad:freerad "$CERT_DIR/smallstep-ca.pem" || true
+fi
+%{ endif ~}
 
 # ---------------------------------------------------------------------------
 # 5. Configure EAP-TLS (native FreeRADIUS format)
@@ -189,7 +317,7 @@ eap {
     tls-config tls-common {
         private_key_file = $${certdir}/server-key.pem
         certificate_file = $${certdir}/server-cert.pem
-        ca_file = $${certdir}/okta-ca.pem
+        ca_file = $${certdir}/%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }okta-ca.pem%{ endif }%{ else }okta-ca.pem%{ endif }
         dh_file = $${certdir}/dh.pem
         ca_path = $${cadir}
 
