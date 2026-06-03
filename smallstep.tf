@@ -226,13 +226,21 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_challenge" {
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_admin" {
+resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_version_manager" {
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_ca_cert[0].secret_id
-  # secretVersionManager lets the VM add a new version on first init; accessor
-  # lets it (and Terraform via data source) read it back.
-  role   = "roles/secretmanager.admin"
+  # Lets the VM add a new version when it first initializes the CA.
+  role   = "roles/secretmanager.secretVersionManager"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_ca_cert[0].secret_id
+  # Lets the VM (and Terraform via data source) read the CA cert back.
+  role   = "roles/secretmanager.secretAccessor"
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
