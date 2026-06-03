@@ -13,6 +13,7 @@ resource "google_project_service" "smallstep_apis" {
   for_each = var.enable_smallstep_ca ? toset([
     "cloudkms.googleapis.com",
     "sqladmin.googleapis.com",
+    "servicenetworking.googleapis.com",
   ]) : toset([])
   project            = google_project.this.project_id
   service            = each.value
@@ -90,4 +91,94 @@ resource "google_kms_crypto_key_iam_member" "smallstep_scep_viewer" {
   crypto_key_id = google_kms_crypto_key.smallstep_scep_decrypter[0].id
   role          = "roles/cloudkms.publicKeyViewer"
   member        = "serviceAccount:${google_service_account.radius.email}"
+}
+
+# --- Cloud SQL Postgres for ACME state (shared by both step-ca instances) ----
+
+resource "random_password" "smallstep_db" {
+  count   = local.smallstep_enabled
+  length  = 32
+  special = false
+}
+
+resource "google_secret_manager_secret" "smallstep_db_password" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-db-password"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "smallstep_db_password" {
+  count       = local.smallstep_enabled
+  secret      = google_secret_manager_secret.smallstep_db_password[0].id
+  secret_data = random_password.smallstep_db[0].result
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_db_password" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_db_password[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_sql_database_instance" "smallstep" {
+  count               = local.smallstep_enabled
+  project             = google_project.this.project_id
+  name                = "smallstep-ca"
+  region              = var.region
+  database_version    = "POSTGRES_16"
+  deletion_protection = true
+
+  settings {
+    tier              = var.smallstep_db_tier
+    availability_type = "REGIONAL"
+    ip_configuration {
+      ipv4_enabled    = false
+      private_network = google_compute_network.radius.id
+    }
+    backup_configuration {
+      enabled = true
+    }
+  }
+
+  depends_on = [
+    google_project_service.smallstep_apis,
+    google_service_networking_connection.smallstep[0],
+  ]
+}
+
+resource "google_sql_database" "smallstep" {
+  count    = local.smallstep_enabled
+  project  = google_project.this.project_id
+  name     = "stepca"
+  instance = google_sql_database_instance.smallstep[0].name
+}
+
+resource "google_sql_user" "smallstep" {
+  count    = local.smallstep_enabled
+  project  = google_project.this.project_id
+  name     = "stepca"
+  instance = google_sql_database_instance.smallstep[0].name
+  password = random_password.smallstep_db[0].result
+}
+
+# Private Services Access — required for Cloud SQL private IP in this VPC.
+resource "google_compute_global_address" "smallstep_psa" {
+  count         = local.smallstep_enabled
+  project       = google_project.this.project_id
+  name          = "smallstep-psa-range"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.radius.id
+}
+
+resource "google_service_networking_connection" "smallstep" {
+  count                   = local.smallstep_enabled
+  network                 = google_compute_network.radius.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.smallstep_psa[0].name]
 }
