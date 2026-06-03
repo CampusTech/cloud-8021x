@@ -185,12 +185,12 @@ variable "enable_smallstep_ca" {
 }
 
 variable "radius_trust_mode" {
-  description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'smallstep'."
+  description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'both' = transitional dual-trust (Okta + Smallstep intermediates concatenated) so devices can migrate without a flag-day cutover. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'both' or 'smallstep'."
   type        = string
   default     = "okta"
   validation {
-    condition     = contains(["okta", "smallstep"], var.radius_trust_mode)
-    error_message = "radius_trust_mode must be either \"okta\" or \"smallstep\"."
+    condition     = contains(["okta", "both", "smallstep"], var.radius_trust_mode)
+    error_message = "radius_trust_mode must be one of \"okta\", \"both\", or \"smallstep\"."
   }
 }
 

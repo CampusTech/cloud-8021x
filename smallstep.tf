@@ -46,7 +46,15 @@ resource "google_kms_crypto_key" "smallstep_signing" {
   }
 }
 
-# SCEP decrypter — RSA decryption key. SCEP CMS uses RSA; PKCS#1 v1.5 decrypt.
+# SCEP decrypter — RSA key.
+#
+# DEPRECATED / UNUSED as of the move to a software decrypter key: step-ca's SCEP
+# provisioner needs the decrypter key to BOTH decrypt and sign, but Cloud KMS
+# keys are single-purpose (ASYMMETRIC_DECRYPT can't sign), so this key cannot
+# back the SCEP decrypter — see smallstep-scep-decrypter-key (a shared software
+# RSA key in Secret Manager) and the SCEP provisioner block in startup.sh.
+# Retained (prevent_destroy, HSM) so no destroy is required; the VM no longer
+# references it. Safe to remove in a future cleanup once confirmed unused.
 resource "google_kms_crypto_key" "smallstep_scep_decrypter" {
   count    = local.smallstep_enabled
   name     = "scep-decrypter"
@@ -306,6 +314,43 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_cer
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_scep_decrypter_cert[0].secret_id
   # Lets the VM (and Terraform via data source) read the decrypter cert back.
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+# SCEP decrypter PRIVATE key (shared software RSA key).
+#
+# step-ca's SCEP provisioner needs the decrypter key to BOTH decrypt SCEP
+# envelopes and sign SCEP responses. Cloud KMS keys are single-purpose
+# (ASYMMETRIC_DECRYPT can't sign), so the SCEP decrypter cannot be KMS-backed —
+# a KMS decrypter fails init ("does not have decrypter") and every PKIOperation
+# 500s. Instead the VM generates a dual-purpose RSA key at CA init and persists
+# it here so both HA nodes + rebuilds share ONE decrypter identity (required
+# behind the round-robin LB). The CA SIGNING key stays in Cloud KMS/HSM; this
+# key only handles SCEP message crypto and never issues certificates.
+resource "google_secret_manager_secret" "smallstep_scep_decrypter_key" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-scep-decrypter-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_scep_decrypter_key[0].secret_id
+  # Lets the VM add the key version when it first initializes the CA.
+  role   = "roles/secretmanager.secretVersionManager"
+  member = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_scep_decrypter_key[0].secret_id
+  # Lets both HA nodes read the shared decrypter key back at boot.
   role   = "roles/secretmanager.secretAccessor"
   member = "serviceAccount:${google_service_account.radius.email}"
 }

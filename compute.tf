@@ -133,8 +133,10 @@ locals {
     smallstep_scep_name       = var.smallstep_scep_provisioner_name
     acme_webhook_url          = var.acme_authorizing_webhook_url
     smallstep_signing_key_uri = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/ca-signing/cryptoKeyVersions/1" : ""
-    smallstep_scep_key_uri    = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/scep-decrypter/cryptoKeyVersions/1" : ""
-    smallstep_db_host         = var.enable_smallstep_ca ? google_sql_database_instance.smallstep[0].private_ip_address : ""
+    # SCEP decrypter is a shared software RSA key in Secret Manager, not KMS
+    # (Cloud KMS keys are single-purpose; step-ca's SCEP decrypter must both
+    # decrypt and sign). No KMS URI needed for it.
+    smallstep_db_host = var.enable_smallstep_ca ? google_sql_database_instance.smallstep[0].private_ip_address : ""
     smallstep_db_name         = "stepca"
     smallstep_db_user         = "stepca"
   })
@@ -196,10 +198,10 @@ resource "google_compute_instance" "radius" {
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_scep_decrypter_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_scep_decrypter_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_scep_decrypter_key_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_scep_decrypter_key_accessor,
     google_kms_crypto_key_iam_member.smallstep_signing_use,
     google_kms_crypto_key_iam_member.smallstep_signing_viewer,
-    google_kms_crypto_key_iam_member.smallstep_scep_decrypt,
-    google_kms_crypto_key_iam_member.smallstep_scep_viewer,
     google_sql_database.smallstep,
     google_sql_user.smallstep,
   ]
@@ -258,10 +260,10 @@ resource "google_compute_instance" "radius_secondary" {
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_scep_decrypter_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_scep_decrypter_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_scep_decrypter_key_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_scep_decrypter_key_accessor,
     google_kms_crypto_key_iam_member.smallstep_signing_use,
     google_kms_crypto_key_iam_member.smallstep_signing_viewer,
-    google_kms_crypto_key_iam_member.smallstep_scep_decrypt,
-    google_kms_crypto_key_iam_member.smallstep_scep_viewer,
     google_sql_database.smallstep,
     google_sql_user.smallstep,
   ]

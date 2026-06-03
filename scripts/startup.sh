@@ -231,9 +231,18 @@ ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-w
 # known limitation for now; a real fix would take a distributed lock (out of
 # scope).
 if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
-  echo "Existing Smallstep CA found — restoring root + intermediate + SCEP decrypter certs."
+  echo "Existing Smallstep CA found — restoring root + intermediate + SCEP decrypter cert + key."
   gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >"$STEPPATH/certs/root_ca.crt"
   gcloud secrets versions access latest --secret=smallstep-scep-decrypter-cert --project="${project_id}" >"$STEPPATH/certs/scep_decrypter.crt"
+  # The SCEP decrypter PRIVATE key is a shared software RSA key (not in KMS):
+  # Cloud KMS keys are single-purpose, but step-ca's SCEP provisioner needs the
+  # decrypter key to BOTH decrypt SCEP envelopes AND sign SCEP responses, so it
+  # must be a dual-purpose software RSA key. Generated once at init and persisted
+  # to Secret Manager so both HA nodes (and any rebuild) share the SAME decrypter
+  # identity. The CA SIGNING key stays in Cloud KMS/HSM — this key only handles
+  # SCEP message crypto, never issues certificates.
+  gcloud secrets versions access latest --secret=smallstep-scep-decrypter-key --project="${project_id}" >"$STEPPATH/secrets/scep_decrypter_key"
+  chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
 else
@@ -265,31 +274,44 @@ else
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
     --no-password --insecure --force
-  # SCEP decrypter cert: leaf whose public key is the Cloud KMS scep-decrypter
-  # RSA key; clients encrypt SCEP requests to it, step-ca decrypts with the KMS
-  # key. step-ca's SCEP provisioner requires BOTH decrypterCertificate and
-  # decrypterKeyURI. /dev/null key output — the private key lives in Cloud KMS.
-  # Signed by the ROOT (root_ca.crt + root_ca_key), which still exists here; the
-  # intermediate's private key is in KMS so it can't sign locally. This MUST run
-  # before the `rm -f "$STEPPATH/secrets/root_ca_key"` below.
+  # SCEP decrypter: a SOFTWARE RSA keypair (NOT Cloud KMS). step-ca's SCEP
+  # provisioner Init() calls BOTH CreateDecrypter AND CreateSigner on the
+  # decrypter key (it decrypts the SCEP PKCS#7 envelope AND signs the SCEP
+  # response). Cloud KMS keys are single-purpose (ASYMMETRIC_DECRYPT can't sign),
+  # so a KMS-backed decrypter fails init with "does not have decrypter" and every
+  # PKIOperation 500s. A local RSA key is dual-purpose and is the documented
+  # step-ca SCEP pattern. This key is lower-sensitivity than the CA signing key
+  # (it never issues certs); the signing key stays in Cloud KMS/HSM.
+  #
+  # Generated here once, then persisted to Secret Manager (cert AND key) so both
+  # HA nodes + any VM rebuild share the SAME decrypter identity — critical behind
+  # the round-robin LB, where the cert returned by GetCACert on one node must be
+  # decryptable by whichever node receives the PKIOperation POST.
+  #
+  # Signed by the ROOT (root_ca.crt + root_ca_key), which still exists here. This
+  # MUST run before the `rm -f "$STEPPATH/secrets/root_ca_key"` below.
   step certificate create "CampusGroup Wi-Fi SCEP Decrypter" \
-    "$STEPPATH/certs/scep_decrypter.crt" /dev/null \
+    "$STEPPATH/certs/scep_decrypter.crt" "$STEPPATH/secrets/scep_decrypter_key" \
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
-    --kms "cloudkms:" --key "${smallstep_scep_key_uri}" \
+    --kty RSA --size 2048 \
     --not-after 87600h --no-password --insecure --force
-  # Single gate: only publish secrets + discard the root key once ALL certs
-  # genuinely exist and are non-empty. On failure, leave files in place and abort.
-  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] || {
-    echo "FATAL: Smallstep CA bootstrap did not produce all certificates" >&2
+  chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
+  # Single gate: only publish secrets + discard the root key once ALL certs +
+  # the decrypter key genuinely exist and are non-empty. On failure, abort.
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys" >&2
     exit 1
   }
-  # Publish ALL certs so reboots / the 2nd VM restore a matching chain.
+  # Publish ALL certs + the decrypter key so reboots / the 2nd VM restore a
+  # matching chain and a working SCEP decrypter.
   gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/root_ca.crt"
   gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/intermediate_ca.crt"
   gcloud secrets versions add smallstep-scep-decrypter-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/scep_decrypter.crt"
+  gcloud secrets versions add smallstep-scep-decrypter-key --project="${project_id}" \
+    --data-file="$STEPPATH/secrets/scep_decrypter_key"
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
@@ -305,8 +327,11 @@ fi
 # provisioner is intentionally NOT webhook-gated; it authenticates with the
 # static challenge, so the webhook never receives a serial-less SCEP request.
 #
-# step-ca's SCEP provisioner wants decrypterCertificate as base64-encoded PEM.
+# step-ca's SCEP provisioner wants decrypterCertificate + decrypterKeyPEM as
+# base64-encoded PEM. The decrypter key is the shared software RSA key restored
+# from / generated into Secret Manager above.
 SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
+SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < "$STEPPATH/secrets/scep_decrypter_key")"
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -346,13 +371,50 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "minimumPublicKeyLength": 2048,
         "encryptionAlgorithmIdentifier": 2,
         "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
-        "decrypterKeyURI": "${smallstep_scep_key_uri}"
+        "decrypterKeyPEM": "$${SCEP_DECRYPTER_KEY_B64}",
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
   },
-  "tls": { "minVersion": 1.2, "maxVersion": 1.3 }
+  "tls": { "minVersion": 1.2, "maxVersion": 1.3 },
+  "logger": { "format": "json" }
 }
 CAJSON
+
+# SCEP decrypter readiness probe.
+#
+# step-ca 0.30.2 validates the SCEP decrypter (decrypterCertificate +
+# decrypterKeyURI -> Cloud KMS) exactly ONCE at startup. If that KMS call
+# fails transiently (IAM propagation lag, KMS latency, network blip on a
+# fresh boot), step-ca logs the NON-FATAL line:
+#   "failed validating SCEP authority: SCEP provisioner ... does not have decrypter"
+# then keeps serving with the provisioner DEGRADED — every SCEP PKIOperation
+# returns HTTP 500 ("does not have a decrypter available") for the life of the
+# process, with no crash and no retry. On an HA pair behind a round-robin LB
+# this silently breaks ~half of all SCEP enrollments until a manual restart.
+#
+# This probe runs after step-ca comes up and fails the unit (-> Restart=always
+# re-execs it, by which point KMS is reachable) if the decrypter didn't load.
+# Gated on a working SCEP provisioner via the marker file written above.
+%{ if smallstep_enabled ~}
+cat > /usr/local/bin/stepca-decrypter-probe.sh <<'PROBE'
+#!/bin/bash
+# Wait for the CA to answer health, then assert the SCEP decrypter initialized.
+for i in $(seq 1 30); do
+  curl -fsS -k https://127.0.0.1:8443/health >/dev/null 2>&1 && break
+  sleep 1
+done
+# Look only at THIS invocation's logs (since the unit's current start).
+since=$(systemctl show step-ca -p ActiveEnterTimestamp --value)
+if journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  echo "stepca-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
+  exit 1
+fi
+echo "stepca-decrypter-probe: SCEP decrypter OK"
+exit 0
+PROBE
+chmod +x /usr/local/bin/stepca-decrypter-probe.sh
+%{ endif ~}
 
 # systemd unit for step-ca.
 cat > /etc/systemd/system/step-ca.service <<'UNIT'
@@ -364,6 +426,11 @@ Wants=network-online.target
 [Service]
 Environment=STEPPATH=/etc/step-ca
 ExecStart=/usr/bin/step-ca /etc/step-ca/config/ca.json
+%{ if smallstep_enabled ~}
+# Assert the SCEP decrypter loaded; non-zero here trips Restart=always so a
+# transient KMS failure at boot self-heals instead of silently 500-ing SCEP.
+ExecStartPost=/usr/local/bin/stepca-decrypter-probe.sh
+%{ endif ~}
 Restart=always
 RestartSec=5
 User=root
@@ -376,11 +443,20 @@ systemctl daemon-reload
 systemctl enable --now step-ca
 echo "step-ca started."
 
-# When trust mode is "smallstep", stage the Smallstep CA cert for RADIUS to
-# validate client certs against (replacing Okta in the client trust path).
-if [ "${radius_trust_mode}" = "smallstep" ] && [ -s /tmp/smallstep-ca.crt ]; then
+# Stage the Smallstep CA cert for RADIUS to validate client certs against.
+#   - "smallstep": Smallstep replaces Okta in the client trust path.
+#   - "both":      transitional dual-trust — RADIUS accepts client certs from
+#                  EITHER the Okta intermediate OR the Smallstep intermediate,
+#                  by validating against a concatenated bundle. Lets devices
+#                  migrate from Okta-issued to Smallstep-issued Wi-Fi certs
+#                  without a flag-day cutover.
+if { [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both" ]; } && [ -s /tmp/smallstep-ca.crt ]; then
   cp /tmp/smallstep-ca.crt "$CERT_DIR/smallstep-ca.pem"
   chown freerad:freerad "$CERT_DIR/smallstep-ca.pem" || true
+fi
+if [ "${radius_trust_mode}" = "both" ] && [ -s "$CERT_DIR/smallstep-ca.pem" ]; then
+  cat "$CERT_DIR/okta-ca.pem" "$CERT_DIR/smallstep-ca.pem" > "$CERT_DIR/trust-bundle.pem"
+  chown freerad:freerad "$CERT_DIR/trust-bundle.pem" || true
 fi
 %{ endif ~}
 
@@ -401,7 +477,7 @@ eap {
     tls-config tls-common {
         private_key_file = $${certdir}/server-key.pem
         certificate_file = $${certdir}/server-cert.pem
-        ca_file = $${certdir}/%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }okta-ca.pem%{ endif }%{ else }okta-ca.pem%{ endif }
+        ca_file = $${certdir}/%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }%{ if radius_trust_mode == "both" }trust-bundle.pem%{ else }okta-ca.pem%{ endif }%{ endif }%{ else }okta-ca.pem%{ endif }
         dh_file = $${certdir}/dh.pem
         ca_path = $${cadir}
 
