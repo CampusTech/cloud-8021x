@@ -64,7 +64,7 @@ func (c *Client) LookupHostBySerial(ctx context.Context, serial string) (*Host, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, nil

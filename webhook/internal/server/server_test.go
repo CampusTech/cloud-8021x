@@ -34,9 +34,9 @@ func TestHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var rs ResponseShape
-		json.NewDecoder(resp.Body).Decode(&rs)
+		_ = json.NewDecoder(resp.Body).Decode(&rs)
 		return rs
 	}
 

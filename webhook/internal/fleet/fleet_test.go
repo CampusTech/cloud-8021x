@@ -18,7 +18,7 @@ func TestLookupHostBySerial_Found(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"darwin","labels":[{"name":"All Hosts"},{"name":"test-pilots"}]}}`))
+		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"darwin","labels":[{"name":"All Hosts"},{"name":"test-pilots"}]}}`))
 	}))
 	defer srv.Close()
 
