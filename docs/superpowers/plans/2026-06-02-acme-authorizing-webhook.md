@@ -1350,3 +1350,25 @@ On a test machine OR via step CLI, attempt an ACME order against `https://ca.cam
 **Off-by-default:** `enable_acme_webhook=false` adds zero resources (verified in Task 9 Step 3).
 
 **Out-of-scope correctly deferred:** the MDM profiles + cutover (Plan 3). This plan only makes ACME *safe to enable*; it does not enroll devices.
+
+---
+
+## Verified post-deploy values (recorded during execution)
+
+Deployed to `campus-cloud-8021x-42e6` on 2026-06-02. ACME issuance is now GATED.
+
+- **Webhook URL:** `https://acme-authz-webhook-5jtkjjerlq-uk.a.run.app/authorize` (Cloud Run, `us-east4`, public ingress, allUsers invoker — HMAC is the gate).
+- **Fleet token:** stored in Secret Manager `fleet-api-token` (created out-of-band from an api-only **observer** Fleet user: `fleetctl user create --name 'ACME Webhook' --api-only`). Verified live: looks up host 733 → `enrollment_status: "On (manual)"`.
+- **Image:** `gcr.io/campus-cloud-8021x-42e6/acme-authz-webhook:latest` (built locally `--platform linux/amd64` + `docker push`; Cloud Build was blocked by workforce-pool IAM, so local build was used).
+- **Smoke test (live):** allowed serial 733 → `{"allow":true}`; unknown serial → `{"allow":false}`; bad/missing signature → `{"allow":false}`.
+- **Wired into step-ca:** `acme_authorizing_webhook_url` set; ca.json on BOTH VMs carries the AUTHORIZING webhook block; step-ca re-rendered + healthy on both. **HMAC key-form verified end-to-end**: `base64-decode(ca.json secret) == raw acme-webhook-signing-secret`; a raw-secret-signed request for an enrolled serial returns allow:true.
+- **Enrollment gate (post-review fix):** the webhook allows only hosts whose Fleet `mdm.enrollment_status` starts with "On" — known-but-unenrolled (Off/Pending) serials are denied.
+
+### Deviations / notes from execution
+1. **Cloud Build IAM:** `gcloud builds submit` failed (PERMISSION_DENIED — active identity is an Okta workforce-pool principal lacking build roles, even though robbie@campus.edu is project owner). Worked around by building/pushing the image locally with Docker. A CI build would need the build SA + roles wired, or keep using local builds.
+2. **Cloud Run first-create transient error:** initial apply hit "Error code 7 internal error" (no container logs, image imported fine) — a transient control-plane hiccup on first service create after enabling the API. Re-apply succeeded.
+3. **`/healthz` returns Google's 404** (GET `/` and `/healthz` both 404 from Google's edge) while `POST /authorize` and `GET /authorize` (200) reach our container. Cosmetic — Cloud Run uses a TCP startup probe, not HTTP health, so the service is healthy. Minor follow-up to investigate the GET routing if a real health endpoint is wanted.
+4. **Fleet token was pasted in chat during execution** → must be ROTATED (delete the api-only user / regenerate token, update the `fleet-api-token` secret).
+5. **Bad-signature denial returns allow:false at HTTP 200** (not 401) — by design; step-ca only honors allow:true.
+
+**Remaining before real-device ACME (Plan 3):** the gate is live, but no device is enrolled over ACME yet — Plan 3 ships the macOS ACME profile (and Windows SCEP) and runs the pilot cutover.
