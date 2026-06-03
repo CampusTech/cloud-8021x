@@ -124,6 +124,19 @@ locals {
         secret_id   = "radius-shared-secret-${k}"
       }
     })
+
+    # --- Smallstep step-ca ---
+    smallstep_enabled         = var.enable_smallstep_ca
+    radius_trust_mode         = var.radius_trust_mode
+    smallstep_ca_dns_name     = var.smallstep_ca_dns_name
+    smallstep_acme_name       = var.smallstep_acme_provisioner_name
+    smallstep_scep_name       = var.smallstep_scep_provisioner_name
+    acme_webhook_url          = var.acme_authorizing_webhook_url
+    smallstep_signing_key_uri = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/ca-signing/cryptoKeyVersions/1" : ""
+    smallstep_scep_key_uri    = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/scep-decrypter/cryptoKeyVersions/1" : ""
+    smallstep_db_host         = var.enable_smallstep_ca ? google_sql_database_instance.smallstep[0].private_ip_address : ""
+    smallstep_db_name         = "stepca"
+    smallstep_db_user         = "stepca"
   })
 }
 
