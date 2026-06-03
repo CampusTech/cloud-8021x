@@ -183,6 +183,23 @@ resource "google_compute_instance" "radius" {
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
+    # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false:
+    # these count-gated resources resolve to an empty set). Unindexed refs depend
+    # on all instances of each resource so the VM waits for the CA's secrets, KMS
+    # IAM, and Cloud SQL before the startup script consumes them on first boot.
+    google_secret_manager_secret_version.smallstep_db_password,
+    google_secret_manager_secret_version.smallstep_scep_challenge,
+    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_intermediate_cert_accessor,
+    google_kms_crypto_key_iam_member.smallstep_signing_use,
+    google_kms_crypto_key_iam_member.smallstep_signing_viewer,
+    google_kms_crypto_key_iam_member.smallstep_scep_decrypt,
+    google_kms_crypto_key_iam_member.smallstep_scep_viewer,
+    google_sql_database.smallstep,
+    google_sql_user.smallstep,
   ]
 }
 
@@ -229,5 +246,19 @@ resource "google_compute_instance" "radius_secondary" {
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
+    # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false).
+    google_secret_manager_secret_version.smallstep_db_password,
+    google_secret_manager_secret_version.smallstep_scep_challenge,
+    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_intermediate_cert_accessor,
+    google_kms_crypto_key_iam_member.smallstep_signing_use,
+    google_kms_crypto_key_iam_member.smallstep_signing_viewer,
+    google_kms_crypto_key_iam_member.smallstep_scep_decrypt,
+    google_kms_crypto_key_iam_member.smallstep_scep_viewer,
+    google_sql_database.smallstep,
+    google_sql_user.smallstep,
   ]
 }

@@ -249,10 +249,12 @@ else
   #
   # Root: local EC P-256 self-signed root. The root key only signs the
   # intermediate once at init and then sits cold; the live signer is the KMS key.
+  # Fail fast: a masked failure here (broken KMS binding, bad invocation) would
+  # otherwise publish partial state and start step-ca with a broken chain.
   step certificate create "CampusGroup Wi-Fi Root CA" \
     "$STEPPATH/certs/root_ca.crt" "$STEPPATH/secrets/root_ca_key" \
     --profile root-ca --kty EC --curve P-256 \
-    --no-password --insecure --force || true
+    --no-password --insecure --force
   # Intermediate: public key sourced from the Cloud KMS signing key; signed by
   # the local root. /dev/null for the key output because the private key lives in
   # Cloud KMS, never on disk.
@@ -261,16 +263,20 @@ else
     --profile intermediate-ca \
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
-    --no-password --insecure --force || true
-  if [ -f "$STEPPATH/certs/root_ca.crt" ] && [ -f "$STEPPATH/certs/intermediate_ca.crt" ]; then
-    # Publish BOTH certs so reboots / the 2nd VM restore a matching chain.
-    gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
-      --data-file="$STEPPATH/certs/root_ca.crt"
-    gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
-      --data-file="$STEPPATH/certs/intermediate_ca.crt"
-    # Stage the ROOT cert for the RADIUS-trust step later in this script.
-    cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
-  fi
+    --no-password --insecure --force
+  # Single gate: only publish secrets + discard the root key once BOTH certs
+  # genuinely exist and are non-empty. On failure, leave files in place and abort.
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce both certificates" >&2
+    exit 1
+  }
+  # Publish BOTH certs so reboots / the 2nd VM restore a matching chain.
+  gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/root_ca.crt"
+  gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/intermediate_ca.crt"
+  # Stage the ROOT cert for the RADIUS-trust step later in this script.
+  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
   rm -f "$STEPPATH/secrets/root_ca_key"
 fi

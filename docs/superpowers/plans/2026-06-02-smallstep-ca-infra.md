@@ -1055,18 +1055,23 @@ Expected: `active` and `{"status":"ok"}` on both.
 
 - [ ] **Step 4: Confirm the ACME directory is reachable through the LB**
 
-Run: `curl -s https://ca.campusgroup.co/acme/wifi/directory | jq .`
+Run: `curl -s https://ca.campusgroup.co/acme/wifi-acme/directory | jq .`
 Expected: a JSON ACME directory with `newNonce`, `newAccount`, `newOrder` URLs.
+(Provisioner names were finalized as `wifi-acme`/`wifi-scep` — step-ca rejects
+duplicate provisioner names across types, so they cannot both be `wifi`.)
 
 - [ ] **Step 5: Confirm SCEP GetCACert/GetCACaps through the LB**
 
 ```bash
-curl -s "https://ca.campusgroup.co/scep/wifi?operation=GetCACaps"
-curl -s "https://ca.campusgroup.co/scep/wifi?operation=GetCACert" -o /tmp/scep-cacert.der
-openssl pkcs7 -inform DER -print_certs -in /tmp/scep-cacert.der -noout 2>/dev/null && echo "GetCACert OK"
+curl -s "https://ca.campusgroup.co/scep/wifi-scep?operation=GetCACaps"
+# step-ca's single-CA SCEP responder returns GetCACert as RAW DER X.509
+# (content-type application/x-x509-ca-cert), NOT a PKCS#7 bundle — parse with
+# `openssl x509 -inform DER`, never `openssl pkcs7`.
+curl -s "https://ca.campusgroup.co/scep/wifi-scep?operation=GetCACert" -o /tmp/scep-cacert.der
+openssl x509 -inform DER -in /tmp/scep-cacert.der -noout -subject -issuer && echo "GetCACert OK"
 ```
-Expected: GetCACaps lists capabilities (e.g. `SHA-256`, `POSTPKIOperation`); GetCACert returns a parseable PKCS#7. **Record the SHA-1 of the issuing cert** — Plan 3's Windows `CAThumbprint` needs it:
-`openssl pkcs7 -inform DER -print_certs -in /tmp/scep-cacert.der | openssl x509 -noout -fingerprint -sha1`
+Expected: GetCACaps lists capabilities (e.g. `SHA-256`, `POSTPKIOperation`); GetCACert returns a parseable DER X.509 cert (the Smallstep intermediate). **Record the SHA-1 of that cert** — Plan 3's Windows `CAThumbprint` needs it:
+`openssl x509 -inform DER -in /tmp/scep-cacert.der -noout -fingerprint -sha1`
 
 - [ ] **Step 6: Confirm RADIUS is unaffected (still trusts Okta)**
 
