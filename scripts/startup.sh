@@ -204,20 +204,31 @@ if gcloud secrets versions access latest --secret=smallstep-ca-cert --project="$
   cp /tmp/smallstep-ca.crt "$STEPPATH/certs/intermediate_ca.crt"
 else
   echo "Initializing new KMS-backed Smallstep CA..."
-  # IMPLEMENTATION NOTE: confirm the exact KMS init invocation for the installed
-  # step-ca version with `step ca init --help`. The intent: a CA whose signing
-  # key is the pre-created Cloud KMS key (${smallstep_signing_key_uri}), NOT a
-  # local key. Adjust the flags below to whatever the installed version requires
-  # so the root/intermediate is genuinely KMS-backed, then record the working
-  # invocation in a comment.
-  step ca init \
-    --name="CampusGroup Wi-Fi CA" \
-    --dns="${smallstep_ca_dns_name}" \
-    --address=":8443" \
-    --provisioner="bootstrap" \
-    --kms=cloudkms \
-    --ca-url="https://${smallstep_ca_dns_name}" \
-    --no-db || true
+  # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
+  # `step ca init --kms=cloudkms` is NOT viable on this version — its --kms flag
+  # only accepts "azurekms" and always *generates* fresh keys; it cannot bind to
+  # a pre-created Cloud KMS key. The working approach is to build the PKI by hand
+  # with `step certificate create`, using --kms cloudkms: + --key <kms-uri> so the
+  # intermediate (the actual leaf signer) is backed by the pre-created HSM key
+  # ${smallstep_signing_key_uri}. The intermediate cert's public key is then
+  # byte-identical to the KMS key's public key and chains to the local root, and
+  # step-ca loads it via the "key"/"kms" stanza in ca.json (rendered below).
+  #
+  # Root: local EC P-256 self-signed root. The root key only signs the
+  # intermediate once at init and then sits cold; the live signer is the KMS key.
+  step certificate create "CampusGroup Wi-Fi Root CA" \
+    "$STEPPATH/certs/root_ca.crt" "$STEPPATH/secrets/root_ca_key" \
+    --profile root-ca --kty EC --curve P-256 \
+    --no-password --insecure || true
+  # Intermediate: public key sourced from the Cloud KMS signing key; signed by
+  # the local root. /dev/null for the key output because the private key lives in
+  # Cloud KMS, never on disk.
+  step certificate create "CampusGroup Wi-Fi Intermediate CA" \
+    "$STEPPATH/certs/intermediate_ca.crt" /dev/null \
+    --profile intermediate-ca \
+    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
+    --no-password --insecure || true
   if [ -f "$STEPPATH/certs/root_ca.crt" ]; then
     gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
       --data-file="$STEPPATH/certs/root_ca.crt"
@@ -231,6 +242,8 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
   "crt": "$STEPPATH/certs/intermediate_ca.crt",
+  "key": "${smallstep_signing_key_uri}",
+  "kms": { "type": "cloudkms" },
   "address": ":8443",
   "dnsNames": ["${smallstep_ca_dns_name}"],
   "db": {
