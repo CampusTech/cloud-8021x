@@ -243,6 +243,15 @@ if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --
   # SCEP message crypto, never issues certificates.
   gcloud secrets versions access latest --secret=smallstep-scep-decrypter-key --project="${project_id}" >"$STEPPATH/secrets/scep_decrypter_key"
   chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
+  # Guard against a partial-publish race: smallstep-intermediate-cert is the
+  # readiness marker and is published LAST in the init branch, but assert the
+  # other restored artifacts are all present + non-empty before starting. A
+  # missing/empty decrypter cert or key would otherwise start step-ca with a
+  # broken SCEP provisioner (PKIOperation 500s) until manual intervention.
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
+    exit 1
+  }
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
 else
@@ -304,14 +313,20 @@ else
   }
   # Publish ALL certs + the decrypter key so reboots / the 2nd VM restore a
   # matching chain and a working SCEP decrypter.
+  #
+  # ORDER MATTERS: smallstep-intermediate-cert is the readiness marker the
+  # restore branch (above) keys on, so it MUST be published LAST. Publishing it
+  # mid-sequence would let a later failure (e.g. decrypter cert/key) leave a
+  # half-initialized CA that the next boot "restores" into a broken SCEP state.
   gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/root_ca.crt"
-  gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
-    --data-file="$STEPPATH/certs/intermediate_ca.crt"
   gcloud secrets versions add smallstep-scep-decrypter-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/scep_decrypter.crt"
   gcloud secrets versions add smallstep-scep-decrypter-key --project="${project_id}" \
     --data-file="$STEPPATH/secrets/scep_decrypter_key"
+  # Readiness marker — published last, only after everything else is durable.
+  gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/intermediate_ca.crt"
   # Stage the ROOT cert for the RADIUS-trust step later in this script.
   cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
