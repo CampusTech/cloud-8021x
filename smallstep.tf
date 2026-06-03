@@ -260,3 +260,138 @@ resource "google_compute_firewall" "allow_stepca_lb" {
   source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
   target_tags   = ["radius-server"]
 }
+
+# --- External HTTPS load balancer fronting both VMs' step-ca listeners --------
+
+resource "google_compute_global_address" "smallstep_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-lb-ip"
+}
+
+resource "google_compute_managed_ssl_certificate" "smallstep" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-cert"
+  managed {
+    domains = [var.smallstep_ca_dns_name]
+  }
+}
+
+# Unmanaged instance group per VM zone, each holding its RADIUS VM.
+resource "google_compute_instance_group" "smallstep_primary" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  name      = "smallstep-ig-primary"
+  zone      = var.zone
+  instances = [google_compute_instance.radius.self_link]
+  named_port {
+    name = "stepca"
+    port = 8443
+  }
+}
+
+resource "google_compute_instance_group" "smallstep_secondary" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  name      = "smallstep-ig-secondary"
+  zone      = var.secondary_zone
+  instances = [google_compute_instance.radius_secondary.self_link]
+  named_port {
+    name = "stepca"
+    port = 8443
+  }
+}
+
+resource "google_compute_health_check" "smallstep" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-hc"
+  https_health_check {
+    port         = 8443
+    request_path = "/health"
+  }
+}
+
+resource "google_compute_security_policy" "smallstep" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-armor"
+
+  rule {
+    action   = "rate_based_ban"
+    priority = 1000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+      rate_limit_threshold {
+        count        = 100
+        interval_sec = 60
+      }
+      ban_duration_sec = 300
+    }
+  }
+
+  rule {
+    action   = "allow"
+    priority = 2147483647
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    description = "default allow"
+  }
+}
+
+resource "google_compute_backend_service" "smallstep" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-backend"
+  protocol              = "HTTPS"
+  port_name             = "stepca"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = 30
+  health_checks         = [google_compute_health_check.smallstep[0].id]
+  security_policy       = google_compute_security_policy.smallstep[0].id
+
+  backend {
+    group = google_compute_instance_group.smallstep_primary[0].id
+  }
+  backend {
+    group = google_compute_instance_group.smallstep_secondary[0].id
+  }
+}
+
+resource "google_compute_url_map" "smallstep" {
+  count           = local.smallstep_enabled
+  project         = google_project.this.project_id
+  name            = "smallstep-ca-urlmap"
+  default_service = google_compute_backend_service.smallstep[0].id
+}
+
+resource "google_compute_target_https_proxy" "smallstep" {
+  count            = local.smallstep_enabled
+  project          = google_project.this.project_id
+  name             = "smallstep-ca-https-proxy"
+  url_map          = google_compute_url_map.smallstep[0].id
+  ssl_certificates = [google_compute_managed_ssl_certificate.smallstep[0].id]
+}
+
+resource "google_compute_global_forwarding_rule" "smallstep" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-fr"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  ip_address            = google_compute_global_address.smallstep_lb[0].address
+  port_range            = "443"
+  target                = google_compute_target_https_proxy.smallstep[0].id
+}
