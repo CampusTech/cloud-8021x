@@ -223,3 +223,39 @@ variable "smallstep_db_tier" {
   type        = string
   default     = "db-custom-1-3840"
 }
+
+# -----------------------------------------------------------------------------
+# Optional ACME authorizing webhook (Cloud Run) — gates ACME issuance to
+# Fleet-enrolled device serials. Requires enable_smallstep_ca.
+# -----------------------------------------------------------------------------
+
+variable "enable_acme_webhook" {
+  description = "Deploy the ACME authorizing webhook (Cloud Run) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
+  type        = bool
+  default     = false
+}
+
+variable "fleet_api_base_url" {
+  description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.campusgroup.co)."
+  type        = string
+  default     = ""
+}
+
+variable "fleet_api_token" {
+  description = "Fleet API token (a read-only API-only user) the webhook uses to look up hosts by serial."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "webhook_allow_label" {
+  description = "Optional Fleet label a host must carry for the webhook to allow issuance (e.g. test-pilots for a scoped pilot). Empty = any enrolled host is allowed."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_image" {
+  description = "Container image for the ACME authorizing webhook (built from webhook/Dockerfile and pushed to Artifact Registry / GCR)."
+  type        = string
+  default     = ""
+}
