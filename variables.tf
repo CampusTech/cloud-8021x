@@ -173,3 +173,53 @@ variable "datadog_app_key" {
   default     = ""
   sensitive   = true
 }
+
+# -----------------------------------------------------------------------------
+# Optional self-hosted Smallstep step-ca (off by default)
+# -----------------------------------------------------------------------------
+
+variable "enable_smallstep_ca" {
+  description = "Stand up a self-hosted Smallstep step-ca on the RADIUS VMs (KMS-backed CA, ACME + SCEP, Cloud SQL for ACME HA, GCLB front door). Off by default; existing BYO-CA deployments are unaffected."
+  type        = bool
+  default     = false
+}
+
+variable "radius_trust_mode" {
+  description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'smallstep'."
+  type        = string
+  default     = "okta"
+  validation {
+    condition     = contains(["okta", "smallstep"], var.radius_trust_mode)
+    error_message = "radius_trust_mode must be either \"okta\" or \"smallstep\"."
+  }
+}
+
+variable "smallstep_ca_dns_name" {
+  description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.campusgroup.co). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
+  type        = string
+  default     = ""
+}
+
+variable "smallstep_acme_provisioner_name" {
+  description = "Name of the step-ca ACME provisioner (also the URL path segment: /acme/<name>/directory)."
+  type        = string
+  default     = "wifi"
+}
+
+variable "smallstep_scep_provisioner_name" {
+  description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>)."
+  type        = string
+  default     = "wifi"
+}
+
+variable "acme_authorizing_webhook_url" {
+  description = "HTTPS URL of the ACME authorizing webhook (Plan 2). step-ca calls it per order and refuses to sign unless it returns allow:true. MUST be set and healthy (fail-closed) before enabling ACME issuance for real devices. Empty = ACME provisioner is configured but no device should be enrolled yet."
+  type        = string
+  default     = ""
+}
+
+variable "smallstep_db_tier" {
+  description = "Cloud SQL machine tier for the step-ca ACME state database."
+  type        = string
+  default     = "db-f1-micro"
+}
