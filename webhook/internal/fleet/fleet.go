@@ -10,15 +10,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
 type Host struct {
-	ID             int
-	HardwareSerial string
-	Platform       string
-	Enrolled       bool
-	Labels         []string
+	ID               int
+	HardwareSerial   string
+	Platform         string
+	Enrolled         bool
+	EnrollmentStatus string
+	Labels           []string
 }
 
 func (h *Host) HasLabel(name string) bool {
@@ -48,7 +50,17 @@ type hostResponse struct {
 		Labels         []struct {
 			Name string `json:"name"`
 		} `json:"labels"`
+		MDM struct {
+			EnrollmentStatus string `json:"enrollment_status"`
+		} `json:"mdm"`
 	} `json:"host"`
+}
+
+// enrolledFromStatus reports whether Fleet's mdm.enrollment_status represents a
+// genuinely-enrolled host. Fleet uses "On (manual)"/"On (automatic)" for
+// enrolled, vs "Off"/"Pending"/empty for hosts it merely has a record for.
+func enrolledFromStatus(s string) bool {
+	return strings.HasPrefix(s, "On")
 }
 
 // LookupHostBySerial returns (host, nil) if enrolled, (nil, nil) if no such
@@ -78,7 +90,13 @@ func (c *Client) LookupHostBySerial(ctx context.Context, serial string) (*Host, 
 	if hr.Host == nil {
 		return nil, nil
 	}
-	h := &Host{ID: hr.Host.ID, HardwareSerial: hr.Host.HardwareSerial, Platform: hr.Host.Platform, Enrolled: true}
+	h := &Host{
+		ID:               hr.Host.ID,
+		HardwareSerial:   hr.Host.HardwareSerial,
+		Platform:         hr.Host.Platform,
+		EnrollmentStatus: hr.Host.MDM.EnrollmentStatus,
+		Enrolled:         enrolledFromStatus(hr.Host.MDM.EnrollmentStatus),
+	}
 	for _, l := range hr.Host.Labels {
 		h.Labels = append(h.Labels, l.Name)
 	}

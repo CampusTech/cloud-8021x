@@ -18,7 +18,7 @@ func TestLookupHostBySerial_Found(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"darwin","labels":[{"name":"All Hosts"},{"name":"test-pilots"}]}}`))
+		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"darwin","labels":[{"name":"All Hosts"},{"name":"test-pilots"}],"mdm":{"enrollment_status":"On (manual)"}}}`))
 	}))
 	defer srv.Close()
 
@@ -35,6 +35,42 @@ func TestLookupHostBySerial_Found(t *testing.T) {
 	}
 	if !h.HasLabel("test-pilots") {
 		t.Fatal("expected test-pilots label")
+	}
+}
+
+func TestLookupHostBySerial_NotEnrolled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"windows","labels":[{"name":"All Hosts"}],"mdm":{"enrollment_status":"Off"}}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "test-token", 5*time.Second)
+	h, err := c.LookupHostBySerial(context.Background(), "SERIAL123")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if h == nil {
+		t.Fatal("expected non-nil host for a present-but-unenrolled record")
+	}
+	if h.Enrolled {
+		t.Fatal("expected Enrolled false for enrollment_status Off")
+	}
+}
+
+func TestLookupHostBySerial_PendingNotEnrolled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"windows","labels":[{"name":"All Hosts"}],"mdm":{"enrollment_status":"Pending"}}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "test-token", 5*time.Second)
+	h, err := c.LookupHostBySerial(context.Background(), "SERIAL123")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if h == nil {
+		t.Fatal("expected non-nil host for a present-but-pending record")
+	}
+	if h.Enrolled {
+		t.Fatal("expected Enrolled false for enrollment_status Pending")
 	}
 }
 
