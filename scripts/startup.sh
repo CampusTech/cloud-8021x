@@ -442,6 +442,21 @@ fi
 # step-ca's SCEP provisioner wants decrypterCertificate + decrypterKeyPEM as
 # base64-encoded PEM. The decrypter key is the shared software RSA key restored
 # from / generated into Secret Manager above.
+#
+# excludeIntermediate=true: by default step-ca's GetCACert returns BOTH the RSA
+# decrypter (RA) cert AND the EC intermediate (scep/authority.go
+# GetCACertificates: appends a.intermediates unless ShouldIncludeIntermediateInChain
+# is false). The Windows native SCEP CSP (ClientCertificateInstall) can't handle
+# the EC intermediate in that bundle — it picks the wrong PKCS#7 recipient /
+# can't build a chain and fails to initialize with "server certs ''" / 0x80092004
+# (CRYPT_E_NO_MATCH) on host 733. step-ca's own source documents this exact case
+# ("useful in environments where the SCEP client doesn't select the right RSA
+# decrypter certificate"). Setting excludeIntermediate makes GetCACert return
+# ONLY the RSA decrypter, so the CSP has an unambiguous RSA recipient. The issued
+# Wi-Fi cert is still signed by the EC intermediate (signAuth.SignWithContext) and
+# the EC chain / all macOS ACME certs are completely unaffected — this only
+# changes what the SCEP GetCACert response advertises. macOS uses ACME, not SCEP,
+# so it never calls GetCACert and is untouched.
 SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
 SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < "$STEPPATH/secrets/scep_decrypter_key")"
 cat > "$STEPPATH/config/ca.json" <<CAJSON
@@ -485,6 +500,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "encryptionAlgorithmIdentifier": 2,
         "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${SCEP_DECRYPTER_KEY_B64}",
+        "excludeIntermediate": true,
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
