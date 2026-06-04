@@ -115,10 +115,10 @@
         <key>PayloadCertificateFileName</key>
         <string>root-ca.cer</string>
         <key>PayloadContent</key>
-        <!-- Replace REPLACE_WITH_BASE64_DER below with the base64 DER of your
-             root CA (CA_CERT_PEM). A .cer file already contains the DER bytes;
-             otherwise run: openssl x509 -in ca.pem -outform DER | base64 -->
-        <data>REPLACE_WITH_BASE64_DER</data>
+        <!-- Replace the CA_CERT_PEM token below with the base64 DER of your
+             root CA. A .cer file already contains the DER bytes; otherwise run:
+             openssl x509 -in ca.pem -outform DER | base64 -->
+        <data>CA_CERT_PEM</data>
         <key>AllowAllAppsAccess</key>
         <true/>
         <key>KeyIsExtractable</key>

@@ -26,15 +26,16 @@
 <!--   SSID_HEX       -> the SSID name as ASCII hex (no spaces). E.g. the     -->
 <!--                     SSID "WiFi" -> 57694669. Compute per-byte:           -->
 <!--                       printf '%s' 'YourSSID' | xxd -p -u                 -->
-<!--   CA_THUMBPRINT  -> SHA-1 thumbprint of the issuer CA, written as        -->
-<!--                     space-separated lowercase hex pairs (e.g.            -->
-<!--                     "e5 1b 7a 17 ... 3e 8c"). Used in two places:        -->
-<!--                       <TrustedRootCA>  = the ROOT CA (server trust)      -->
-<!--                       <IssuerHash>     = the INTERMEDIATE CA that signed -->
-<!--                                          client certs (cert auto-select) -->
-<!--                     These are different certs if you have a root +       -->
-<!--                     intermediate; the placeholder uses CA_THUMBPRINT for -->
-<!--                     both - replace each with the correct cert's hash.    -->
+<!--   ROOT_CA_THUMBPRINT         -> SHA-1 of the ROOT CA, for RADIUS server  -->
+<!--                                 trust (<TrustedRootCA>).                  -->
+<!--   INTERMEDIATE_CA_THUMBPRINT -> SHA-1 of the INTERMEDIATE CA that signed  -->
+<!--                                 client certs, for client-cert            -->
+<!--                                 auto-selection (<IssuerHash>).           -->
+<!--                     Both are space-separated lowercase hex pairs (e.g.   -->
+<!--                     "e5 1b 7a 17 ... 3e 8c"). They are DISTINCT certs    -->
+<!--                     when you have a root + intermediate, so they use     -->
+<!--                     separate tokens - a global search-replace must NOT   -->
+<!--                     set them to the same value.                          -->
 <!--                                                                        -->
 <!-- The WLANProfile is XML-escaped because the Wi-Fi CSP expects the profile -->
 <!-- blob as a string in the WlanXml node.                                    -->
@@ -96,7 +97,7 @@
 									&lt;ServerValidation&gt;
 										&lt;DisableUserPromptForServerValidation&gt;true&lt;/DisableUserPromptForServerValidation&gt;
 										&lt;ServerNames&gt;&lt;/ServerNames&gt;
-										&lt;TrustedRootCA&gt;CA_THUMBPRINT&lt;/TrustedRootCA&gt;
+										&lt;TrustedRootCA&gt;ROOT_CA_THUMBPRINT&lt;/TrustedRootCA&gt;
 									&lt;/ServerValidation&gt;
 									&lt;DifferentUsername&gt;false&lt;/DifferentUsername&gt;
 									&lt;PerformServerValidation xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;true&lt;/PerformServerValidation&gt;
@@ -110,7 +111,7 @@
 									&lt;TLSExtensions xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;
 										&lt;FilteringInfo xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV3"&gt;
 											&lt;CAHashList Enabled="true"&gt;
-												&lt;IssuerHash&gt;CA_THUMBPRINT&lt;/IssuerHash&gt;
+												&lt;IssuerHash&gt;INTERMEDIATE_CA_THUMBPRINT&lt;/IssuerHash&gt;
 											&lt;/CAHashList&gt;
 										&lt;/FilteringInfo&gt;
 									&lt;/TLSExtensions&gt;

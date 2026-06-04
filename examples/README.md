@@ -12,8 +12,10 @@ Token map (generic templates → Terraform outputs):
 |-------|--------|
 | `ACME_DIRECTORY_URL` | `terraform output smallstep_acme_directory_url` |
 | `SCEP_SERVER_URL` | `terraform output smallstep_scep_url` |
-| `CA_CERT_PEM` | `gcloud secrets versions access latest --secret=$(terraform output -raw smallstep_ca_cert_secret_id)` |
-| `CA_THUMBPRINT` | SHA-1 of the cert returned by `<SCEP_SERVER_URL>?operation=GetCACert` |
+| `CA_CERT_PEM` | base64 DER of the root CA cert: `gcloud secrets versions access latest --secret=$(terraform output -raw smallstep_ca_cert_secret_id) \| openssl x509 -outform DER \| base64` |
+| `CA_THUMBPRINT` | SCEP only — SHA-1 of the (intermediate) cert returned by `<SCEP_SERVER_URL>?operation=GetCACert` |
+| `ROOT_CA_THUMBPRINT` | 802.1X server trust — SHA-1 of the **root** CA cert |
+| `INTERMEDIATE_CA_THUMBPRINT` | 802.1X client-cert auto-select — SHA-1 of the **intermediate** CA that signs client certs |
 | `SSID` | your network SSID |
 | `CLIENT_IDENTIFIER` | device serial / permanent identifier |
 
