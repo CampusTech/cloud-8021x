@@ -513,6 +513,58 @@ resource "datadog_logs_custom_pipeline" "stepca" {
     }
   }
 
+  # 1b. Explode the nested "response" attribute. step-ca's ACME/SCEP request
+  #     logs carry the API response body as a JSON *string* in "response", which
+  #     Datadog otherwise stores as one opaque string. %%{data:response:json}
+  #     parses the WHOLE object recursively, so every key across all response
+  #     shapes is surfaced under response.* automatically:
+  #       - order:     id, status, expires, identifiers[].{type,value}, notBefore,
+  #                    notAfter, authorizations[], finalize, certificate
+  #       - authz:     identifier.{type,value}, status, challenges[].{type,status,
+  #                    token,url}, wildcard, expires
+  #       - challenge: type, status, token, validated, url
+  #       - account:   status, orders
+  #       - directory: newNonce, newAccount, newOrder, revokeCert, keyChange
+  #     Non-JSON responses (some errors) simply don't match and pass through.
+  processor {
+    grok_parser {
+      name       = "Parse nested response JSON"
+      is_enabled = true
+      source     = "response"
+      grok {
+        support_rules = ""
+        # Named target ":response:json" nests the parsed keys under "response.*"
+        # (response.status, response.identifier.value, response.expires, ...).
+        # An UNNAMED %%{data::json} would merge to the event root and collide
+        # with the top-level "status" (HTTP status) field.
+        match_rules = <<-GROK
+          stepca_response %%{data:response:json}
+        GROK
+      }
+    }
+  }
+
+  # 1c. Unify the attested device serial into a single facetable attribute.
+  #     The permanent-identifier (device serial) appears in TWO shapes depending
+  #     on the ACME endpoint:
+  #       - order responses:  response.identifiers[0].value  (array, plural)
+  #       - authz responses:  response.identifier.value      (object, singular)
+  #     Remap both into response.serial so you can facet/group on one field.
+  #     attribute_remapper takes the first source present, so a given log line
+  #     (only ever one shape) maps cleanly.
+  processor {
+    attribute_remapper {
+      name                 = "Unify response serial"
+      is_enabled           = true
+      sources              = ["response.identifier.value", "response.identifiers.0.value"]
+      source_type          = "attribute"
+      target               = "response.serial"
+      target_type          = "attribute"
+      preserve_source      = true
+      override_on_conflict = false
+    }
+  }
+
   # 2. Official timestamp: prefer the JSON "time" field, else the text date.
   processor {
     date_remapper {
