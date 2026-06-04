@@ -1658,6 +1658,16 @@ logs:
     service: smallstep-ca
     include_units:
       - step-ca.service
+    # Apply processing rules to the message CONTENT (step-ca's JSON line), not
+    # the raw journald envelope — otherwise the pattern can't see path/status.
+    process_raw_message: false
+    log_processing_rules:
+      - type: exclude_at_match
+        name: exclude_healthy_health_checks
+        # Drop /health lines only when they return 200 (GCLB + Datadog probe
+        # noise); a failing /health still ships. step-ca's JSON field order is
+        # stable: "path" precedes "status".
+        pattern: '"path":"/health".*"status":200'
 DDSTEPCALOGSEOF
 
 # dd-agent must be in systemd-journal to read the unit's journal.
