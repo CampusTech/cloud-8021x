@@ -188,16 +188,32 @@ mkdir -p "$STEPPATH/db" "$STEPPATH/certs" "$STEPPATH/config" "$STEPPATH/secrets"
 # --kms cloudkms: --key <uri>` to sign the intermediate with the Cloud KMS key,
 # which step shells out to `step-kms-plugin` for. Without it, init fails with
 # `failed to get public key: exec: "step-kms-plugin": executable file not found`.
-if ! command -v step-ca >/dev/null 2>&1 || ! command -v step-kms-plugin >/dev/null 2>&1; then
+if ! command -v step >/dev/null 2>&1 || ! command -v step-ca >/dev/null 2>&1 || ! command -v step-kms-plugin >/dev/null 2>&1; then
   STEP_CLI_VERSION="0.30.2"
   STEP_CA_VERSION="0.30.2"
   STEP_KMS_PLUGIN_VERSION="0.17.0"
   STEP_DEB_REVISION="1"
-  curl -fsSL "https://github.com/smallstep/cli/releases/download/v$${STEP_CLI_VERSION}/step-cli_$${STEP_CLI_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-cli.deb
-  curl -fsSL "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-ca.deb
-  curl -fsSL "https://github.com/smallstep/step-kms-plugin/releases/download/v$${STEP_KMS_PLUGIN_VERSION}/step-kms-plugin_$${STEP_KMS_PLUGIN_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-kms-plugin.deb
+
+  # Download each .deb + its release checksums.txt and verify the .deb's sha256
+  # against it before installing (supply-chain integrity). checksums.txt lists
+  # every release asset as "<sha256>  <filename>"; match our specific .deb.
+  fetch_and_verify_deb() { # repo version asset out_path
+    local repo="$1" ver="$2" asset="$3" out="$4"
+    local base="https://github.com/smallstep/$repo/releases/download/v$ver"
+    curl -fsSL "$base/$asset" -o "$out"
+    curl -fsSL "$base/checksums.txt" -o /tmp/step-checksums.txt
+    local want
+    want=$(awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}' /tmp/step-checksums.txt)
+    [ -n "$want" ] || { echo "FATAL: no checksum for $asset ($repo v$ver)" >&2; exit 1; }
+    echo "$want  $out" | sha256sum -c - || { echo "FATAL: checksum mismatch for $asset" >&2; exit 1; }
+  }
+  fetch_and_verify_deb cli "$${STEP_CLI_VERSION}" "step-cli_$${STEP_CLI_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" /tmp/step-cli.deb
+  fetch_and_verify_deb certificates "$${STEP_CA_VERSION}" "step-ca_$${STEP_CA_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" /tmp/step-ca.deb
+  fetch_and_verify_deb step-kms-plugin "$${STEP_KMS_PLUGIN_VERSION}" "step-kms-plugin_$${STEP_KMS_PLUGIN_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" /tmp/step-kms-plugin.deb
+
   # Install together so dependencies resolve; fail loudly if any is missing.
   dpkg -i /tmp/step-cli.deb /tmp/step-ca.deb /tmp/step-kms-plugin.deb || apt-get -fy install
+  command -v step >/dev/null 2>&1 || { echo "FATAL: step-cli install failed" >&2; exit 1; }
   command -v step-ca >/dev/null 2>&1 || { echo "FATAL: step-ca install failed" >&2; exit 1; }
   command -v step-kms-plugin >/dev/null 2>&1 || { echo "FATAL: step-kms-plugin install failed" >&2; exit 1; }
 fi
