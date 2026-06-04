@@ -1048,12 +1048,18 @@ if [ "$HAS_FLEET_LOOKUP" = "true" ]; then
     FLEET_API_TOKEN=$(gcloud secrets versions access latest \
         --secret=fleet-api-token --project="$PROJECT_ID")
 
-    # Write JSON credentials file for the cache/fetch scripts (url + token).
-    cat > "$RADDB/fleet-credentials.json" << FLEETCREDEOF
+    # Write the credentials to a TMPFS-backed file under /run so the standing
+    # Fleet token never lives at rest on the persistent disk. /run is tmpfs on
+    # Debian (cleared on reboot); startup.sh re-creates it on every boot, and
+    # the cache/fetch scripts + cron read it from there. umask 077 + explicit
+    # perms keep it readable only by freerad.
+    FLEET_CRED_FILE="/run/fleet-credentials.json"
+    ( umask 077; cat > "$FLEET_CRED_FILE" << FLEETCREDEOF
 {"url": "$FLEET_API_BASE_URL", "token": "$FLEET_API_TOKEN"}
 FLEETCREDEOF
-    chown freerad:freerad "$RADDB/fleet-credentials.json"
-    chmod 640 "$RADDB/fleet-credentials.json"
+    )
+    chown freerad:freerad "$FLEET_CRED_FILE"
+    chmod 600 "$FLEET_CRED_FILE"
     unset FLEET_API_TOKEN
 
     # Deploy the Fleet device cache script (bulk inventory pull).
@@ -1063,7 +1069,7 @@ FLEETCREDEOF
 # Called on boot and every 30 minutes via cron.
 set -uo pipefail
 
-CRED_FILE="/etc/freeradius/3.0/fleet-credentials.json"
+CRED_FILE="/run/fleet-credentials.json"
 CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
 
 [ -f "$CRED_FILE" ] || exit 0
@@ -1071,7 +1077,7 @@ CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
 python3 << 'PYEOF'
 import json, urllib.request, urllib.error, sys, time, os
 
-with open("/etc/freeradius/3.0/fleet-credentials.json") as f:
+with open("/run/fleet-credentials.json") as f:
     cred = json.load(f)
 base = cred["url"].rstrip("/")
 token = cred["token"]
@@ -1144,7 +1150,7 @@ FLEETCACHEEOF
 set -uo pipefail
 
 SERIAL="$1"
-CRED_FILE="/etc/freeradius/3.0/fleet-credentials.json"
+CRED_FILE="/run/fleet-credentials.json"
 
 [ -n "$SERIAL" ] || exit 1
 [ -f "$CRED_FILE" ] || exit 0
@@ -1153,7 +1159,7 @@ SERIAL="$SERIAL" python3 << 'PYEOF'
 import json, urllib.request, urllib.parse, os, time, sys
 
 serial = os.environ["SERIAL"]
-with open("/etc/freeradius/3.0/fleet-credentials.json") as f:
+with open("/run/fleet-credentials.json") as f:
     cred = json.load(f)
 base = cred["url"].rstrip("/")
 token = cred["token"]

@@ -195,10 +195,17 @@ The cache is built on boot and refreshed every 30 minutes via cron. Cache misses
    fleetctl user create --name 'RADIUS Lookup' --api-only   # prints the token
    ```
 
-2. Store the token in Secret Manager out-of-band (it never passes through tfvars/CI). This is the **same `fleet-api-token` secret the ACME webhook uses** — if you already created it, reuse it:
+2. Store the token in Secret Manager out-of-band (it never passes through tfvars/CI). This is the **same `fleet-api-token` secret the ACME webhook uses** — reuse it if you already have it.
+
+   First time (create the secret):
    ```bash
    printf '%s' '<token>' | gcloud secrets create fleet-api-token \
      --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-
+   ```
+   If `fleet-api-token` already exists (e.g. created for the webhook), add a new version instead — `create` fails on an existing secret:
+   ```bash
+   printf '%s' '<token>' | gcloud secrets versions add fleet-api-token \
+     --project=YOUR_PROJECT_ID --data-file=-
    ```
 
 3. Add to your `terraform.tfvars`:
