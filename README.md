@@ -21,7 +21,11 @@ MacBook (Okta SCEP cert via Jamf)
 - **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. FreeRADIUS Prometheus exporter for RADIUS-specific metrics. Structured JSON auth and accounting logs via FreeRADIUS `linelog`.
 - **Log enrichment**: Optional Jamf and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs. Jamf data is served from a local cache (no API calls on the auth path).
 
-## Recommended: self-hosted Smallstep step-ca
+## Client Certificate Issuance: Two Trust Modes
+
+This deployment supports two independent paths for client certificate validation:
+
+### Recommended: self-hosted Smallstep step-ca
 
 > **Strongly recommended over Okta SCEP for client certificates.** Okta's
 > Managed Attestation SCEP endpoint enforces low, undocumented rate limits — at
@@ -46,10 +50,14 @@ The CA signing key and SCEP decrypter live in Cloud KMS (HSM). ACME state is in
 a regional Cloud SQL Postgres. The CA root cert is published to the
 `smallstep-ca-cert` Secret Manager secret.
 
-**RADIUS trust:** `radius_trust_mode` controls the FreeRADIUS client-cert trust
-bundle independently of the CA being up — `"okta"` (default) keeps the existing
-Okta trust; `"smallstep"` makes RADIUS trust ONLY the Smallstep CA. Pre-stage
-client certs on devices, confirm issuance, then flip to `"smallstep"`.
+**RADIUS trust:** Two independent CA chains are used regardless of trust mode:
+- **Server certificates** signed by the self-signed RADIUS CA (generated on first boot)
+- **Client certificates** validated by the CA specified in `radius_trust_mode`:
+  - `"okta"` (default): FreeRADIUS trusts client certs signed by the Okta Intermediate CA
+  - `"smallstep"`: FreeRADIUS trusts ONLY client certs signed by the Smallstep CA
+
+Setting `radius_trust_mode = "smallstep"` flips validation to Smallstep-only. Pre-stage
+client certs on devices, confirm issuance, then flip the trust mode.
 
 Example client profiles (ACME + SCEP, generic + Fleet variant) live in
 `examples/`.
