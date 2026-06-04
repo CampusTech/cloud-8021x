@@ -355,6 +355,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
   "kms": { "type": "cloudkms" },
   "address": ":8443",
   "dnsNames": ["${smallstep_ca_dns_name}"],
+  "metricsAddress": "127.0.0.1:9090",
   "db": {
     "type": "postgresql",
     "dataSource": "postgresql://${smallstep_db_user}:$${SMALLSTEP_DB_PASSWORD}@${smallstep_db_host}:5432/${smallstep_db_name}?sslmode=require"
@@ -1612,6 +1613,149 @@ instances:
       - freeradius_hup_time: hup_time
       - freeradius_up: up
 DDMETRICSEOF
+
+%{ if smallstep_enabled ~}
+# ---------------------------------------------------------------------------
+# 16b. Datadog integration for the Smallstep step-ca
+#      step-ca exposes NATIVE Prometheus metrics (namespace step_ca) on the
+#      metricsAddress we set in ca.json (127.0.0.1:9090/metrics) — scraped via
+#      Datadog OpenMetrics. Plus: journald log shipping, a /health HTTP check, a
+#      process check, and custom cert-expiry + decrypter-readiness gauges (which
+#      step_ca metrics don't cover). No OTLP — step-ca has no OpenTelemetry.
+# ---------------------------------------------------------------------------
+echo "=== Configuring Datadog for step-ca ==="
+
+# --- OpenMetrics: scrape step-ca's native Prometheus endpoint. Counters are
+# labeled by provisioner (wifi-acme / wifi-scep), so issuance + webhook +
+# KMS-error rates break down per provisioner automatically.
+mkdir -p /etc/datadog-agent/conf.d/openmetrics.d
+cat > /etc/datadog-agent/conf.d/openmetrics.d/stepca.yaml << 'DDSTEPCAMETRICSEOF'
+instances:
+  - openmetrics_endpoint: http://127.0.0.1:9090/metrics
+    namespace: smallstep
+    tags:
+      - "service:smallstep-ca"
+    metrics:
+      - step_ca_uptime: uptime
+      - step_ca_provisioner_signed_total: provisioner.signed
+      - step_ca_provisioner_renewed_total: provisioner.renewed
+      - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
+      - step_ca_provisioner_webhook_authorized_total: provisioner.webhook_authorized
+      - step_ca_provisioner_webhook_enriched_total: provisioner.webhook_enriched
+      - step_ca_kms_signed: kms.signed
+      - step_ca_kms_errors: kms.errors
+DDSTEPCAMETRICSEOF
+
+# --- Logs: ship step-ca's journald unit as source=stepca service=smallstep-ca.
+# step-ca logs structured JSON (logger.format=json); the Datadog stepca log
+# pipeline (UI/Terraform) parses path/status/method/duration and the decrypter/
+# error lines. The agent just ships the lines with the right source/service.
+mkdir -p /etc/datadog-agent/conf.d/stepca.d
+cat > /etc/datadog-agent/conf.d/stepca.d/conf.yaml << 'DDSTEPCALOGSEOF'
+logs:
+  - type: journald
+    source: stepca
+    service: smallstep-ca
+    include_units:
+      - step-ca.service
+DDSTEPCALOGSEOF
+
+# dd-agent must be in systemd-journal to read the unit's journal.
+usermod -aG systemd-journal dd-agent || true
+
+# --- HTTP check: step-ca /health on :8443 (the cert is the CA's own chain, so
+# skip TLS verify on the loopback probe).
+mkdir -p /etc/datadog-agent/conf.d/http_check.d
+cat > /etc/datadog-agent/conf.d/http_check.d/conf.yaml << 'DDHTTPEOF'
+instances:
+  - name: stepca-health
+    url: https://127.0.0.1:8443/health
+    tls_verify: false
+    timeout: 5
+    tags:
+      - "service:smallstep-ca"
+      - "component:step-ca"
+DDHTTPEOF
+
+# --- Process check: alert if the step-ca process disappears.
+mkdir -p /etc/datadog-agent/conf.d/process.d
+cat > /etc/datadog-agent/conf.d/process.d/conf.yaml << 'DDPROCEOF'
+instances:
+  - name: step-ca
+    search_string:
+      - 'step-ca'
+    exact_match: false
+    tags:
+      - "service:smallstep-ca"
+DDPROCEOF
+
+# --- Custom gauges step_ca metrics don't expose: cert days-until-expiry and
+# SCEP decrypter readiness. Emitted to the agent via DogStatsD on a timer.
+#   smallstep.cert.days_until_expiry{cert:intermediate|decrypter}
+#   smallstep.scep.decrypter_ready  (1 = initialized, 0 = degraded)
+cat > /usr/local/bin/stepca-dd-metrics.sh << 'STEPCAMETRICSEOF'
+#!/bin/bash
+# Emit step-ca health gauges to the Datadog Agent via DogStatsD (UDP 8125).
+set -uo pipefail
+STEP=/etc/step-ca
+DSD=127.0.0.1
+PORT=8125
+
+emit() { # full_datagram (name:value|type|#tags)
+  printf '%s\n' "$1" >"/dev/udp/$DSD/$PORT" 2>/dev/null || true
+}
+
+days_left() { # pem-file -> integer days, or empty
+  local f="$1" end now
+  [ -s "$f" ] || { echo ""; return; }
+  end=$(date -d "$(openssl x509 -enddate -noout -in "$f" 2>/dev/null | cut -d= -f2)" +%s 2>/dev/null) || { echo ""; return; }
+  now=$(date +%s)
+  echo $(( (end - now) / 86400 ))
+}
+
+di=$(days_left "$STEP/certs/intermediate_ca.crt")
+[ -n "$di" ] && emit "smallstep.cert.days_until_expiry:$di|g|#cert:intermediate,service:smallstep-ca"
+dd=$(days_left "$STEP/certs/scep_decrypter.crt")
+[ -n "$dd" ] && emit "smallstep.cert.days_until_expiry:$dd|g|#cert:decrypter,service:smallstep-ca"
+
+ready=1
+since=$(systemctl show step-ca -p ActiveEnterTimestamp --value 2>/dev/null)
+if [ -n "$since" ] && journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  ready=0
+fi
+emit "smallstep.scep.decrypter_ready:$ready|g|#service:smallstep-ca"
+STEPCAMETRICSEOF
+chmod +x /usr/local/bin/stepca-dd-metrics.sh
+
+# Ensure DogStatsD is enabled so the custom gauges are accepted.
+if ! grep -q "^use_dogstatsd:" /etc/datadog-agent/datadog.yaml; then
+  echo "use_dogstatsd: true" >> /etc/datadog-agent/datadog.yaml
+fi
+
+cat > /etc/systemd/system/stepca-dd-metrics.service << 'STEPCASVCEOF'
+[Unit]
+Description=Emit step-ca cert-expiry + decrypter gauges to Datadog
+After=step-ca.service datadog-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/stepca-dd-metrics.sh
+STEPCASVCEOF
+cat > /etc/systemd/system/stepca-dd-metrics.timer << 'STEPCATIMEREOF'
+[Unit]
+Description=Run step-ca Datadog gauge emitter every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+STEPCATIMEREOF
+systemctl daemon-reload
+systemctl enable --now stepca-dd-metrics.timer
+%{ endif ~}
 
 # Restart Datadog Agent to pick up all new config
 systemctl restart datadog-agent
