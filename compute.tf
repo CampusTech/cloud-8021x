@@ -74,13 +74,20 @@ resource "google_secret_manager_secret_iam_member" "unifi_api_key_access" {
 # The VM generates certs on first boot and stores them in Secret Manager
 # so they persist across VM replacements.
 locals {
-  cert_secret_ids = [
-    google_secret_manager_secret.radius_server_ca_key.secret_id,
-    google_secret_manager_secret.radius_server_ca_cert.secret_id,
-    google_secret_manager_secret.radius_server_key.secret_id,
-    google_secret_manager_secret.radius_server_cert.secret_id,
-    google_secret_manager_secret.radius_dh_params.secret_id,
-  ]
+  cert_secret_ids = concat(
+    [
+      google_secret_manager_secret.radius_server_ca_key.secret_id,
+      google_secret_manager_secret.radius_server_ca_cert.secret_id,
+      google_secret_manager_secret.radius_server_key.secret_id,
+      google_secret_manager_secret.radius_server_cert.secret_id,
+      google_secret_manager_secret.radius_dh_params.secret_id,
+    ],
+    # Smallstep server cert/key — only present when the Smallstep CA is enabled.
+    var.enable_smallstep_ca ? [
+      google_secret_manager_secret.radius_smallstep_server_cert[0].secret_id,
+      google_secret_manager_secret.radius_smallstep_server_key[0].secret_id,
+    ] : [],
+  )
 }
 
 resource "google_secret_manager_secret_iam_member" "cert_secrets_read" {
