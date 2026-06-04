@@ -19,7 +19,7 @@ MacBook (Okta SCEP cert via Jamf)
 - **Accounting**: FreeRADIUS native SQL module writes to local MariaDB (`radacct` table).
 - **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server certs, Okta CA, Datadog API key).
 - **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. FreeRADIUS Prometheus exporter for RADIUS-specific metrics. Structured JSON auth and accounting logs via FreeRADIUS `linelog`.
-- **Log enrichment**: Optional Jamf and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs. Jamf data is served from a local cache (no API calls on the auth path).
+- **Log enrichment**: Optional MDM (Jamf **or** Fleet) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs. MDM data is served from a local cache (no API calls on the auth path).
 
 ## Client Certificate Issuance: Two Trust Modes
 
@@ -123,6 +123,7 @@ terraform apply
 | `radius-server-cert` | Startup script | RADIUS server certificate |
 | `radius-dh-params` | Startup script | Diffie-Hellman parameters |
 | `datadog-api-key` | Terraform | Datadog Agent API key |
+| `fleet-api-token` | Out-of-band (optional) | Fleet API observer token for device lookup + ACME webhook |
 | `jamf-url` | Terraform (optional) | Jamf Pro base URL for device lookup |
 | `jamf-client-id` | Terraform (optional) | Jamf Pro API Client ID |
 | `jamf-client-secret` | Terraform (optional) | Jamf Pro API Client Secret |
@@ -150,7 +151,9 @@ See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key va
 | `server_cert_cn` | Yes | Server cert CN (e.g. `radius.example.com`) |
 | `server_cert_org` | Yes | Organization name for CA cert subject (e.g. `Acme Corp`) |
 | `datadog_site` | No | Datadog site (default: `us5.datadoghq.com`) |
-| `jamf_url` | No | Jamf Pro URL — enables device lookup in auth logs |
+| `enable_fleet_lookup` | No | Resolve serial → owner/device from Fleet (needs `fleet_api_base_url` + `fleet-api-token` secret; mutually exclusive with `jamf_url`) |
+| `fleet_api_base_url` | No | Fleet server base URL (used by the Fleet lookup and the ACME webhook) |
+| `jamf_url` | No | Jamf Pro URL — enables device lookup in auth logs (mutually exclusive with `enable_fleet_lookup`) |
 | `jamf_client_id` | No | Jamf Pro API Client ID (requires Read Computers) |
 | `jamf_client_secret` | No | Jamf Pro API Client Secret |
 | `rewrite_username` | No | Set reply:User-Name to `email - serial` in Access-Accept (default: `false`) |
@@ -216,6 +219,47 @@ To obtain the Root CA from your Okta admin console ([source](https://andrewdoeri
    https://<your-org>-admin.okta.com/api/v1/certificateAuthorities/<id>/cert
    ```
 5. A `.cer` file will download — paste its PEM contents into `okta_root_ca_cert_pem` in your `terraform.tfvars`
+
+### Fleet Device Lookup (Optional)
+
+The Fleet-managed counterpart of the Jamf lookup below — use this if Fleet is your MDM. When EAP-TLS authenticates a device, the outer identity is the serial number (e.g. `H176YHQ9XV`). With `enable_fleet_lookup`, a background cache script bulk-fetches all Fleet hosts (`GET /api/v1/fleet/hosts?device_mapping=true`) and stores them locally, keyed by serial. FreeRADIUS reads from this cache (no API calls on the auth path) to resolve the serial to device details. This adds the following fields to both auth and accounting JSON logs:
+
+- `device_owner` — assigned user's email from Fleet (`device_mapping`/`end_users`)
+- `device_name` — Fleet host display name
+- `device_model` — hardware model (e.g. `Mac16,5`)
+- In auth: overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
+
+The cache is built on boot and refreshed every 30 minutes via cron. Cache misses trigger a background single-host fetch (`GET /api/v1/fleet/hosts/identifier/{serial}`, does not block auth). If Fleet is unreachable or the device isn't found, the serial is used as-is.
+
+> **Fleet and Jamf are mutually exclusive** — both populate the same enrichment fields. Set `enable_fleet_lookup = true` **or** `jamf_url`, not both (Terraform rejects both).
+
+**Setup:**
+
+1. Create a Fleet API-only user with the **Observer** role and capture its token:
+   ```bash
+   fleetctl user create --name 'RADIUS Lookup' --api-only   # prints the token
+   ```
+
+2. Store the token in Secret Manager out-of-band (it never passes through tfvars/CI). This is the **same `fleet-api-token` secret the ACME webhook uses** — reuse it if you already have it.
+
+   First time (create the secret):
+   ```bash
+   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
+     --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-
+   ```
+   If `fleet-api-token` already exists (e.g. created for the webhook), add a new version instead — `create` fails on an existing secret:
+   ```bash
+   printf '%s' '<token>' | gcloud secrets versions add fleet-api-token \
+     --project=YOUR_PROJECT_ID --data-file=-
+   ```
+
+3. Add to your `terraform.tfvars`:
+   ```hcl
+   enable_fleet_lookup = true
+   fleet_api_base_url  = "https://fleet.example.com"
+   ```
+
+4. `terraform apply` — grants the RADIUS VM service account read access to `fleet-api-token` and updates the startup script.
 
 ### Jamf Device Lookup (Optional)
 

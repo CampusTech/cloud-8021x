@@ -264,19 +264,31 @@ variable "enable_acme_webhook" {
 }
 
 variable "fleet_api_base_url" {
-  description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.example.com)."
+  description = "Base URL of the Fleet server (e.g. https://fleet.example.com). Used by the ACME authorizing webhook and the device-owner lookup."
   type        = string
   default     = ""
 
   validation {
-    condition     = !var.enable_acme_webhook || trimspace(var.fleet_api_base_url) != ""
-    error_message = "fleet_api_base_url must be set when enable_acme_webhook is true."
+    condition     = !(var.enable_acme_webhook || var.enable_fleet_lookup) || trimspace(var.fleet_api_base_url) != ""
+    error_message = "fleet_api_base_url must be set when enable_acme_webhook or enable_fleet_lookup is true."
+  }
+}
+
+variable "enable_fleet_lookup" {
+  description = "Resolve serial -> assigned-user email, device name, and model from Fleet (the Jamf-lookup counterpart for Fleet-managed fleets). Requires fleet_api_base_url and the out-of-band fleet-api-token secret. Mutually exclusive with jamf_url — set one MDM source, not both."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !(var.enable_fleet_lookup && var.jamf_url != "")
+    error_message = "enable_fleet_lookup and jamf_url are mutually exclusive — both populate the same device-owner enrichment fields. Pick the MDM that manages this fleet."
   }
 }
 
 # NOTE: the Fleet API token is NOT a Terraform variable — it is a standing
 # credential added directly to the `fleet-api-token` Secret Manager secret
-# out-of-band (see webhook.tf), so it never passes through tfvars/CI/CLI.
+# out-of-band (see webhook.tf), so it never passes through tfvars/CI/CLI. The
+# device-owner lookup reuses the same secret (a read-only observer token suffices).
 
 variable "webhook_allow_label" {
   description = "Optional Fleet label a host must carry for the webhook to allow issuance (e.g. test-pilots for a scoped pilot). Empty = any enrolled host is allowed."

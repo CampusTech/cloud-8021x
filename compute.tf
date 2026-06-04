@@ -110,8 +110,9 @@ locals {
     server_cert_org            = var.server_cert_org
     has_root_ca                = var.okta_root_ca_cert_pem != ""
     has_jamf_lookup            = var.jamf_url != ""
+    has_fleet_lookup           = var.enable_fleet_lookup
     has_unifi_lookup           = var.unifi_api_key != ""
-    rewrite_username           = var.rewrite_username && var.jamf_url != ""
+    rewrite_username           = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
     rewrite_username_separator = var.rewrite_username_separator
     tls_session_cache          = var.tls_session_cache
     tls_session_cache_lifetime = var.tls_session_cache_lifetime
