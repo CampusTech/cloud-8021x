@@ -276,8 +276,12 @@ if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --
     echo "FATAL: Smallstep CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
     exit 1
   }
-  # Stage the ROOT cert for the RADIUS-trust step later in this script.
-  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
+  # Stage the Smallstep client-cert trust chain (INTERMEDIATE + root) for the
+  # RADIUS-trust step later in this script. The intermediate is the issuer that
+  # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
+  # build leaf->intermediate->root; root alone yields OpenSSL error 20
+  # ("unable to get local issuer certificate") and rejects every client.
+  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
 else
   echo "Initializing new KMS-backed Smallstep CA..."
   # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
@@ -351,8 +355,12 @@ else
   # Readiness marker — published last, only after everything else is durable.
   gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/intermediate_ca.crt"
-  # Stage the ROOT cert for the RADIUS-trust step later in this script.
-  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
+  # Stage the Smallstep client-cert trust chain (INTERMEDIATE + root) for the
+  # RADIUS-trust step later in this script. The intermediate is the issuer that
+  # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
+  # build leaf->intermediate->root; root alone yields OpenSSL error 20
+  # ("unable to get local issuer certificate") and rejects every client.
+  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
   rm -f "$STEPPATH/secrets/root_ca_key"
 fi
