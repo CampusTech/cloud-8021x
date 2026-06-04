@@ -254,7 +254,59 @@ ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-w
 # populated and both run init, producing divergent roots. This is an accepted
 # known limitation for now; a real fix would take a distributed lock (out of
 # scope).
-if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
+#
+# RE-MINT GUARD (critical): the restore-vs-init decision is made in TWO steps,
+# NOT a single `gcloud ... access` whose non-zero exit silently falls through to
+# init. Re-initializing over an existing CA rotates the root/intermediate and
+# breaks every device pinned to the old chain — so a TRANSIENT read failure
+# (IAM propagation lag at boot, Secret Manager 5xx) must NEVER trigger init.
+# History: a boot once ran init even though smallstep-intermediate-cert already
+# existed, because the SA's secretAccessor grant hadn't propagated yet and the
+# one-shot read returned non-zero. We now:
+#   1. Probe EXISTENCE with `gcloud secrets describe` (independent of versions).
+#   2. If it exists, RETRY the version read with backoff and ABORT (never init)
+#      if it stays unreadable — a present-but-unreadable CA is an error, not a
+#      signal to mint a new one.
+#   3. Only init when the secret genuinely does NOT exist.
+CA_SECRET_EXISTS=""
+for attempt in 1 2 3 4 5; do
+  if gcloud secrets describe smallstep-intermediate-cert --project="${project_id}" >/dev/null 2>&1; then
+    CA_SECRET_EXISTS=yes
+    break
+  fi
+  # describe can also fail transiently; distinguish NOT_FOUND from other errors.
+  DESCRIBE_ERR="$(gcloud secrets describe smallstep-intermediate-cert --project="${project_id}" 2>&1 || true)"
+  if echo "$DESCRIBE_ERR" | grep -qiE 'NOT_FOUND|was not found|does not exist'; then
+    CA_SECRET_EXISTS=no
+    break
+  fi
+  echo "smallstep-intermediate-cert existence probe failed (attempt $attempt), retrying: $DESCRIBE_ERR" >&2
+  sleep $((attempt * 5))
+done
+if [ -z "$CA_SECRET_EXISTS" ]; then
+  echo "FATAL: could not determine whether smallstep-intermediate-cert exists after retries; refusing to re-init (would rotate the CA)" >&2
+  exit 1
+fi
+
+RESTORE_CA=""
+if [ "$CA_SECRET_EXISTS" = "yes" ]; then
+  # The secret exists — the CA is already initialized. Read it with backoff;
+  # a persistent read failure is FATAL (we must not mint a competing CA).
+  for attempt in 1 2 3 4 5; do
+    if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
+      RESTORE_CA=yes
+      break
+    fi
+    echo "smallstep-intermediate-cert read failed (attempt $attempt), retrying..." >&2
+    sleep $((attempt * 5))
+  done
+  if [ "$RESTORE_CA" != "yes" ]; then
+    echo "FATAL: smallstep-intermediate-cert exists but is unreadable after retries; refusing to re-init (would rotate the CA and break enrolled devices)" >&2
+    exit 1
+  fi
+fi
+
+if [ "$RESTORE_CA" = "yes" ]; then
   echo "Existing Smallstep CA found — restoring root + intermediate + SCEP decrypter cert + key."
   gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >"$STEPPATH/certs/root_ca.crt"
   gcloud secrets versions access latest --secret=smallstep-scep-decrypter-cert --project="${project_id}" >"$STEPPATH/certs/scep_decrypter.crt"
