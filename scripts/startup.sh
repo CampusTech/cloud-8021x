@@ -16,6 +16,8 @@ SERVER_CERT_CN="${server_cert_cn}"
 SERVER_CERT_ORG="${server_cert_org}"
 HAS_ROOT_CA="${has_root_ca}"
 HAS_JAMF_LOOKUP="${has_jamf_lookup}"
+HAS_FLEET_LOOKUP="${has_fleet_lookup}"
+FLEET_API_BASE_URL="${fleet_api_base_url}"
 HAS_UNIFI_LOOKUP="${has_unifi_lookup}"
 REWRITE_USERNAME="${rewrite_username}"
 REWRITE_USERNAME_SEPARATOR="${rewrite_username_separator}"
@@ -1031,6 +1033,182 @@ JAMFFETCHEOF
 fi
 
 # ---------------------------------------------------------------------------
+# 9b. Fleet device owner lookup (optional)
+#     Fleet-managed counterpart of the Jamf lookup above. Resolves serial ->
+#     assigned-user email, device name, model via the Fleet REST API. Writes
+#     to the SAME serial-keyed cache schema the Python module consumes
+#     (email/device_name/device_model/ts), so json_log fields are unchanged.
+#     Mutually exclusive with Jamf (enforced in variables.tf).
+# ---------------------------------------------------------------------------
+if [ "$HAS_FLEET_LOOKUP" = "true" ]; then
+    echo "=== Configuring Fleet device owner lookup ==="
+
+    # Fleet API token from Secret Manager (out-of-band observer token; same
+    # secret the ACME webhook uses). Base URL comes from the Terraform var.
+    FLEET_API_TOKEN=$(gcloud secrets versions access latest \
+        --secret=fleet-api-token --project="$PROJECT_ID")
+
+    # Write JSON credentials file for the cache/fetch scripts (url + token).
+    cat > "$RADDB/fleet-credentials.json" << FLEETCREDEOF
+{"url": "$FLEET_API_BASE_URL", "token": "$FLEET_API_TOKEN"}
+FLEETCREDEOF
+    chown freerad:freerad "$RADDB/fleet-credentials.json"
+    chmod 640 "$RADDB/fleet-credentials.json"
+    unset FLEET_API_TOKEN
+
+    # Deploy the Fleet device cache script (bulk inventory pull).
+    cat > /usr/local/bin/fleet-device-cache.sh << 'FLEETCACHEEOF'
+#!/bin/bash
+# Fetches all Fleet hosts, builds serial -> device info cache.
+# Called on boot and every 30 minutes via cron.
+set -uo pipefail
+
+CRED_FILE="/etc/freeradius/3.0/fleet-credentials.json"
+CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
+
+[ -f "$CRED_FILE" ] || exit 0
+
+python3 << 'PYEOF'
+import json, urllib.request, urllib.error, sys, time, os
+
+with open("/etc/freeradius/3.0/fleet-credentials.json") as f:
+    cred = json.load(f)
+base = cred["url"].rstrip("/")
+token = cred["token"]
+if not base or not token:
+    sys.exit(0)
+
+cache = {}
+page = 0
+page_size = 100
+now = int(time.time())
+
+while True:
+    # device_mapping=true surfaces the assigned-user email in the list response,
+    # avoiding a per-host detail call for the bulk build.
+    api_url = (
+        f"{base}/api/v1/fleet/hosts"
+        f"?page={page}&per_page={page_size}&device_mapping=true"
+    )
+    req = urllib.request.Request(api_url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except Exception as e:
+        print(f"Fleet API error on page {page}: {e}", file=sys.stderr)
+        break
+    data = json.loads(resp.read())
+    hosts = data.get("hosts") or []
+    if not hosts:
+        break
+    for h in hosts:
+        serial = (h.get("hardware_serial") or "").strip()
+        if not serial:
+            continue
+        dm = h.get("device_mapping") or []
+        email = (dm[0].get("email") if dm else "") or ""
+        cache[serial] = {
+            "email": email,
+            "device_name": h.get("display_name") or h.get("computer_name") or h.get("hostname") or "",
+            "device_model": h.get("hardware_model") or "",
+            "ts": now,
+        }
+    # Fleet returns fewer than page_size on the last page.
+    if len(hosts) < page_size:
+        break
+    page += 1
+
+tmp = CACHE_FILE = "/etc/freeradius/3.0/fleet-device-cache.json"
+with open(tmp + ".tmp", "w") as f:
+    json.dump(cache, f)
+os.replace(tmp + ".tmp", CACHE_FILE)
+print(f"Fleet cache: {len(cache)} devices")
+PYEOF
+FLEETCACHEEOF
+    chmod 755 /usr/local/bin/fleet-device-cache.sh
+
+    # Run initial cache build.
+    /usr/local/bin/fleet-device-cache.sh || true
+
+    # Refresh cache every 30 minutes.
+    echo "*/30 * * * * root /usr/local/bin/fleet-device-cache.sh" > /etc/cron.d/fleet-device-cache
+    chmod 644 /etc/cron.d/fleet-device-cache
+
+    # Deploy single-device fetch script (for cache misses).
+    cat > /usr/local/bin/fleet-device-fetch.sh << 'FLEETFETCHEOF'
+#!/bin/bash
+# Fetches a single host from Fleet by serial, updates the cache file.
+# Called from the FreeRADIUS Python module via subprocess on cache miss.
+set -uo pipefail
+
+SERIAL="$1"
+CRED_FILE="/etc/freeradius/3.0/fleet-credentials.json"
+
+[ -n "$SERIAL" ] || exit 1
+[ -f "$CRED_FILE" ] || exit 0
+
+SERIAL="$SERIAL" python3 << 'PYEOF'
+import json, urllib.request, urllib.parse, os, time, sys
+
+serial = os.environ["SERIAL"]
+with open("/etc/freeradius/3.0/fleet-credentials.json") as f:
+    cred = json.load(f)
+base = cred["url"].rstrip("/")
+token = cred["token"]
+if not base or not token:
+    sys.exit(0)
+
+# The by-identifier endpoint accepts serial/uuid/hostname.
+api_url = f"{base}/api/v1/fleet/hosts/identifier/{urllib.parse.quote(serial, safe='')}"
+req = urllib.request.Request(api_url, headers={
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/json",
+})
+try:
+    resp = urllib.request.urlopen(req, timeout=10)
+except Exception:
+    sys.exit(0)
+
+host = (json.loads(resp.read()) or {}).get("host") or {}
+if not host:
+    sys.exit(0)
+
+# Owner email: detail endpoint exposes it via end_users[].idp_username
+# (device_mapping is often null on the detail view). Fall back to device_mapping.
+email = ""
+eu = host.get("end_users") or []
+if eu:
+    email = eu[0].get("idp_username") or ""
+if not email:
+    dm = host.get("device_mapping") or []
+    email = (dm[0].get("email") if dm else "") or ""
+
+entry = {
+    "email": email,
+    "device_name": host.get("display_name") or host.get("computer_name") or host.get("hostname") or "",
+    "device_model": host.get("hardware_model") or "",
+    "ts": int(time.time()),
+}
+
+CACHE_FILE = "/etc/freeradius/3.0/fleet-device-cache.json"
+cache = {}
+if os.path.isfile(CACHE_FILE):
+    with open(CACHE_FILE) as f:
+        cache = json.load(f)
+cache[serial] = entry
+with open(CACHE_FILE + ".tmp", "w") as f:
+    json.dump(cache, f)
+os.replace(CACHE_FILE + ".tmp", CACHE_FILE)
+PYEOF
+FLEETFETCHEOF
+    chmod 755 /usr/local/bin/fleet-device-fetch.sh
+
+    echo "Fleet credentials and cache configured."
+fi
+
+# ---------------------------------------------------------------------------
 # 10. UniFi AP name + site name lookup (optional)
 #     Caches device list from UniFi cloud API, resolves NAS-IP to AP name.
 #     Uses Packet-Src-IP-Address (public gateway IP) to disambiguate sites.
@@ -1139,7 +1317,7 @@ fi
 #      Single module handles both Jamf and UniFi lookups in post-auth and
 #      accounting. Sets reply attributes directly — no exec output parsing.
 # ---------------------------------------------------------------------------
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
     echo "=== Configuring Python lookup module ==="
 
     mkdir -p "$RADDB/mods-config/python3"
@@ -1152,51 +1330,68 @@ import time
 import threading
 import subprocess
 
-JAMF_CRED_FILE = "/etc/freeradius/3.0/jamf-credentials.json"
-JAMF_DEVICE_CACHE = "/etc/freeradius/3.0/jamf-device-cache.json"
-JAMF_FETCH_SCRIPT = "/usr/local/bin/jamf-device-fetch.sh"
-JAMF_CACHE_TTL = 3600  # 1 hour
+# Device-owner enrichment source. Jamf and Fleet are mutually-exclusive MDM
+# back-ends that write the SAME serial-keyed schema
+# ({"email","device_name","device_model","ts"}); whichever is configured wins.
+# Fleet is preferred if both files somehow exist.
+_MDM_SOURCES = [
+    ("/etc/freeradius/3.0/fleet-device-cache.json", "/usr/local/bin/fleet-device-fetch.sh"),
+    ("/etc/freeradius/3.0/jamf-device-cache.json", "/usr/local/bin/jamf-device-fetch.sh"),
+]
+DEVICE_CACHE_TTL = 3600  # 1 hour
 UNIFI_CACHE_FILE = "/etc/freeradius/3.0/unifi-ap-cache.json"
 
 # In-memory device cache — loaded from disk on startup and periodically
-_jamf_cache = {}      # serial -> {"email":..., "device_name":..., "device_model":..., "ts": epoch}
-_jamf_cache_lock = threading.Lock()
-_jamf_cache_mtime = 0  # last mtime of disk cache when we loaded it
+_device_cache = {}    # serial -> {"email":..., "device_name":..., "device_model":..., "ts": epoch}
+_device_cache_lock = threading.Lock()
+_device_cache_mtime = 0  # last mtime of disk cache when we loaded it
 _pending_lookups = set()  # serials currently being fetched in background
 _pending_lock = threading.Lock()
 
 
+def _active_source():
+    """Return (cache_file, fetch_script) for the configured MDM source, or
+    (None, None) if neither cache file exists yet."""
+    for cache_file, fetch_script in _MDM_SOURCES:
+        if os.path.isfile(cache_file):
+            return cache_file, fetch_script
+    return None, None
+
+
 def _load_cache_from_disk():
-    """Load the Jamf device cache from disk into memory if it changed."""
-    global _jamf_cache, _jamf_cache_mtime
+    """Load the active MDM device cache from disk into memory if it changed."""
+    global _device_cache, _device_cache_mtime
     try:
-        if not os.path.isfile(JAMF_DEVICE_CACHE):
+        cache_file, _ = _active_source()
+        if not cache_file:
             return
-        mtime = os.path.getmtime(JAMF_DEVICE_CACHE)
-        if mtime == _jamf_cache_mtime:
+        mtime = os.path.getmtime(cache_file)
+        if mtime == _device_cache_mtime:
             return  # no change
-        with open(JAMF_DEVICE_CACHE, "r") as f:
+        with open(cache_file, "r") as f:
             data = json.load(f)
-        with _jamf_cache_lock:
-            _jamf_cache = data
-            _jamf_cache_mtime = mtime
+        with _device_cache_lock:
+            _device_cache = data
+            _device_cache_mtime = mtime
         radiusd.radlog(radiusd.L_INFO,
-            f"Loaded Jamf cache from disk: {len(data)} devices")
+            f"Loaded device cache from disk: {len(data)} devices ({cache_file})")
     except Exception as e:
-        radiusd.radlog(radiusd.L_ERR, f"Failed to load Jamf cache from disk: {e}")
+        radiusd.radlog(radiusd.L_ERR, f"Failed to load device cache from disk: {e}")
 
 
-def _jamf_background_fetch(serial):
+def _device_background_fetch(serial):
     """Background thread: call external script to fetch a single device."""
     try:
-        subprocess.run(
-            [JAMF_FETCH_SCRIPT, serial],
-            timeout=15, capture_output=True,
-        )
-        # Reload cache from disk to pick up the new entry
-        _load_cache_from_disk()
+        _, fetch_script = _active_source()
+        if fetch_script and os.path.isfile(fetch_script):
+            subprocess.run(
+                [fetch_script, serial],
+                timeout=15, capture_output=True,
+            )
+            # Reload cache from disk to pick up the new entry
+            _load_cache_from_disk()
     except Exception as e:
-        radiusd.radlog(radiusd.L_ERR, f"Jamf background fetch failed for {serial}: {e}")
+        radiusd.radlog(radiusd.L_ERR, f"Device background fetch failed for {serial}: {e}")
     finally:
         with _pending_lock:
             _pending_lookups.discard(serial)
@@ -1208,26 +1403,28 @@ def instantiate(p):
     return 0
 
 
-def _get_cached_jamf(serial):
-    """Read Jamf data from in-memory cache. Returns dict or None.
-    If cache miss or expired, kicks off a background fetch via external script."""
+def _get_cached_device(serial):
+    """Read device-owner data from the in-memory cache. Returns dict or None.
+    On cache miss or expiry, kicks off a background fetch via the active
+    MDM source's external script."""
     # Reload from disk if file changed (picks up cron updates)
     _load_cache_from_disk()
 
     now = int(time.time())
 
-    with _jamf_cache_lock:
-        entry = _jamf_cache.get(serial)
+    with _device_cache_lock:
+        entry = _device_cache.get(serial)
 
-    if entry and (now - entry.get("ts", 0)) < JAMF_CACHE_TTL:
+    if entry and (now - entry.get("ts", 0)) < DEVICE_CACHE_TTL:
         return entry
 
     # Cache miss or expired — trigger background fetch if not already pending
-    if os.path.isfile(JAMF_FETCH_SCRIPT):
+    _, fetch_script = _active_source()
+    if fetch_script and os.path.isfile(fetch_script):
         with _pending_lock:
             if serial not in _pending_lookups:
                 _pending_lookups.add(serial)
-                t = threading.Thread(target=_jamf_background_fetch, args=(serial,),
+                t = threading.Thread(target=_device_background_fetch, args=(serial,),
                                      daemon=True)
                 t.start()
 
@@ -1294,27 +1491,27 @@ def _get_attr(p, attr_name):
 
 
 def post_auth(p):
-    """Post-auth: Jamf device lookup (from cache) + UniFi AP/site lookup."""
+    """Post-auth: MDM device-owner lookup (from cache) + UniFi AP/site lookup."""
     try:
         user_name = _get_attr(p, "User-Name")
         called_station = _get_attr(p, "Called-Station-Id")
 
         reply_attrs = []
 
-        # Jamf lookup — read from local cache (instant, no API call)
+        # Device-owner lookup — read from local cache (instant, no API call)
         serial = user_name.strip()
         if serial:
             try:
-                jamf = _get_cached_jamf(serial)
-                if jamf:
-                    if jamf.get("device_name"):
-                        reply_attrs.append(("Filter-Id", jamf["device_name"]))
-                    if jamf.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", jamf["device_model"]))
-                    if jamf.get("email"):
-                        reply_attrs.append(("Reply-Message", jamf["email"]))
+                dev = _get_cached_device(serial)
+                if dev:
+                    if dev.get("device_name"):
+                        reply_attrs.append(("Filter-Id", dev["device_name"]))
+                    if dev.get("device_model"):
+                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                    if dev.get("email"):
+                        reply_attrs.append(("Reply-Message", dev["email"]))
             except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Jamf cache read failed: {e}")
+                radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
 
         # Extract SSID from Called-Station-Id (format: "AA-BB-CC-DD-EE-FF:SSID")
         if called_station and ":" in called_station:
@@ -1344,7 +1541,7 @@ def post_auth(p):
 
 
 def accounting(p):
-    """Accounting: enrich with Jamf device info + UniFi AP/site from cache."""
+    """Accounting: enrich with MDM device-owner info + UniFi AP/site from cache."""
     try:
         user_name = _get_attr(p, "User-Name")
         called_station = _get_attr(p, "Called-Station-Id")
@@ -1359,16 +1556,16 @@ def accounting(p):
 
         if serial:
             try:
-                jamf = _get_cached_jamf(serial)
-                if jamf:
-                    if jamf.get("device_name"):
-                        reply_attrs.append(("Filter-Id", jamf["device_name"]))
-                    if jamf.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", jamf["device_model"]))
-                    if jamf.get("email"):
-                        reply_attrs.append(("Reply-Message", jamf["email"]))
+                dev = _get_cached_device(serial)
+                if dev:
+                    if dev.get("device_name"):
+                        reply_attrs.append(("Filter-Id", dev["device_name"]))
+                    if dev.get("device_model"):
+                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                    if dev.get("email"):
+                        reply_attrs.append(("Reply-Message", dev["email"]))
             except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Jamf cache read in accounting failed: {e}")
+                radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
 
         # UniFi lookup
         if called_station:
@@ -1420,7 +1617,8 @@ fi
 # ---------------------------------------------------------------------------
 # 11. Configure FreeRADIUS JSON auth logging (linelog module)
 #     Emits one JSON line per Access-Accept/Reject for Datadog SIEM.
-#     device_owner field is populated by Jamf lookup (empty if disabled).
+#     device_owner field is populated by the MDM lookup — Jamf or Fleet,
+#     whichever is configured (empty if neither is enabled).
 #     username is always the serial (request attribute); device_owner is the email.
 # ---------------------------------------------------------------------------
 echo "=== Configuring JSON auth logging ==="

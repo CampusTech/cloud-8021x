@@ -12,6 +12,9 @@
 
 locals {
   acme_webhook_enabled = var.enable_acme_webhook ? 1 : 0
+  # The fleet-api-token secret is read by the webhook AND by the device-owner
+  # lookup; grant the VM SA access if either consumer is enabled.
+  fleet_token_needed = (var.enable_acme_webhook || var.enable_fleet_lookup) ? 1 : 0
 }
 
 # Shared HMAC signing secret (step-ca <-> webhook). Generated here. step-ca and
@@ -44,8 +47,10 @@ resource "google_secret_manager_secret_version" "webhook_signing_secret" {
 #   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
 #     --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-
 # Terraform only REFERENCES it (data source) + grants the RADIUS VM SA access.
+# Also consumed by the device-owner lookup (enable_fleet_lookup), so the data
+# source is present whenever either the webhook or the lookup is enabled.
 data "google_secret_manager_secret" "fleet_api_token" {
-  count     = local.acme_webhook_enabled
+  count     = local.fleet_token_needed
   project   = google_project.this.project_id
   secret_id = "fleet-api-token"
 }
@@ -61,7 +66,7 @@ resource "google_secret_manager_secret_iam_member" "webhook_signing_secret_radiu
 }
 
 resource "google_secret_manager_secret_iam_member" "fleet_api_token_radius" {
-  count     = local.acme_webhook_enabled
+  count     = local.fleet_token_needed
   project   = google_project.this.project_id
   secret_id = data.google_secret_manager_secret.fleet_api_token[0].secret_id
   role      = "roles/secretmanager.secretAccessor"

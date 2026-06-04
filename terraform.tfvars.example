@@ -53,10 +53,21 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # datadog_site    = "us5.datadoghq.com"  # default; uncomment to override
 # datadog_app_key = "your-datadog-app-key"  # enables Terraform-managed dashboard; scope to dashboards_read + dashboards_write
 
+# Fleet device owner lookup (optional) — the Fleet-managed counterpart of the
+# Jamf lookup below. Enriches RADIUS auth logs with the assigned user's email,
+# device name, and model, resolved from Fleet by serial. The API token is NOT a
+# variable — store it out-of-band in the `fleet-api-token` Secret Manager secret
+# (an api-only Observer token; the same secret the ACME webhook uses).
+# Mutually exclusive with the Jamf lookup below — set one MDM source, not both.
+# enable_fleet_lookup = true
+# fleet_api_base_url  = "https://fleet.example.com"
+# rewrite_username    = true   # reply:User-Name -> "email<sep>serial" (shown as 802.1X Identity in UniFi)
+
 # Jamf Pro device owner lookup (optional)
 # Enriches RADIUS auth logs with the assigned user's email.
 # Also overwrites the EAP identity so UniFi/accounting shows email instead of serial number.
 # Requires a Jamf Pro API Client with "Read Computers" privilege.
+# Mutually exclusive with the Fleet lookup above.
 # jamf_url           = "https://yourorg.jamfcloud.com"
 # jamf_client_id     = "your-api-client-id"
 # jamf_client_secret = "your-api-client-secret"
