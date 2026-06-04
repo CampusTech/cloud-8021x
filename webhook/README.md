@@ -35,7 +35,7 @@ allows enrolled hosts.
 | Var | Required | Meaning |
 |-----|----------|---------|
 | `WEBHOOK_SIGNING_SECRET` | yes | Raw shared HMAC secret. step-ca's ca.json carries the **base64** of this; step-ca base64-decodes before HMAC, so both sides key on identical raw bytes. |
-| `FLEET_API_BASE_URL` | yes | e.g. `https://fleet.campusgroup.co` |
+| `FLEET_API_BASE_URL` | yes | e.g. `https://fleet.example.com` |
 | `FLEET_API_TOKEN` | yes | Fleet API token (a read-only, API-only user). |
 | `ALLOW_LABEL` | no | If set, host must carry this Fleet label (e.g. `test-pilots`) to be allowed. Empty = any enrolled host. |
 | `PORT` | no | Listen port (default `8080`; Cloud Run injects it). |

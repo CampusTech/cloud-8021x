@@ -201,7 +201,7 @@ variable "radius_trust_mode" {
 }
 
 variable "smallstep_ca_dns_name" {
-  description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.campusgroup.co). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
+  description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.example.com). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
   type        = string
   default     = ""
 
@@ -252,7 +252,7 @@ variable "enable_acme_webhook" {
 }
 
 variable "fleet_api_base_url" {
-  description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.campusgroup.co)."
+  description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.example.com)."
   type        = string
   default     = ""
 }

@@ -19,7 +19,7 @@ locals {
   stepca_hosts = "{service:smallstep-ca}"
 
   smallstep_dashboard_json = {
-    title       = "Smallstep step-ca (Campus Wi-Fi CA)"
+    title       = "Smallstep step-ca (Wi-Fi CA)"
     description = "Self-hosted step-ca: issuance by provisioner (ACME/SCEP), KMS, health, cert expiry, and logs."
     layout_type = "ordered"
     template_variables = [
