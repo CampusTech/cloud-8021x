@@ -316,6 +316,30 @@ sudo mysql radius -e "SELECT * FROM radacct ORDER BY radacctid DESC LIMIT 5"
 
 For a detailed technical walkthrough of the startup script, authentication flow, log enrichment pipeline, and caching architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Optional: self-hosted Smallstep step-ca
+
+Set `enable_smallstep_ca = true` to stand up a self-hosted Smallstep `step-ca`
+co-located on the RADIUS VMs. It exposes:
+
+- **ACME** (`/acme/<name>/directory`) with Apple `device-attest-01` attestation,
+  fronted by a public GCLB + Cloud Armor. Gate issuance with
+  `acme_authorizing_webhook_url` (see `examples/` and the webhook plan) — Apple
+  attestation alone proves "a real Apple device", not "one of yours".
+- **SCEP** (`/scep/<name>`) for MDMs without ACME (e.g. Windows), typically
+  fronted by an MDM's SCEP proxy.
+
+The CA signing key and SCEP decrypter live in Cloud KMS (HSM). ACME state is in
+a regional Cloud SQL Postgres. The CA root cert is published to the
+`smallstep-ca-cert` Secret Manager secret.
+
+**RADIUS trust:** `radius_trust_mode` controls the FreeRADIUS client-cert trust
+bundle independently of the CA being up — `"okta"` (default) keeps the existing
+Okta trust; `"smallstep"` makes RADIUS trust ONLY the Smallstep CA. Pre-stage
+client certs on devices, confirm issuance, then flip to `"smallstep"`.
+
+Example client profiles (ACME + SCEP, generic + Fleet variant) live in
+`examples/`.
+
 ## Future Work
 
 - **Dynamic VLAN assignment**: Query Okta Devices API to map device → user → group → VLAN

@@ -171,6 +171,410 @@ chown freerad:freerad "$CERT_DIR"/server-*.pem "$CERT_DIR"/dh.pem "$CERT_DIR"/ok
 chmod 600 "$CERT_DIR/server-key.pem" "$CERT_DIR/server-ca-key.pem"
 chmod 644 "$CERT_DIR/server-cert.pem" "$CERT_DIR/server-ca.pem" \
           "$CERT_DIR/dh.pem" "$CERT_DIR/okta-ca.pem"
+%{ if smallstep_enabled ~}
+
+# ---------------------------------------------------------------------------
+# Optional: self-hosted Smallstep step-ca (gated by enable_smallstep_ca)
+# ---------------------------------------------------------------------------
+echo "=== Setting up Smallstep step-ca ==="
+export STEPPATH=/etc/step-ca
+mkdir -p "$STEPPATH/db" "$STEPPATH/certs" "$STEPPATH/config" "$STEPPATH/secrets"
+
+# Install step-ca + step CLI. GitHub release assets carry a Debian revision
+# suffix ("-1"), e.g. step-ca_0.30.2-1_amd64.deb — the bare
+# step-ca_<ver>_amd64.deb name 404s. Pin both to a known-good release.
+if ! command -v step-ca >/dev/null 2>&1; then
+  STEP_CLI_VERSION="0.30.2"
+  STEP_CA_VERSION="0.30.2"
+  STEP_DEB_REVISION="1"
+  curl -fsSL "https://github.com/smallstep/cli/releases/download/v$${STEP_CLI_VERSION}/step-cli_$${STEP_CLI_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-cli.deb
+  curl -fsSL "https://github.com/smallstep/certificates/releases/download/v$${STEP_CA_VERSION}/step-ca_$${STEP_CA_VERSION}-$${STEP_DEB_REVISION}_amd64.deb" -o /tmp/step-ca.deb
+  # Install both together so dependencies resolve; fail loudly if either is missing.
+  dpkg -i /tmp/step-cli.deb /tmp/step-ca.deb || apt-get -fy install
+  command -v step-ca >/dev/null 2>&1 || { echo "FATAL: step-ca install failed" >&2; exit 1; }
+fi
+
+# Fetch DB password + SCEP challenge from Secret Manager.
+SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
+SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
+%{ if acme_webhook_url != "" ~}
+# ACME authorizing webhook signing secret. step-ca's ca.json "secret" field is
+# base64; step-ca base64-DECODES it and HMACs the request body with the raw
+# bytes. The webhook service receives the SAME raw secret (via its env) and
+# HMACs with it directly — so both sides key on identical bytes. The Secret
+# Manager value `acme-webhook-signing-secret` holds the RAW secret; we base64
+# it only for ca.json here.
+ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}" | base64 -w0)"
+%{ endif ~}
+
+# Reuse an existing CA if one was already published to Secret Manager;
+# otherwise initialize a new KMS-backed CA and publish BOTH certs.
+#
+# The CA topology: a LOCAL EC P-256 root key signs a KMS-backed INTERMEDIATE
+# (the intermediate's signer is the Cloud KMS HSM key). The local root key is
+# generated once, signs the intermediate, then is DISCARDED — the KMS HSM key
+# is the only live private key. Both the root cert AND the intermediate cert
+# must therefore persist: the intermediate cert's public key is byte-identical
+# to the KMS signing key, so a 2nd VM / reboot MUST restore the exact same
+# intermediate or step-ca serves a chain that doesn't match the live signer.
+#
+# We persist root_ca.crt -> smallstep-ca-cert and intermediate_ca.crt ->
+# smallstep-intermediate-cert (two separate secrets). The "already initialized"
+# signal is the smallstep-intermediate-cert secret having a usable version
+# (it's the newer secret; if it exists, both do).
+#
+# NOTE: we only ADD a secret version + READ it; we never modify the secret's
+# IAM or delete it (the VM SA holds secretVersionManager + secretAccessor only).
+#
+# RACE NOTE: two VMs booting simultaneously could both find neither secret
+# populated and both run init, producing divergent roots. This is an accepted
+# known limitation for now; a real fix would take a distributed lock (out of
+# scope).
+if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
+  echo "Existing Smallstep CA found — restoring root + intermediate + SCEP decrypter cert + key."
+  gcloud secrets versions access latest --secret=smallstep-ca-cert --project="${project_id}" >"$STEPPATH/certs/root_ca.crt"
+  gcloud secrets versions access latest --secret=smallstep-scep-decrypter-cert --project="${project_id}" >"$STEPPATH/certs/scep_decrypter.crt"
+  # The SCEP decrypter PRIVATE key is a shared software RSA key (not in KMS):
+  # Cloud KMS keys are single-purpose, but step-ca's SCEP provisioner needs the
+  # decrypter key to BOTH decrypt SCEP envelopes AND sign SCEP responses, so it
+  # must be a dual-purpose software RSA key. Generated once at init and persisted
+  # to Secret Manager so both HA nodes (and any rebuild) share the SAME decrypter
+  # identity. The CA SIGNING key stays in Cloud KMS/HSM — this key only handles
+  # SCEP message crypto, never issues certificates.
+  gcloud secrets versions access latest --secret=smallstep-scep-decrypter-key --project="${project_id}" >"$STEPPATH/secrets/scep_decrypter_key"
+  chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
+  # Guard against a partial-publish race: smallstep-intermediate-cert is the
+  # readiness marker and is published LAST in the init branch, but assert the
+  # other restored artifacts are all present + non-empty before starting. A
+  # missing/empty decrypter cert or key would otherwise start step-ca with a
+  # broken SCEP provisioner (PKIOperation 500s) until manual intervention.
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
+    exit 1
+  }
+  # Stage the ROOT cert for the RADIUS-trust step later in this script.
+  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
+else
+  echo "Initializing new KMS-backed Smallstep CA..."
+  # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
+  # `step ca init --kms=cloudkms` is NOT viable on this version — its --kms flag
+  # only accepts "azurekms" and always *generates* fresh keys; it cannot bind to
+  # a pre-created Cloud KMS key. The working approach is to build the PKI by hand
+  # with `step certificate create`, using --kms cloudkms: + --key <kms-uri> so the
+  # intermediate (the actual leaf signer) is backed by the pre-created HSM key
+  # ${smallstep_signing_key_uri}. The intermediate cert's public key is then
+  # byte-identical to the KMS key's public key and chains to the local root, and
+  # step-ca loads it via the "key"/"kms" stanza in ca.json (rendered below).
+  #
+  # Root: local EC P-256 self-signed root. The root key only signs the
+  # intermediate once at init and then sits cold; the live signer is the KMS key.
+  # Fail fast: a masked failure here (broken KMS binding, bad invocation) would
+  # otherwise publish partial state and start step-ca with a broken chain.
+  step certificate create "${ca_name_prefix} Root CA" \
+    "$STEPPATH/certs/root_ca.crt" "$STEPPATH/secrets/root_ca_key" \
+    --profile root-ca --kty EC --curve P-256 \
+    --no-password --insecure --force
+  # Intermediate: public key sourced from the Cloud KMS signing key; signed by
+  # the local root. /dev/null for the key output because the private key lives in
+  # Cloud KMS, never on disk.
+  step certificate create "${ca_name_prefix} Intermediate CA" \
+    "$STEPPATH/certs/intermediate_ca.crt" /dev/null \
+    --profile intermediate-ca \
+    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_signing_key_uri}" \
+    --no-password --insecure --force
+  # SCEP decrypter: a SOFTWARE RSA keypair (NOT Cloud KMS). step-ca's SCEP
+  # provisioner Init() calls BOTH CreateDecrypter AND CreateSigner on the
+  # decrypter key (it decrypts the SCEP PKCS#7 envelope AND signs the SCEP
+  # response). Cloud KMS keys are single-purpose (ASYMMETRIC_DECRYPT can't sign),
+  # so a KMS-backed decrypter fails init with "does not have decrypter" and every
+  # PKIOperation 500s. A local RSA key is dual-purpose and is the documented
+  # step-ca SCEP pattern. This key is lower-sensitivity than the CA signing key
+  # (it never issues certs); the signing key stays in Cloud KMS/HSM.
+  #
+  # Generated here once, then persisted to Secret Manager (cert AND key) so both
+  # HA nodes + any VM rebuild share the SAME decrypter identity — critical behind
+  # the round-robin LB, where the cert returned by GetCACert on one node must be
+  # decryptable by whichever node receives the PKIOperation POST.
+  #
+  # Signed by the ROOT (root_ca.crt + root_ca_key), which still exists here. This
+  # MUST run before the `rm -f "$STEPPATH/secrets/root_ca_key"` below.
+  step certificate create "${ca_name_prefix} SCEP Decrypter" \
+    "$STEPPATH/certs/scep_decrypter.crt" "$STEPPATH/secrets/scep_decrypter_key" \
+    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
+    --kty RSA --size 2048 \
+    --not-after 87600h --no-password --insecure --force
+  chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
+  # Single gate: only publish secrets + discard the root key once ALL certs +
+  # the decrypter key genuinely exist and are non-empty. On failure, abort.
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys" >&2
+    exit 1
+  }
+  # Publish ALL certs + the decrypter key so reboots / the 2nd VM restore a
+  # matching chain and a working SCEP decrypter.
+  #
+  # ORDER MATTERS: smallstep-intermediate-cert is the readiness marker the
+  # restore branch (above) keys on, so it MUST be published LAST. Publishing it
+  # mid-sequence would let a later failure (e.g. decrypter cert/key) leave a
+  # half-initialized CA that the next boot "restores" into a broken SCEP state.
+  gcloud secrets versions add smallstep-ca-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/root_ca.crt"
+  gcloud secrets versions add smallstep-scep-decrypter-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/scep_decrypter.crt"
+  gcloud secrets versions add smallstep-scep-decrypter-key --project="${project_id}" \
+    --data-file="$STEPPATH/secrets/scep_decrypter_key"
+  # Readiness marker — published last, only after everything else is durable.
+  gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
+    --data-file="$STEPPATH/certs/intermediate_ca.crt"
+  # Stage the ROOT cert for the RADIUS-trust step later in this script.
+  cp "$STEPPATH/certs/root_ca.crt" /tmp/smallstep-ca.crt
+  # Discard the local root key — the KMS HSM key is the only live private key.
+  rm -f "$STEPPATH/secrets/root_ca_key"
+fi
+
+# Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
+# and SCEP provisioners.
+#
+# The AUTHORIZING webhook is attached ONLY to the ACME provisioner and uses
+# certType "X509" — it gates X509 issuance by checking the attested device
+# serial (attestationData.permanentIdentifier) against Fleet. The SCEP
+# provisioner is intentionally NOT webhook-gated; it authenticates with the
+# static challenge, so the webhook never receives a serial-less SCEP request.
+#
+# step-ca's SCEP provisioner wants decrypterCertificate + decrypterKeyPEM as
+# base64-encoded PEM. The decrypter key is the shared software RSA key restored
+# from / generated into Secret Manager above.
+SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
+SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < "$STEPPATH/secrets/scep_decrypter_key")"
+cat > "$STEPPATH/config/ca.json" <<CAJSON
+{
+  "root": "$STEPPATH/certs/root_ca.crt",
+  "crt": "$STEPPATH/certs/intermediate_ca.crt",
+  "key": "${smallstep_signing_key_uri}",
+  "kms": { "type": "cloudkms" },
+  "address": ":8443",
+  "dnsNames": ["${smallstep_ca_dns_name}"],
+  "metricsAddress": "127.0.0.1:9090",
+  "db": {
+    "type": "postgresql",
+    "dataSource": "postgresql://${smallstep_db_user}:$${SMALLSTEP_DB_PASSWORD}@${smallstep_db_host}:5432/${smallstep_db_name}?sslmode=require"
+  },
+  "authority": {
+    "provisioners": [
+      {
+        "type": "ACME",
+        "name": "${smallstep_acme_name}",
+        "challenges": ["device-attest-01"],
+        "attestationFormats": ["apple"],
+%{ if acme_webhook_url != "" ~}
+        "webhooks": [
+          {
+            "name": "authorize",
+            "url": "${acme_webhook_url}",
+            "kind": "AUTHORIZING",
+            "certType": "X509",
+            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
+          }
+        ],
+%{ endif ~}
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
+      },
+      {
+        "type": "SCEP",
+        "name": "${smallstep_scep_name}",
+        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
+        "minimumPublicKeyLength": 2048,
+        "encryptionAlgorithmIdentifier": 2,
+        "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
+        "decrypterKeyPEM": "$${SCEP_DECRYPTER_KEY_B64}",
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
+      }
+    ]
+  },
+  "tls": { "minVersion": 1.2, "maxVersion": 1.3 },
+  "logger": { "format": "json" }
+}
+CAJSON
+
+# SCEP decrypter readiness probe.
+#
+# step-ca 0.30.2 validates the SCEP decrypter (decrypterCertificate +
+# decrypterKeyURI -> Cloud KMS) exactly ONCE at startup. If that KMS call
+# fails transiently (IAM propagation lag, KMS latency, network blip on a
+# fresh boot), step-ca logs the NON-FATAL line:
+#   "failed validating SCEP authority: SCEP provisioner ... does not have decrypter"
+# then keeps serving with the provisioner DEGRADED — every SCEP PKIOperation
+# returns HTTP 500 ("does not have a decrypter available") for the life of the
+# process, with no crash and no retry. On an HA pair behind a round-robin LB
+# this silently breaks ~half of all SCEP enrollments until a manual restart.
+#
+# This probe runs after step-ca comes up and fails the unit (-> Restart=always
+# re-execs it, by which point KMS is reachable) if the decrypter didn't load.
+# Gated on a working SCEP provisioner via the marker file written above.
+%{ if smallstep_enabled ~}
+cat > /usr/local/bin/stepca-decrypter-probe.sh <<'PROBE'
+#!/bin/bash
+# Wait for the CA to answer health, then assert the SCEP decrypter initialized.
+for i in $(seq 1 30); do
+  curl -fsS -k https://127.0.0.1:8443/health >/dev/null 2>&1 && break
+  sleep 1
+done
+# Look only at THIS invocation's logs (since the unit's current start).
+since=$(systemctl show step-ca -p ActiveEnterTimestamp --value)
+if journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  echo "stepca-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
+  exit 1
+fi
+echo "stepca-decrypter-probe: SCEP decrypter OK"
+exit 0
+PROBE
+chmod +x /usr/local/bin/stepca-decrypter-probe.sh
+%{ endif ~}
+
+# Log file for step-ca. step-ca has no native file-logging (its logger config is
+# only format/traceHeader; logrus + Go's std log both write to stderr), and the
+# Datadog journald tailer drops step-ca's PLAIN-TEXT operational lines (startup,
+# "Serving HTTPS", and the "does not have decrypter" error) — only the JSON
+# request lines survive journald. So tee step-ca's stdout/stderr to a file and
+# tail THAT in Datadog (file tailer ships every line verbatim). journald is kept
+# too (tee's stdout), so the decrypter ExecStartPost probe still works.
+mkdir -p /var/log/step-ca
+cat > /etc/logrotate.d/step-ca <<'LOGROTATE'
+/var/log/step-ca/step-ca.log {
+  daily
+  rotate 7
+  compress
+  delaycompress
+  missingok
+  notifempty
+  copytruncate
+}
+LOGROTATE
+
+# systemd unit for step-ca.
+cat > /etc/systemd/system/step-ca.service <<'UNIT'
+[Unit]
+Description=Smallstep step-ca
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=STEPPATH=/etc/step-ca
+# tee to journald (stdout) AND the log file Datadog tails. A shell wraps the
+# pipe; it stays as the unit's main process and Restart=always covers crashes.
+ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca/config/ca.json 2>&1 | tee -a /var/log/step-ca/step-ca.log'
+%{ if smallstep_enabled ~}
+# Assert the SCEP decrypter loaded; non-zero here trips Restart=always so a
+# transient KMS failure at boot self-heals instead of silently 500-ing SCEP.
+ExecStartPost=/usr/local/bin/stepca-decrypter-probe.sh
+%{ endif ~}
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now step-ca
+echo "step-ca started."
+
+%{ if acme_webhook_enabled ~}
+# ---------------------------------------------------------------------------
+# ACME authorizing webhook — localhost systemd service (not Cloud Run).
+# step-ca calls http://127.0.0.1:${webhook_port}/authorize per ACME order and
+# refuses to sign unless it returns allow:true (fail-closed). The binary is a
+# static release asset built by the webhook-release GitHub Action.
+# ---------------------------------------------------------------------------
+echo "=== Installing ACME authorizing webhook ==="
+WEBHOOK_BIN=/usr/local/bin/acme-authz-webhook
+WEBHOOK_VERSION="${webhook_release_version}"
+WEBHOOK_URL="https://github.com/${webhook_repo}/releases/download/webhook-v$${WEBHOOK_VERSION}/acme-authz-webhook-linux-amd64"
+if [ ! -x "$WEBHOOK_BIN" ] || [ "$($WEBHOOK_BIN version 2>/dev/null || true)" != "$${WEBHOOK_VERSION}" ]; then
+  curl -fsSL "$WEBHOOK_URL" -o /tmp/acme-authz-webhook
+  # Verify the published sha256 if present (asset built alongside the binary).
+  if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
+    EXPECTED=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
+    ACTUAL=$(sha256sum /tmp/acme-authz-webhook | awk '{print $1}')
+    [ "$EXPECTED" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
+  fi
+  install -m 0755 /tmp/acme-authz-webhook "$WEBHOOK_BIN"
+  rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
+fi
+
+# Dedicated unprivileged user for the webhook.
+id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
+
+# Secrets from Secret Manager -> a root-owned EnvironmentFile (0600). The Fleet
+# token + HMAC signing secret never land in the unit file or process args.
+mkdir -p /etc/acme-authz-webhook
+WEBHOOK_SIGNING_SECRET="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}")"
+FLEET_API_TOKEN="$(gcloud secrets versions access latest --secret=fleet-api-token --project="${project_id}")"
+[ -n "$WEBHOOK_SIGNING_SECRET" ] && [ -n "$FLEET_API_TOKEN" ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
+umask 077
+cat > /etc/acme-authz-webhook/env <<WEBHOOKENV
+PORT=${webhook_port}
+FLEET_API_BASE_URL=${fleet_api_base_url}
+ALLOW_LABEL=${webhook_allow_label}
+WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
+FLEET_API_TOKEN=$FLEET_API_TOKEN
+WEBHOOKENV
+umask 022
+chmod 600 /etc/acme-authz-webhook/env
+
+cat > /etc/systemd/system/acme-authz-webhook.service <<'WEBHOOKUNIT'
+[Unit]
+Description=ACME authorizing webhook (Fleet-enrolled serial gate for step-ca)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/acme-authz-webhook/env
+ExecStart=/usr/local/bin/acme-authz-webhook serve
+Restart=always
+RestartSec=5
+User=acme-webhook
+# Loopback-only service; harden it.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+WEBHOOKUNIT
+systemctl daemon-reload
+systemctl enable --now acme-authz-webhook
+# Wait for it to answer before step-ca starts handing it ACME orders.
+for i in $(seq 1 15); do
+  curl -fsS -o /dev/null "http://127.0.0.1:${webhook_port}/healthz" 2>/dev/null && break
+  sleep 1
+done
+echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
+# step-ca was started before this block; restart it now that the webhook is
+# reachable so ACME orders arriving during the bootstrap window aren't rejected
+# fail-closed on a connection-refused to the authorize endpoint.
+systemctl restart step-ca
+%{ endif ~}
+
+# Stage the Smallstep CA cert for RADIUS to validate client certs against.
+#   - "smallstep": Smallstep replaces Okta in the client trust path.
+#   - "both":      transitional dual-trust — RADIUS accepts client certs from
+#                  EITHER the Okta intermediate OR the Smallstep intermediate,
+#                  by validating against a concatenated bundle. Lets devices
+#                  migrate from Okta-issued to Smallstep-issued Wi-Fi certs
+#                  without a flag-day cutover.
+if { [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both" ]; } && [ -s /tmp/smallstep-ca.crt ]; then
+  cp /tmp/smallstep-ca.crt "$CERT_DIR/smallstep-ca.pem"
+  chown freerad:freerad "$CERT_DIR/smallstep-ca.pem" || true
+fi
+if [ "${radius_trust_mode}" = "both" ] && [ -s "$CERT_DIR/smallstep-ca.pem" ]; then
+  cat "$CERT_DIR/okta-ca.pem" "$CERT_DIR/smallstep-ca.pem" > "$CERT_DIR/trust-bundle.pem"
+  chown freerad:freerad "$CERT_DIR/trust-bundle.pem" || true
+fi
+%{ endif ~}
 
 # ---------------------------------------------------------------------------
 # 5. Configure EAP-TLS (native FreeRADIUS format)
@@ -189,7 +593,7 @@ eap {
     tls-config tls-common {
         private_key_file = $${certdir}/server-key.pem
         certificate_file = $${certdir}/server-cert.pem
-        ca_file = $${certdir}/okta-ca.pem
+        ca_file = $${certdir}/%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }%{ if radius_trust_mode == "both" }trust-bundle.pem%{ else }okta-ca.pem%{ endif }%{ endif }%{ else }okta-ca.pem%{ endif }
         dh_file = $${certdir}/dh.pem
         ca_path = $${cadir}
 
@@ -1309,6 +1713,158 @@ instances:
       - freeradius_hup_time: hup_time
       - freeradius_up: up
 DDMETRICSEOF
+
+%{ if smallstep_enabled ~}
+# ---------------------------------------------------------------------------
+# 16b. Datadog integration for the Smallstep step-ca
+#      step-ca exposes NATIVE Prometheus metrics (namespace step_ca) on the
+#      metricsAddress we set in ca.json (127.0.0.1:9090/metrics) — scraped via
+#      Datadog OpenMetrics. Plus: journald log shipping, a /health HTTP check, a
+#      process check, and custom cert-expiry + decrypter-readiness gauges (which
+#      step_ca metrics don't cover). No OTLP — step-ca has no OpenTelemetry.
+# ---------------------------------------------------------------------------
+echo "=== Configuring Datadog for step-ca ==="
+
+# --- OpenMetrics: scrape step-ca's native Prometheus endpoint. Counters are
+# labeled by provisioner (wifi-acme / wifi-scep), so issuance + webhook +
+# KMS-error rates break down per provisioner automatically.
+mkdir -p /etc/datadog-agent/conf.d/openmetrics.d
+cat > /etc/datadog-agent/conf.d/openmetrics.d/stepca.yaml << 'DDSTEPCAMETRICSEOF'
+instances:
+  - openmetrics_endpoint: http://127.0.0.1:9090/metrics
+    namespace: smallstep
+    tags:
+      - "service:smallstep-ca"
+    metrics:
+      - step_ca_uptime_seconds: uptime
+      - step_ca_provisioner_signed_total: provisioner.signed
+      - step_ca_provisioner_renewed_total: provisioner.renewed
+      - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
+      - step_ca_provisioner_webhook_authorized_total: provisioner.webhook_authorized
+      - step_ca_provisioner_webhook_enriched_total: provisioner.webhook_enriched
+      - step_ca_kms_signed: kms.signed
+      - step_ca_kms_errors: kms.errors
+DDSTEPCAMETRICSEOF
+
+# --- Logs: ship step-ca's journald unit as source=stepca service=smallstep-ca.
+# step-ca logs structured JSON (logger.format=json); the Datadog stepca log
+# pipeline (UI/Terraform) parses path/status/method/duration and the decrypter/
+# error lines. The agent just ships the lines with the right source/service.
+mkdir -p /etc/datadog-agent/conf.d/stepca.d
+cat > /etc/datadog-agent/conf.d/stepca.d/conf.yaml << 'DDSTEPCALOGSEOF'
+logs:
+  # Tail the tee'd step-ca log file (text + JSON lines). A file tailer ships
+  # every line verbatim, unlike the journald tailer which dropped step-ca's
+  # plain-text operational lines.
+  - type: file
+    path: /var/log/step-ca/step-ca.log
+    source: stepca
+    service: smallstep-ca
+    log_processing_rules:
+      - type: exclude_at_match
+        name: exclude_healthy_health_checks
+        # Drop /health lines only when they return 200 (GCLB + Datadog probe
+        # noise); a failing /health still ships. step-ca's JSON field order is
+        # stable: "path" precedes "status".
+        pattern: '"path":"/health".*"status":200'
+DDSTEPCALOGSEOF
+
+# dd-agent must be in systemd-journal to read the unit's journal.
+usermod -aG systemd-journal dd-agent || true
+
+# --- HTTP check: step-ca /health on :8443 (the cert is the CA's own chain, so
+# skip TLS verify on the loopback probe).
+mkdir -p /etc/datadog-agent/conf.d/http_check.d
+cat > /etc/datadog-agent/conf.d/http_check.d/conf.yaml << 'DDHTTPEOF'
+instances:
+  - name: stepca-health
+    url: https://127.0.0.1:8443/health
+    tls_verify: false
+    timeout: 5
+    tags:
+      - "service:smallstep-ca"
+      - "component:step-ca"
+DDHTTPEOF
+
+# --- Process check: alert if the step-ca process disappears.
+mkdir -p /etc/datadog-agent/conf.d/process.d
+cat > /etc/datadog-agent/conf.d/process.d/conf.yaml << 'DDPROCEOF'
+instances:
+  - name: step-ca
+    search_string:
+      - 'step-ca'
+    exact_match: false
+    tags:
+      - "service:smallstep-ca"
+DDPROCEOF
+
+# --- Custom gauges step_ca metrics don't expose: cert days-until-expiry and
+# SCEP decrypter readiness. Emitted to the agent via DogStatsD on a timer.
+#   smallstep.cert.days_until_expiry{cert:intermediate|decrypter}
+#   smallstep.scep.decrypter_ready  (1 = initialized, 0 = degraded)
+cat > /usr/local/bin/stepca-dd-metrics.sh << 'STEPCAMETRICSEOF'
+#!/bin/bash
+# Emit step-ca health gauges to the Datadog Agent via DogStatsD (UDP 8125).
+set -uo pipefail
+STEP=/etc/step-ca
+DSD=127.0.0.1
+PORT=8125
+
+emit() { # full_datagram (name:value|type|#tags)
+  printf '%s\n' "$1" >"/dev/udp/$DSD/$PORT" 2>/dev/null || true
+}
+
+days_left() { # pem-file -> integer days, or empty
+  local f="$1" end now
+  [ -s "$f" ] || { echo ""; return; }
+  end=$(date -d "$(openssl x509 -enddate -noout -in "$f" 2>/dev/null | cut -d= -f2)" +%s 2>/dev/null) || { echo ""; return; }
+  now=$(date +%s)
+  echo $(( (end - now) / 86400 ))
+}
+
+di=$(days_left "$STEP/certs/intermediate_ca.crt")
+[ -n "$di" ] && emit "smallstep.cert.days_until_expiry:$di|g|#cert:intermediate,service:smallstep-ca"
+dd=$(days_left "$STEP/certs/scep_decrypter.crt")
+[ -n "$dd" ] && emit "smallstep.cert.days_until_expiry:$dd|g|#cert:decrypter,service:smallstep-ca"
+
+ready=1
+since=$(systemctl show step-ca -p ActiveEnterTimestamp --value 2>/dev/null)
+if [ -n "$since" ] && journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  ready=0
+fi
+emit "smallstep.scep.decrypter_ready:$ready|g|#service:smallstep-ca"
+STEPCAMETRICSEOF
+chmod +x /usr/local/bin/stepca-dd-metrics.sh
+
+# Ensure DogStatsD is enabled so the custom gauges are accepted.
+if ! grep -q "^use_dogstatsd:" /etc/datadog-agent/datadog.yaml; then
+  echo "use_dogstatsd: true" >> /etc/datadog-agent/datadog.yaml
+fi
+
+cat > /etc/systemd/system/stepca-dd-metrics.service << 'STEPCASVCEOF'
+[Unit]
+Description=Emit step-ca cert-expiry + decrypter gauges to Datadog
+After=step-ca.service datadog-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/stepca-dd-metrics.sh
+STEPCASVCEOF
+cat > /etc/systemd/system/stepca-dd-metrics.timer << 'STEPCATIMEREOF'
+[Unit]
+Description=Run step-ca Datadog gauge emitter every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+STEPCATIMEREOF
+systemctl daemon-reload
+systemctl enable --now stepca-dd-metrics.timer
+%{ endif ~}
 
 # Restart Datadog Agent to pick up all new config
 systemctl restart datadog-agent

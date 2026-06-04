@@ -168,8 +168,126 @@ variable "datadog_site" {
 }
 
 variable "datadog_app_key" {
-  description = "Datadog Application key (enables Terraform-managed dashboard). Leave empty to skip. Scope to dashboards_read + dashboards_write only."
+  description = "Datadog Application key (enables Terraform-managed dashboards + monitors). Leave empty to skip. Scope to dashboards_read/write + monitors_read/write."
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "datadog_monitor_notify" {
+  description = "Datadog notification handle(s) appended to monitor messages (e.g. \"@slack-it-alerts @pagerduty-oncall\"). Empty = monitors still trigger in-app, just no routed notification."
+  type        = string
+  default     = ""
+}
+
+# -----------------------------------------------------------------------------
+# Optional self-hosted Smallstep step-ca (off by default)
+# -----------------------------------------------------------------------------
+
+variable "enable_smallstep_ca" {
+  description = "Stand up a self-hosted Smallstep step-ca on the RADIUS VMs (KMS-backed CA, ACME + SCEP, Cloud SQL for ACME HA, GCLB front door). Off by default; existing BYO-CA deployments are unaffected."
+  type        = bool
+  default     = false
+}
+
+variable "radius_trust_mode" {
+  description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'both' = transitional dual-trust (Okta + Smallstep intermediates concatenated) so devices can migrate without a flag-day cutover. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'both' or 'smallstep'."
+  type        = string
+  default     = "okta"
+  validation {
+    condition     = contains(["okta", "both", "smallstep"], var.radius_trust_mode)
+    error_message = "radius_trust_mode must be one of \"okta\", \"both\", or \"smallstep\"."
+  }
+}
+
+variable "smallstep_ca_dns_name" {
+  description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.example.com). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.enable_smallstep_ca || trimspace(var.smallstep_ca_dns_name) != ""
+    error_message = "smallstep_ca_dns_name must be set when enable_smallstep_ca is true."
+  }
+}
+
+variable "ca_name_prefix" {
+  description = "Common-name prefix for the self-hosted CA certificates. The CA mints \"<prefix> Root CA\", \"<prefix> Intermediate CA\", and \"<prefix> SCEP Decrypter\". Change for your org; the default preserves existing issued-cert CNs."
+  type        = string
+  default     = "CampusGroup Wi-Fi"
+}
+
+variable "smallstep_acme_provisioner_name" {
+  description = "Name of the step-ca ACME provisioner (also the URL path segment: /acme/<name>/directory). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_scep_provisioner_name."
+  type        = string
+  default     = "wifi-acme"
+}
+
+variable "smallstep_scep_provisioner_name" {
+  description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_acme_provisioner_name."
+  type        = string
+  default     = "wifi-scep"
+
+  validation {
+    condition     = var.smallstep_scep_provisioner_name != var.smallstep_acme_provisioner_name
+    error_message = "smallstep_scep_provisioner_name must differ from smallstep_acme_provisioner_name (step-ca rejects duplicate provisioner names even across types)."
+  }
+}
+
+variable "acme_authorizing_webhook_url" {
+  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback http://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty = ACME provisioner configured but no device should enroll yet."
+  type        = string
+  default     = ""
+}
+
+variable "smallstep_db_tier" {
+  description = "Cloud SQL machine tier for the step-ca ACME state database. Must be a standard (non-shared-core) tier because availability_type is REGIONAL (HA); db-f1-micro/shared-core tiers do not support REGIONAL and fail at apply."
+  type        = string
+  default     = "db-custom-1-3840"
+}
+
+# -----------------------------------------------------------------------------
+# Optional ACME authorizing webhook (on-VM localhost service) — gates ACME
+# issuance to Fleet-enrolled device serials. Requires enable_smallstep_ca.
+# The binary is built + released by the webhook-release GitHub Action and
+# downloaded by the VM startup script.
+# -----------------------------------------------------------------------------
+
+variable "enable_acme_webhook" {
+  description = "Run the ACME authorizing webhook on the RADIUS VMs (localhost systemd service) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
+  type        = bool
+  default     = false
+}
+
+variable "fleet_api_base_url" {
+  description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.example.com)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.enable_acme_webhook || trimspace(var.fleet_api_base_url) != ""
+    error_message = "fleet_api_base_url must be set when enable_acme_webhook is true."
+  }
+}
+
+# NOTE: the Fleet API token is NOT a Terraform variable — it is a standing
+# credential added directly to the `fleet-api-token` Secret Manager secret
+# out-of-band (see webhook.tf), so it never passes through tfvars/CI/CLI.
+
+variable "webhook_allow_label" {
+  description = "Optional Fleet label a host must carry for the webhook to allow issuance (e.g. test-pilots for a scoped pilot). Empty = any enrolled host is allowed."
+  type        = string
+  default     = ""
+}
+
+variable "webhook_release_version" {
+  description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
+  type        = string
+  default     = "1.0.0"
+}
+
+variable "webhook_port" {
+  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls http://127.0.0.1:<port>/authorize)."
+  type        = number
+  default     = 9444
 }

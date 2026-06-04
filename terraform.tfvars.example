@@ -86,3 +86,12 @@ EOT
 # PASTE YOUR OKTA ROOT CA CERTIFICATE HERE
 # -----END CERTIFICATE-----
 # EOT
+
+# --- Optional self-hosted Smallstep step-ca (default: disabled) ---
+# enable_smallstep_ca              = false
+# radius_trust_mode                = "okta"      # flip to "smallstep" only after pre-staging certs
+# smallstep_ca_dns_name            = "ca.campusgroup.co"
+# smallstep_acme_provisioner_name  = "wifi-acme"   # must be globally unique (≠ scep name)
+# smallstep_scep_provisioner_name  = "wifi-scep"   # step-ca rejects duplicate provisioner names
+# acme_authorizing_webhook_url     = ""          # set to the Plan 2 webhook before enabling ACME
+# smallstep_db_tier                = "db-custom-1-3840"  # standard tier required for REGIONAL HA
