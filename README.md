@@ -21,13 +21,58 @@ MacBook (Okta SCEP cert via Jamf)
 - **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. FreeRADIUS Prometheus exporter for RADIUS-specific metrics. Structured JSON auth and accounting logs via FreeRADIUS `linelog`.
 - **Log enrichment**: Optional Jamf and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs. Jamf data is served from a local cache (no API calls on the auth path).
 
+## Client Certificate Issuance: Two Trust Modes
+
+This deployment supports two independent paths for client certificate validation:
+
+### Recommended: self-hosted Smallstep step-ca
+
+> **Strongly recommended over Okta SCEP for client certificates.** Okta's
+> Managed Attestation SCEP endpoint enforces low, undocumented rate limits — at
+> fleet scale the 429s cause MDM profile installs to fail and certs to never
+> issue, which is hard to diagnose and silently breaks Wi-Fi onboarding. A
+> self-hosted `step-ca` removes that dependency entirely: you own the issuance
+> path, there are no external rate limits, and it supports both ACME (hardware
+> attestation on Apple) and SCEP (for Windows). New deployments should prefer
+> this; the Okta SCEP path remains supported for existing setups and migration.
+
+Set `enable_smallstep_ca = true` to stand up a self-hosted Smallstep `step-ca`
+co-located on the RADIUS VMs. It exposes:
+
+- **ACME** (`/acme/<name>/directory`) with Apple `device-attest-01` attestation,
+  fronted by a public GCLB + Cloud Armor. Gate issuance with
+  `acme_authorizing_webhook_url` (see `examples/` and the webhook plan) — Apple
+  attestation alone proves "a real Apple device", not "one of yours".
+- **SCEP** (`/scep/<name>`) for MDMs without ACME (e.g. Windows), typically
+  fronted by an MDM's SCEP proxy.
+
+The CA signing key and SCEP decrypter live in Cloud KMS (HSM). ACME state is in
+a regional Cloud SQL Postgres. The CA root cert is published to the
+`smallstep-ca-cert` Secret Manager secret.
+
+**RADIUS trust:** Two independent CA chains are used regardless of trust mode:
+- **Server certificates** signed by the self-signed RADIUS CA (generated on first boot)
+- **Client certificates** validated by the CA specified in `radius_trust_mode`:
+  - `"okta"` (default): FreeRADIUS trusts client certs signed by the Okta Intermediate CA
+  - `"smallstep"`: FreeRADIUS trusts ONLY client certs signed by the Smallstep CA
+
+Setting `radius_trust_mode = "smallstep"` flips validation to Smallstep-only. Pre-stage
+client certs on devices, confirm issuance, then flip the trust mode.
+
+Example client profiles (ACME + SCEP, generic + Fleet variant) live in
+`examples/`.
+
+
 ## Prerequisites
 
 - [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.5
 - GCP account with permissions to create projects and enable billing
 - `gcloud` CLI authenticated (`gcloud auth application-default login`)
-- Okta Intermediate CA certificate (`okta-ca.pem`) from your Okta org
-- Okta Managed Attestation configured in Jamf (SCEP profile)
+- For the **Okta SCEP** client-cert path (one of two options):
+  - Okta Intermediate CA certificate (`okta-ca.pem`) from your Okta org
+  - Okta Managed Attestation configured in Jamf (SCEP profile)
+  - ⚠️ Okta's SCEP endpoint is **rate-limited** and 429s at fleet scale — prefer
+    the self-hosted Smallstep CA (Recommended section above) for new deployments.
 
 ## Quick Start
 
@@ -317,30 +362,6 @@ sudo mysql radius -e "SELECT * FROM radacct ORDER BY radacctid DESC LIMIT 5"
 ```
 
 For a detailed technical walkthrough of the startup script, authentication flow, log enrichment pipeline, and caching architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Optional: self-hosted Smallstep step-ca
-
-Set `enable_smallstep_ca = true` to stand up a self-hosted Smallstep `step-ca`
-co-located on the RADIUS VMs. It exposes:
-
-- **ACME** (`/acme/<name>/directory`) with Apple `device-attest-01` attestation,
-  fronted by a public GCLB + Cloud Armor. Gate issuance with
-  `acme_authorizing_webhook_url` (see `examples/` and the webhook plan) — Apple
-  attestation alone proves "a real Apple device", not "one of yours".
-- **SCEP** (`/scep/<name>`) for MDMs without ACME (e.g. Windows), typically
-  fronted by an MDM's SCEP proxy.
-
-The CA signing key and SCEP decrypter live in Cloud KMS (HSM). ACME state is in
-a regional Cloud SQL Postgres. The CA root cert is published to the
-`smallstep-ca-cert` Secret Manager secret.
-
-**RADIUS trust:** `radius_trust_mode` controls the FreeRADIUS client-cert trust
-bundle independently of the CA being up — `"okta"` (default) keeps the existing
-Okta trust; `"smallstep"` makes RADIUS trust ONLY the Smallstep CA. Pre-stage
-client certs on devices, confirm issuance, then flip to `"smallstep"`.
-
-Example client profiles (ACME + SCEP, generic + Fleet variant) live in
-`examples/`.
 
 ## Future Work
 
