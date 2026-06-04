@@ -558,6 +558,13 @@ Wants=network-online.target
 
 [Service]
 Environment=STEPPATH=/etc/step-ca
+# Log the real client IP (X-Forwarded-For) instead of the L7 GCLB proxy peer
+# (35.191.x.x / 130.211.x.x). The external HTTPS ALB re-originates TLS to this
+# backend and injects X-Forwarded-For; STEP_LOGGER_LOG_REAL_IP makes step-ca's
+# logging middleware use that header for the "remote-address" field. Safe here
+# because the only path to :8443 is through the LB (Cloud Armor + the backend
+# health-check ranges), so XFF can't be spoofed by a direct client.
+Environment=STEP_LOGGER_LOG_REAL_IP=true
 # tee to journald (stdout) AND the log file Datadog tails. A shell wraps the
 # pipe; it stays as the unit's main process and Restart=always covers crashes.
 ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca/config/ca.json 2>&1 | tee -a /var/log/step-ca/step-ca.log'
