@@ -6,8 +6,8 @@
 # (metricsAddress in ca.json, namespace step_ca) scraped via the agent's
 # OpenMetrics check (namespace "smallstep" — see scripts/startup.sh), plus the
 # custom DogStatsD gauges (smallstep.cert.days_until_expiry,
-# smallstep.scep.decrypter_ready) and the journald logs (source:stepca,
-# service:smallstep-ca).
+# smallstep.scep.decrypter_ready) and the file-tailed logs (source:stepca,
+# service:smallstep-ca) parsed by the pipeline at the bottom of this file.
 #
 # OpenMetrics maps counters to "<name>.count"; gauges keep their name.
 # -----------------------------------------------------------------------------
@@ -470,4 +470,88 @@ resource "datadog_monitor" "radius_no_accepts" {
   }
   notify_no_data = false
   tags           = ["service:radius", "managed-by:terraform"]
+}
+
+# -----------------------------------------------------------------------------
+# Log pipeline for step-ca (source:stepca)
+#
+# step-ca writes TWO line formats to the tee'd file:
+#   - JSON request log:  {"time":"2026-06-04T01:07:39Z","level":"info",
+#                         "method":"GET","path":"/scep/...","status":200,...}
+#   - plain-text ops log: 2026/06/04 01:04:58 Serving HTTPS on :8443 ...
+#
+# This pipeline parses both: extracts the real event time (so Datadog uses it
+# instead of ingestion time), pulls structured attributes from JSON, strips the
+# leading timestamp from text lines, and maps level -> log status.
+# -----------------------------------------------------------------------------
+
+resource "datadog_logs_custom_pipeline" "stepca" {
+  count      = local.smallstep_datadog_enabled ? 1 : 0
+  name       = "Smallstep step-ca"
+  is_enabled = true
+
+  filter {
+    query = "source:stepca"
+  }
+
+  # 1. Parse JSON request lines into attributes, and text lines into date+msg.
+  processor {
+    grok_parser {
+      name       = "step-ca grok"
+      is_enabled = true
+      source     = "message"
+      # %%{ escapes Terraform template interpolation so the literal grok
+      # token %{...} reaches Datadog. First matching rule wins: JSON lines
+      # merge their keys to the event root; text lines yield text_date + text_msg.
+      grok {
+        support_rules = ""
+        match_rules   = <<-GROK
+          stepca_json %%{data::json}
+          stepca_text %%{date("yyyy/MM/dd HH:mm:ss"):text_date}\s+%%{data:text_msg}
+        GROK
+      }
+    }
+  }
+
+  # 2. Official timestamp: prefer the JSON "time" field, else the text date.
+  processor {
+    date_remapper {
+      name       = "Define event timestamp"
+      is_enabled = true
+      sources    = ["time", "text_date"]
+    }
+  }
+
+  # 3. Clean message: for text lines use the stripped message; JSON lines keep
+  #    their "msg" (often empty for request logs — the attributes carry signal).
+  processor {
+    message_remapper {
+      name       = "Define message"
+      is_enabled = true
+      sources    = ["text_msg", "msg"]
+    }
+  }
+
+  # 4. Log status from step-ca's level (info/warn/error).
+  processor {
+    status_remapper {
+      name       = "Define status from level"
+      is_enabled = true
+      sources    = ["level"]
+    }
+  }
+
+  # 5. Map HTTP status to a standard attribute for faceting/coloring.
+  processor {
+    attribute_remapper {
+      name                 = "Map status -> http.status_code"
+      is_enabled           = true
+      sources              = ["status"]
+      source_type          = "attribute"
+      target               = "http.status_code"
+      target_type          = "attribute"
+      preserve_source      = true
+      override_on_conflict = false
+    }
+  }
 }

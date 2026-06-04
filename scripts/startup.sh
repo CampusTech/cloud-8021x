@@ -432,6 +432,26 @@ PROBE
 chmod +x /usr/local/bin/stepca-decrypter-probe.sh
 %{ endif ~}
 
+# Log file for step-ca. step-ca has no native file-logging (its logger config is
+# only format/traceHeader; logrus + Go's std log both write to stderr), and the
+# Datadog journald tailer drops step-ca's PLAIN-TEXT operational lines (startup,
+# "Serving HTTPS", and the "does not have decrypter" error) — only the JSON
+# request lines survive journald. So tee step-ca's stdout/stderr to a file and
+# tail THAT in Datadog (file tailer ships every line verbatim). journald is kept
+# too (tee's stdout), so the decrypter ExecStartPost probe still works.
+mkdir -p /var/log/step-ca
+cat > /etc/logrotate.d/step-ca <<'LOGROTATE'
+/var/log/step-ca/step-ca.log {
+  daily
+  rotate 7
+  compress
+  delaycompress
+  missingok
+  notifempty
+  copytruncate
+}
+LOGROTATE
+
 # systemd unit for step-ca.
 cat > /etc/systemd/system/step-ca.service <<'UNIT'
 [Unit]
@@ -441,7 +461,9 @@ Wants=network-online.target
 
 [Service]
 Environment=STEPPATH=/etc/step-ca
-ExecStart=/usr/bin/step-ca /etc/step-ca/config/ca.json
+# tee to journald (stdout) AND the log file Datadog tails. A shell wraps the
+# pipe; it stays as the unit's main process and Restart=always covers crashes.
+ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca/config/ca.json 2>&1 | tee -a /var/log/step-ca/step-ca.log'
 %{ if smallstep_enabled ~}
 # Assert the SCEP decrypter loaded; non-zero here trips Restart=always so a
 # transient KMS failure at boot self-heals instead of silently 500-ing SCEP.
@@ -1653,14 +1675,13 @@ DDSTEPCAMETRICSEOF
 mkdir -p /etc/datadog-agent/conf.d/stepca.d
 cat > /etc/datadog-agent/conf.d/stepca.d/conf.yaml << 'DDSTEPCALOGSEOF'
 logs:
-  - type: journald
+  # Tail the tee'd step-ca log file (text + JSON lines). A file tailer ships
+  # every line verbatim, unlike the journald tailer which dropped step-ca's
+  # plain-text operational lines.
+  - type: file
+    path: /var/log/step-ca/step-ca.log
     source: stepca
     service: smallstep-ca
-    include_units:
-      - step-ca.service
-    # Apply processing rules to the message CONTENT (step-ca's JSON line), not
-    # the raw journald envelope — otherwise the pattern can't see path/status.
-    process_raw_message: false
     log_processing_rules:
       - type: exclude_at_match
         name: exclude_healthy_health_checks
