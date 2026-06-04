@@ -1,30 +1,21 @@
 # =============================================================================
-# ACME authorizing webhook (Cloud Run). Gated by var.enable_acme_webhook
-# (which itself only makes sense with enable_smallstep_ca = true).
+# ACME authorizing webhook — secrets + IAM.
+#
+# The webhook runs as a LOCALHOST systemd service on each RADIUS VM (built from
+# webhook/, released via the webhook-release GitHub Action, downloaded by the VM
+# startup script), NOT as a separate Cloud Run service. step-ca calls it over
+# loopback (http://127.0.0.1:<port>/authorize), so there is no public hop, no
+# extra TLS, and no independent outage surface. This file therefore only manages
+# the two secrets the webhook reads at runtime, granting access to the RADIUS VM
+# service account. Gated by var.enable_acme_webhook (needs enable_smallstep_ca).
 # =============================================================================
 
 locals {
   acme_webhook_enabled = var.enable_acme_webhook ? 1 : 0
 }
 
-resource "google_project_service" "webhook_apis" {
-  for_each = var.enable_acme_webhook ? toset([
-    "run.googleapis.com",
-  ]) : toset([])
-  project            = google_project.this.project_id
-  service            = each.value
-  disable_on_destroy = false
-}
-
-# Dedicated service account for the webhook (least privilege).
-resource "google_service_account" "webhook" {
-  count        = local.acme_webhook_enabled
-  project      = google_project.this.project_id
-  account_id   = "acme-authz-webhook"
-  display_name = "ACME authorizing webhook"
-}
-
-# Shared HMAC signing secret (step-ca <-> webhook). Generated here.
+# Shared HMAC signing secret (step-ca <-> webhook). Generated here. step-ca and
+# the webhook both run on the VM and read this from Secret Manager.
 resource "random_password" "webhook_signing_secret" {
   count   = local.acme_webhook_enabled
   length  = 48
@@ -46,30 +37,21 @@ resource "google_secret_manager_secret_version" "webhook_signing_secret" {
   secret_data = random_password.webhook_signing_secret[0].result
 }
 
-# Fleet API token — a standing credential created OUT-OF-BAND so it never
-# passes through tfvars/CI/CLI history. Create it (container + value) yourself
-# from an api-only observer user's token, BEFORE applying with the webhook
-# enabled:
+# Fleet API token — a standing credential created OUT-OF-BAND so it never passes
+# through tfvars/CI/CLI history. Create it (container + value) yourself from an
+# api-only observer user's token, BEFORE applying with the webhook enabled:
 #   ~/.fleetctl/fleetctl user create --name 'ACME Webhook' --api-only   # prints token
 #   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
 #     --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-
-# Terraform only REFERENCES it (data source) + grants the webhook SA access.
+# Terraform only REFERENCES it (data source) + grants the RADIUS VM SA access.
 data "google_secret_manager_secret" "fleet_api_token" {
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
   secret_id = "fleet-api-token"
 }
 
-# The webhook SA reads both secrets; the RADIUS VM SA reads the signing secret
-# (step-ca needs it to sign).
-resource "google_secret_manager_secret_iam_member" "webhook_signing_secret_webhook" {
-  count     = local.acme_webhook_enabled
-  project   = google_project.this.project_id
-  secret_id = google_secret_manager_secret.webhook_signing_secret[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.webhook[0].email}"
-}
-
+# The RADIUS VM service account reads both secrets: step-ca needs the signing
+# secret (ca.json), and the on-VM webhook needs the signing secret + Fleet token.
 resource "google_secret_manager_secret_iam_member" "webhook_signing_secret_radius" {
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
@@ -78,72 +60,16 @@ resource "google_secret_manager_secret_iam_member" "webhook_signing_secret_radiu
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "fleet_api_token_webhook" {
+resource "google_secret_manager_secret_iam_member" "fleet_api_token_radius" {
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
   secret_id = data.google_secret_manager_secret.fleet_api_token[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.webhook[0].email}"
+  member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
-resource "google_cloud_run_v2_service" "webhook" {
-  count    = local.acme_webhook_enabled
-  project  = google_project.this.project_id
-  name     = "acme-authz-webhook"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
-
-  template {
-    service_account = google_service_account.webhook[0].email
-    containers {
-      image = var.webhook_image
-      ports {
-        container_port = 8080
-      }
-      env {
-        name  = "FLEET_API_BASE_URL"
-        value = var.fleet_api_base_url
-      }
-      env {
-        name  = "ALLOW_LABEL"
-        value = var.webhook_allow_label
-      }
-      env {
-        name = "WEBHOOK_SIGNING_SECRET"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.webhook_signing_secret[0].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "FLEET_API_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = data.google_secret_manager_secret.fleet_api_token[0].secret_id
-            version = "latest"
-          }
-        }
-      }
-    }
-  }
-
-  depends_on = [google_project_service.webhook_apis]
-}
-
-# step-ca calls the webhook over the public internet; the HMAC signature is the
-# auth. Allow unauthenticated invocations (the signature gate is in-app).
-resource "google_cloud_run_v2_service_iam_member" "webhook_public" {
-  count    = local.acme_webhook_enabled
-  project  = google_project.this.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.webhook[0].name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
+# The webhook authorize endpoint step-ca calls — always loopback now.
 output "acme_webhook_url" {
-  description = "Full URL of the ACME authorizing webhook authorize endpoint (already includes /authorize). Set acme_authorizing_webhook_url to this value. Empty if disabled."
-  value       = var.enable_acme_webhook ? "${google_cloud_run_v2_service.webhook[0].uri}/authorize" : ""
+  description = "URL step-ca uses to reach the on-VM authorizing webhook (loopback). Set acme_authorizing_webhook_url to this value. Empty if disabled."
+  value       = var.enable_acme_webhook ? "http://127.0.0.1:${var.webhook_port}/authorize" : ""
 }

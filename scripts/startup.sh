@@ -481,6 +481,80 @@ systemctl daemon-reload
 systemctl enable --now step-ca
 echo "step-ca started."
 
+%{ if acme_webhook_enabled ~}
+# ---------------------------------------------------------------------------
+# ACME authorizing webhook — localhost systemd service (not Cloud Run).
+# step-ca calls http://127.0.0.1:${webhook_port}/authorize per ACME order and
+# refuses to sign unless it returns allow:true (fail-closed). The binary is a
+# static release asset built by the webhook-release GitHub Action.
+# ---------------------------------------------------------------------------
+echo "=== Installing ACME authorizing webhook ==="
+WEBHOOK_BIN=/usr/local/bin/acme-authz-webhook
+WEBHOOK_VERSION="${webhook_release_version}"
+WEBHOOK_URL="https://github.com/${webhook_repo}/releases/download/webhook-v$${WEBHOOK_VERSION}/acme-authz-webhook-linux-amd64"
+if [ ! -x "$WEBHOOK_BIN" ] || [ "$($WEBHOOK_BIN version 2>/dev/null || true)" != "$${WEBHOOK_VERSION}" ]; then
+  curl -fsSL "$WEBHOOK_URL" -o /tmp/acme-authz-webhook
+  # Verify the published sha256 if present (asset built alongside the binary).
+  if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
+    EXPECTED=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
+    ACTUAL=$(sha256sum /tmp/acme-authz-webhook | awk '{print $1}')
+    [ "$EXPECTED" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
+  fi
+  install -m 0755 /tmp/acme-authz-webhook "$WEBHOOK_BIN"
+  rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
+fi
+
+# Dedicated unprivileged user for the webhook.
+id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
+
+# Secrets from Secret Manager -> a root-owned EnvironmentFile (0600). The Fleet
+# token + HMAC signing secret never land in the unit file or process args.
+mkdir -p /etc/acme-authz-webhook
+WEBHOOK_SIGNING_SECRET="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}")"
+FLEET_API_TOKEN="$(gcloud secrets versions access latest --secret=fleet-api-token --project="${project_id}")"
+[ -n "$WEBHOOK_SIGNING_SECRET" ] && [ -n "$FLEET_API_TOKEN" ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
+umask 077
+cat > /etc/acme-authz-webhook/env <<WEBHOOKENV
+PORT=${webhook_port}
+FLEET_API_BASE_URL=${fleet_api_base_url}
+ALLOW_LABEL=${webhook_allow_label}
+WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
+FLEET_API_TOKEN=$FLEET_API_TOKEN
+WEBHOOKENV
+umask 022
+chmod 600 /etc/acme-authz-webhook/env
+
+cat > /etc/systemd/system/acme-authz-webhook.service <<'WEBHOOKUNIT'
+[Unit]
+Description=ACME authorizing webhook (Fleet-enrolled serial gate for step-ca)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/acme-authz-webhook/env
+ExecStart=/usr/local/bin/acme-authz-webhook serve
+Restart=always
+RestartSec=5
+User=acme-webhook
+# Loopback-only service; harden it.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+WEBHOOKUNIT
+systemctl daemon-reload
+systemctl enable --now acme-authz-webhook
+# Wait for it to answer before step-ca starts handing it ACME orders.
+for i in $(seq 1 15); do
+  curl -fsS -o /dev/null "http://127.0.0.1:${webhook_port}/healthz" 2>/dev/null && break
+  sleep 1
+done
+echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
+%{ endif ~}
+
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.
 #   - "smallstep": Smallstep replaces Okta in the client trust path.
 #   - "both":      transitional dual-trust — RADIUS accepts client certs from

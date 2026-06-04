@@ -235,7 +235,7 @@ variable "smallstep_scep_provisioner_name" {
 }
 
 variable "acme_authorizing_webhook_url" {
-  description = "HTTPS URL of the ACME authorizing webhook (Plan 2). step-ca calls it per order and refuses to sign unless it returns allow:true. MUST be set and healthy (fail-closed) before enabling ACME issuance for real devices. Empty = ACME provisioner is configured but no device should be enrolled yet."
+  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback http://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty = ACME provisioner configured but no device should enroll yet."
   type        = string
   default     = ""
 }
@@ -247,12 +247,14 @@ variable "smallstep_db_tier" {
 }
 
 # -----------------------------------------------------------------------------
-# Optional ACME authorizing webhook (Cloud Run) — gates ACME issuance to
-# Fleet-enrolled device serials. Requires enable_smallstep_ca.
+# Optional ACME authorizing webhook (on-VM localhost service) — gates ACME
+# issuance to Fleet-enrolled device serials. Requires enable_smallstep_ca.
+# The binary is built + released by the webhook-release GitHub Action and
+# downloaded by the VM startup script.
 # -----------------------------------------------------------------------------
 
 variable "enable_acme_webhook" {
-  description = "Deploy the ACME authorizing webhook (Cloud Run) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
+  description = "Run the ACME authorizing webhook on the RADIUS VMs (localhost systemd service) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
   type        = bool
   default     = false
 }
@@ -273,8 +275,14 @@ variable "webhook_allow_label" {
   default     = ""
 }
 
-variable "webhook_image" {
-  description = "Container image for the ACME authorizing webhook (built from webhook/Dockerfile and pushed to Artifact Registry / GCR)."
+variable "webhook_release_version" {
+  description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = ""
+  default     = "1.0.0"
+}
+
+variable "webhook_port" {
+  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls http://127.0.0.1:<port>/authorize)."
+  type        = number
+  default     = 9444
 }
