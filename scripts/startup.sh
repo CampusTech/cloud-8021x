@@ -1680,9 +1680,9 @@ chmod 640 /var/log/freeradius/radius-acct.json
 # ---------------------------------------------------------------------------
 echo "=== Configuring default virtual server ==="
 
-# Build post-auth section — single Python module handles both Jamf + UniFi
+# Build post-auth section — single Python module handles Jamf/Fleet + UniFi
 POSTAUTH_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
     POSTAUTH_MODULES="radius_lookups
         "
 fi
@@ -1703,7 +1703,7 @@ POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 
 # Build accounting section — enrichment + SQL + JSON log
 ACCT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
     ACCT_MODULES="radius_lookups
         "
 fi
