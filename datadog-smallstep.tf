@@ -414,8 +414,8 @@ resource "datadog_monitor" "stepca_cert_expiry" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep CA certificate nearing expiry"
   type    = "metric alert"
-  query   = "min(last_1h):min:smallstep.cert.days_until_expiry{service:smallstep-ca} by {host,cert} < 30"
-  message = "The {{cert.name}} certificate on {{host.name}} expires in under 30 days. Re-issue it (intermediate is KMS-backed; the SCEP decrypter is the shared software RSA key) before EAP-TLS breaks.${local.dd_notify}"
+  query   = "min(last_1h):min:smallstep.cert.days_until_expiry{service:smallstep-ca} by {host,cert} < 14"
+  message = "The {{cert.name}} certificate on {{host.name}} is nearing expiry (warning <30 days, critical <14 days). Re-issue it (intermediate is KMS-backed; the SCEP decrypter is the shared software RSA key) before EAP-TLS breaks.${local.dd_notify}"
   monitor_thresholds {
     critical = 14
     warning  = 30
