@@ -708,14 +708,20 @@ if [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both"
   RESTORED_SS_SRV=false
   if fetch_secret "radius-smallstep-server-cert" > "$SS_SRV_LEAF" 2>/dev/null && [ -s "$SS_SRV_LEAF" ] \
      && fetch_secret "radius-smallstep-server-key" > "$SS_SRV_KEY" 2>/dev/null && [ -s "$SS_SRV_KEY" ]; then
-    # Accept the cached cert only if it still has >30 days of validity AND chains
-    # to the CURRENT intermediate (a CA rotation would orphan an old leaf).
+    # Accept the cached pair only if the cert still has >30 days of validity, it
+    # chains to the CURRENT intermediate (a CA rotation would orphan an old
+    # leaf), AND the restored key matches the cert. The two secrets are read
+    # independently, so a partial earlier write could pair a cert with a key
+    # from a different issuance attempt — a mismatched key would otherwise be
+    # copied into FreeRADIUS and break server TLS after reboot.
     if openssl x509 -in "$SS_SRV_LEAF" -noout -checkend 2592000 >/dev/null 2>&1 \
-       && openssl verify -CAfile <(cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt") "$SS_SRV_LEAF" >/dev/null 2>&1; then
+       && openssl verify -CAfile <(cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt") "$SS_SRV_LEAF" >/dev/null 2>&1 \
+       && diff -q <(openssl x509 -in "$SS_SRV_LEAF" -pubkey -noout 2>/dev/null) \
+                  <(openssl pkey -in "$SS_SRV_KEY" -pubout 2>/dev/null) >/dev/null 2>&1; then
       RESTORED_SS_SRV=true
       echo "Restored Smallstep RADIUS server cert from Secret Manager."
     else
-      echo "Cached Smallstep server cert is expiring or no longer chains to the live CA — re-issuing."
+      echo "Cached Smallstep server cert is expiring, no longer chains to the live CA, or its key does not match — re-issuing."
     fi
   fi
 
@@ -733,9 +739,19 @@ if [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both"
       --no-password --insecure --force \
     && openssl verify -CAfile <(cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt") "$SS_SRV_LEAF" >/dev/null 2>&1 \
     && {
-      gcloud secrets versions add radius-smallstep-server-cert --data-file="$SS_SRV_LEAF" --project="$PROJECT_ID" 2>/dev/null || true
-      gcloud secrets versions add radius-smallstep-server-key  --data-file="$SS_SRV_KEY"  --project="$PROJECT_ID" 2>/dev/null || true
-      echo "Issued + cached a fresh Smallstep RADIUS server cert (CN=$SS_SRV_CN)."
+      # Persist both halves. Report cache success ONLY if BOTH writes land — a
+      # cert-without-key (or vice versa) would let a later boot restore a
+      # mismatched pair. The freshly-issued pair on disk is still used this boot
+      # regardless; the warning only flags that the cache is incomplete.
+      ss_cert_cached=false
+      ss_key_cached=false
+      gcloud secrets versions add radius-smallstep-server-cert --data-file="$SS_SRV_LEAF" --project="$PROJECT_ID" >/dev/null 2>&1 && ss_cert_cached=true
+      gcloud secrets versions add radius-smallstep-server-key  --data-file="$SS_SRV_KEY"  --project="$PROJECT_ID" >/dev/null 2>&1 && ss_key_cached=true
+      if [ "$ss_cert_cached" = true ] && [ "$ss_key_cached" = true ]; then
+        echo "Issued + cached a fresh Smallstep RADIUS server cert (CN=$SS_SRV_CN)."
+      else
+        echo "WARNING: issued a fresh Smallstep RADIUS server cert but failed to cache a complete cert/key pair to Secret Manager (cert=$ss_cert_cached key=$ss_key_cached); a future boot will re-issue." >&2
+      fi
     } || {
       # Fail-OPEN to the legacy cert: a server-cert issuance failure must not
       # take RADIUS down. Leave server-cert.pem as the legacy cert; migrated
