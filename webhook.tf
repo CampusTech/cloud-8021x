@@ -52,7 +52,7 @@ resource "google_secret_manager_secret_version" "webhook_signing_secret" {
 # enabled:
 #   ~/.fleetctl/fleetctl user create --name 'ACME Webhook' --api-only   # prints token
 #   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
-#     --project=campus-cloud-8021x-42e6 --replication-policy=automatic --data-file=-
+#     --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-
 # Terraform only REFERENCES it (data source) + grants the webhook SA access.
 data "google_secret_manager_secret" "fleet_api_token" {
   count     = local.acme_webhook_enabled

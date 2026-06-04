@@ -175,7 +175,7 @@ variable "datadog_app_key" {
 }
 
 variable "datadog_monitor_notify" {
-  description = "Datadog notification handle(s) appended to monitor messages (e.g. \"@slack-it-alerts @pagerduty-Campus\"). Empty = monitors still trigger in-app, just no routed notification."
+  description = "Datadog notification handle(s) appended to monitor messages (e.g. \"@slack-it-alerts @pagerduty-oncall\"). Empty = monitors still trigger in-app, just no routed notification."
   type        = string
   default     = ""
 }
@@ -209,6 +209,12 @@ variable "smallstep_ca_dns_name" {
     condition     = !var.enable_smallstep_ca || trimspace(var.smallstep_ca_dns_name) != ""
     error_message = "smallstep_ca_dns_name must be set when enable_smallstep_ca is true."
   }
+}
+
+variable "ca_name_prefix" {
+  description = "Common-name prefix for the self-hosted CA certificates. The CA mints \"<prefix> Root CA\", \"<prefix> Intermediate CA\", and \"<prefix> SCEP Decrypter\". Change for your org; the default preserves existing issued-cert CNs."
+  type        = string
+  default     = "CampusGroup Wi-Fi"
 }
 
 variable "smallstep_acme_provisioner_name" {

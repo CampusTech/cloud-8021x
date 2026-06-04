@@ -128,6 +128,7 @@ locals {
     # --- Smallstep step-ca ---
     smallstep_enabled         = var.enable_smallstep_ca
     radius_trust_mode         = var.radius_trust_mode
+    ca_name_prefix            = var.ca_name_prefix
     smallstep_ca_dns_name     = var.smallstep_ca_dns_name
     smallstep_acme_name       = var.smallstep_acme_provisioner_name
     smallstep_scep_name       = var.smallstep_scep_provisioner_name
@@ -137,8 +138,8 @@ locals {
     # (Cloud KMS keys are single-purpose; step-ca's SCEP decrypter must both
     # decrypt and sign). No KMS URI needed for it.
     smallstep_db_host = var.enable_smallstep_ca ? google_sql_database_instance.smallstep[0].private_ip_address : ""
-    smallstep_db_name         = "stepca"
-    smallstep_db_user         = "stepca"
+    smallstep_db_name = "stepca"
+    smallstep_db_user = "stepca"
   })
 }
 

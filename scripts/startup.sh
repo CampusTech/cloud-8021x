@@ -270,14 +270,14 @@ else
   # intermediate once at init and then sits cold; the live signer is the KMS key.
   # Fail fast: a masked failure here (broken KMS binding, bad invocation) would
   # otherwise publish partial state and start step-ca with a broken chain.
-  step certificate create "CampusGroup Wi-Fi Root CA" \
+  step certificate create "${ca_name_prefix} Root CA" \
     "$STEPPATH/certs/root_ca.crt" "$STEPPATH/secrets/root_ca_key" \
     --profile root-ca --kty EC --curve P-256 \
     --no-password --insecure --force
   # Intermediate: public key sourced from the Cloud KMS signing key; signed by
   # the local root. /dev/null for the key output because the private key lives in
   # Cloud KMS, never on disk.
-  step certificate create "CampusGroup Wi-Fi Intermediate CA" \
+  step certificate create "${ca_name_prefix} Intermediate CA" \
     "$STEPPATH/certs/intermediate_ca.crt" /dev/null \
     --profile intermediate-ca \
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
@@ -299,7 +299,7 @@ else
   #
   # Signed by the ROOT (root_ca.crt + root_ca_key), which still exists here. This
   # MUST run before the `rm -f "$STEPPATH/secrets/root_ca_key"` below.
-  step certificate create "CampusGroup Wi-Fi SCEP Decrypter" \
+  step certificate create "${ca_name_prefix} SCEP Decrypter" \
     "$STEPPATH/certs/scep_decrypter.crt" "$STEPPATH/secrets/scep_decrypter_key" \
     --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
     --kty RSA --size 2048 \
