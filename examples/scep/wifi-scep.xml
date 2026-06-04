@@ -1,0 +1,174 @@
+<!-- ===================================================================== -->
+<!-- Wi-Fi SCEP client certificate (Windows)                               -->
+<!--                                                                        -->
+<!-- TEMPLATE ONLY - not deployed by Terraform. Substitute the tokens       -->
+<!-- (see examples/README.md) and import into your MDM.                     -->
+<!--                                                                        -->
+<!-- Windows counterpart of the com.apple.security.acme payload in           -->
+<!-- examples/acme/wifi-acme.mobileconfig. Windows MDM has no ACME           -->
+<!-- enrollment CSP (ClientCertificateInstall = SCEP/PFX only), so Windows   -->
+<!-- enrolls the EAP-TLS client identity via SCEP against step-ca's SCEP     -->
+<!-- provisioner.                                                            -->
+<!--                                                                        -->
+<!-- Store: ./User (matches wifi-8021x.xml authMode=user). For pre-login     -->
+<!-- machine auth, move to ./Device and switch authMode to machine.          -->
+<!--                                                                        -->
+<!-- Tokens:                                                                 -->
+<!--   SCEP_SERVER_URL  -> step-ca SCEP provisioner URL                       -->
+<!--   SCEP_CHALLENGE   -> the SCEP shared challenge secret                   -->
+<!--   CA_THUMBPRINT    -> SHA-1 (40 hex) of the cert step-ca's SCEP          -->
+<!--                       GetCACert returns. For a single-CA step-ca SCEP    -->
+<!--                       responder this is the INTERMEDIATE CA (NOT the     -->
+<!--                       root); Windows matches CAThumbprint against that.  -->
+<!--   CLIENT_IDENTIFIER -> per-device CN (the hardware serial).              -->
+<!--   CERT_ID_GUID     -> a stable GUID naming the SCEP node (any GUID; keep -->
+<!--                       it constant across redeploys so the node is        -->
+<!--                       updated rather than duplicated).                   -->
+<!--                                                                        -->
+<!-- All nodes <Replace> (never <Add>): if your MDM wraps the profile in      -->
+<!-- <Atomic> and re-sends every sync, <Add> on an existing node returns      -->
+<!-- SyncML 418 -> Atomic 507 -> rollback -> no cert issued.                  -->
+<!-- ===================================================================== -->
+<Replace>
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">node</Format>
+    </Meta>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Retry count for SCEP installation. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/RetryCount</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>3</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Retry delay (minutes) for SCEP installation. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/RetryDelay</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>10</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Key usage: 0xA0 (digital signature + key encipherment). -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/KeyUsage</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>160</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Key length (2048, a typical SCEP provisioner minimum). -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/KeyLength</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>2048</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Hash algorithm. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/HashAlgorithm</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>SHA-2</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Subject. Per-device CN (hardware serial). -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/SubjectName</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>CN=CLIENT_IDENTIFIER</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Extended key usage - TLS client auth only (1.3.6.1.5.5.7.3.2), for EAP-TLS. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/EKUMapping</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>1.3.6.1.5.5.7.3.2</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- SCEP server URL - your step-ca SCEP provisioner endpoint. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/ServerURL</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>SCEP_SERVER_URL</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- SCEP challenge. A step-ca SCEP provisioner typically authenticates with -->
+  <!-- a single STATIC shared challenge (not a per-host secret). The SCEP path -->
+  <!-- is not webhook-gated, so there is no host-level authorization on        -->
+  <!-- Windows, unlike the macOS ACME path (gated by device-attest-01 + an     -->
+  <!-- authorizing webhook). Keep the challenge a secret in your MDM.          -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/Challenge</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>SCEP_CHALLENGE</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- CA thumbprint (SHA-1, 40 hex) of the intermediate CA that step-ca's     -->
+  <!-- SCEP GetCACert returns. Stable public value. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/CAThumbprint</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>CA_THUMBPRINT</Data>
+  </Item>
+</Replace>
+<Exec>
+  <!-- Trigger SCEP enrollment. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/Enroll</LocURI>
+    </Target>
+  </Item>
+</Exec>

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ===================================================================== -->
+<!-- macOS / iOS 802.1X (EAP-TLS) Wi-Fi via direct ACME - FLEET VARIANT     -->
+<!--                                                                        -->
+<!-- TEMPLATE ONLY - not deployed by Terraform. Same as                     -->
+<!-- examples/acme/wifi-acme.mobileconfig, but the per-device serial uses     -->
+<!-- Fleet's $FLEET_VAR_HOST_HARDWARE_SERIAL substitution (Fleet replaces it -->
+<!-- per host at profile delivery time). See examples/fleet/README.md.       -->
+<!--                                                                        -->
+<!-- Substitute: ACME_DIRECTORY_URL, SSID, CA_CERT_PEM (see README).         -->
+<!-- ===================================================================== -->
+<plist version="1">
+  <dict>
+    <key>PayloadUUID</key>
+    <string>59F7EC81-B4FE-452C-9445-04FDA0DDF438</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadOrganization</key>
+    <string>Example Org</string>
+    <key>PayloadIdentifier</key>
+    <string>59F7EC81-B4FE-452C-9445-04FDA0DDF438</string>
+    <key>PayloadDisplayName</key>
+    <string>Wi-Fi (ACME)</string>
+    <key>PayloadDescription</key>
+    <string/>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadEnabled</key>
+    <true/>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadContent</key>
+    <array>
+      <dict>
+        <key>PayloadUUID</key>
+        <string>85B8F47E-FD8C-4E1C-A8AB-3DB7584E32F4</string>
+        <key>PayloadType</key>
+        <string>com.apple.security.acme</string>
+        <key>PayloadOrganization</key>
+        <string>Example Org</string>
+        <key>PayloadIdentifier</key>
+        <string>85B8F47E-FD8C-4E1C-A8AB-3DB7584E32F4</string>
+        <key>PayloadDisplayName</key>
+        <string>Wi-Fi ACME Identity</string>
+        <key>PayloadVersion</key>
+        <integer>1</integer>
+        <key>PayloadEnabled</key>
+        <true/>
+        <key>DirectoryURL</key>
+        <string>ACME_DIRECTORY_URL</string>
+        <!-- Fleet substitutes $FLEET_VAR_HOST_HARDWARE_SERIAL with the host's
+             hardware serial at delivery time. This is the ACME order's
+             permanent-identifier. -->
+        <key>ClientIdentifier</key>
+        <string>$FLEET_VAR_HOST_HARDWARE_SERIAL</string>
+        <key>KeyType</key>
+        <string>ECSECPrimeRandom</string>
+        <key>KeySize</key>
+        <integer>256</integer>
+        <key>HardwareBound</key>
+        <true/>
+        <key>Attest</key>
+        <true/>
+        <key>KeyIsExtractable</key>
+        <false/>
+        <key>UsageFlags</key>
+        <integer>1</integer>
+        <key>ExtendedKeyUsage</key>
+        <array>
+          <string>1.3.6.1.5.5.7.3.2</string>
+        </array>
+        <!-- IMPORTANT: the CSR Subject CN MUST equal the order's
+             permanent-identifier (ClientIdentifier = the device serial), or
+             step-ca's ACME finalize rejects with badCSR: "CSR Subject Common
+             Name does not match identifiers exactly". So the CN is the serial,
+             not a human-readable label. -->
+        <key>Subject</key>
+        <array>
+          <array>
+            <array>
+              <string>CN</string>
+              <string>$FLEET_VAR_HOST_HARDWARE_SERIAL</string>
+            </array>
+          </array>
+        </array>
+      </dict>
+      <dict>
+        <key>PayloadUUID</key>
+        <string>F4B10AEC-C73D-46B6-8E2E-990934E81D34</string>
+        <key>PayloadType</key>
+        <string>com.apple.security.root</string>
+        <key>PayloadOrganization</key>
+        <string>Example Org</string>
+        <key>PayloadIdentifier</key>
+        <string>F4B10AEC-C73D-46B6-8E2E-990934E81D34</string>
+        <key>PayloadDisplayName</key>
+        <string>Wi-Fi Root CA</string>
+        <key>PayloadVersion</key>
+        <integer>1</integer>
+        <key>PayloadEnabled</key>
+        <true/>
+        <key>PayloadCertificateFileName</key>
+        <string>root-ca.cer</string>
+        <key>PayloadContent</key>
+        <!-- Replace REPLACE_WITH_BASE64_DER below with the base64 DER of your
+             root CA (CA_CERT_PEM): openssl x509 -in ca.pem -outform DER | base64 -->
+        <data>REPLACE_WITH_BASE64_DER</data>
+        <key>AllowAllAppsAccess</key>
+        <true/>
+        <key>KeyIsExtractable</key>
+        <false/>
+      </dict>
+      <dict>
+        <key>PayloadUUID</key>
+        <string>C524D1FE-BC37-41BE-BEAD-A5952BDD1EB8</string>
+        <key>PayloadType</key>
+        <string>com.apple.wifi.managed</string>
+        <key>PayloadOrganization</key>
+        <string>Example Org</string>
+        <key>PayloadIdentifier</key>
+        <string>C524D1FE-BC37-41BE-BEAD-A5952BDD1EB8</string>
+        <key>PayloadDisplayName</key>
+        <string>Wi-Fi (SSID)</string>
+        <key>PayloadVersion</key>
+        <integer>1</integer>
+        <key>PayloadEnabled</key>
+        <true/>
+        <key>HIDDEN_NETWORK</key>
+        <false/>
+        <key>EncryptionType</key>
+        <string>Any</string>
+        <key>PayloadCertificateUUID</key>
+        <string>85B8F47E-FD8C-4E1C-A8AB-3DB7584E32F4</string>
+        <key>AutoJoin</key>
+        <true/>
+        <key>CaptiveBypass</key>
+        <false/>
+        <key>ProxyType</key>
+        <string>None</string>
+        <key>DisableAssociationMACRandomization</key>
+        <true/>
+        <key>EAPClientConfiguration</key>
+        <dict>
+          <key>AcceptEAPTypes</key>
+          <array>
+            <integer>13</integer>
+          </array>
+          <key>UserName</key>
+          <string/>
+          <key>PayloadCertificateAnchorUUID</key>
+          <array>
+            <string>F4B10AEC-C73D-46B6-8E2E-990934E81D34</string>
+          </array>
+        </dict>
+        <key>SetupModes</key>
+        <array>
+          <string>System</string>
+        </array>
+        <key>SSID_STR</key>
+        <string>SSID</string>
+        <key>Interface</key>
+        <string>BuiltInWireless</string>
+      </dict>
+    </array>
+  </dict>
+</plist>
