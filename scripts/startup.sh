@@ -1126,10 +1126,11 @@ while True:
         break
     page += 1
 
-tmp = CACHE_FILE = "/etc/freeradius/3.0/fleet-device-cache.json"
-with open(tmp + ".tmp", "w") as f:
+cache_file = "/etc/freeradius/3.0/fleet-device-cache.json"
+tmp_file = cache_file + ".tmp"
+with open(tmp_file, "w") as f:
     json.dump(cache, f)
-os.replace(tmp + ".tmp", CACHE_FILE)
+os.replace(tmp_file, cache_file)  # atomic publish
 print(f"Fleet cache: {len(cache)} devices")
 PYEOF
 FLEETCACHEEOF
