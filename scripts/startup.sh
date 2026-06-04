@@ -678,6 +678,101 @@ if [ "${radius_trust_mode}" = "both" ] && [ -s "$CERT_DIR/smallstep-ca.pem" ]; t
   cat "$CERT_DIR/okta-ca.pem" "$CERT_DIR/smallstep-ca.pem" > "$CERT_DIR/trust-bundle.pem"
   chown freerad:freerad "$CERT_DIR/trust-bundle.pem" || true
 fi
+
+# ---------------------------------------------------------------------------
+# RADIUS SERVER certificate from Smallstep (server-trust direction).
+#
+# EAP-TLS is mutual: the trust-bundle above fixes the CLIENT->server direction
+# (RADIUS validating the device's cert). This block fixes the SERVER->client
+# direction — the cert RADIUS PRESENTS to the device.
+#
+# The Wi-Fi client profiles anchor server-trust on the Smallstep ROOT
+# (com.apple.security.root on macOS / TrustedRootCA on Windows). The legacy,
+# self-signed "<org> RADIUS CA" server cert generated above does NOT chain to
+# that root, so a migrated device aborts the handshake with
+# "certificate unknown" / errSSLXCertChainInvalid (-9807). When trusting
+# Smallstep, RADIUS must present a Smallstep-issued server cert so it chains
+# leaf -> intermediate (EE2ADD0F...) -> root (the anchor the device trusts).
+#
+# Cached in its OWN secrets (radius-smallstep-server-cert/-key), separate from
+# the legacy radius-server-cert, so the two paths never clobber each other and
+# rollback (radius_trust_mode=okta) cleanly reverts to the legacy cert.
+if [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both" ]; then
+  echo "=== Issuing Smallstep-signed RADIUS server certificate ==="
+  SS_SRV_CN="$SERVER_CERT_CN"
+  SS_SRV_LEAF=/tmp/ss-server-cert.pem
+  SS_SRV_KEY=/tmp/ss-server-key.pem
+
+  # Restore from Secret Manager if a valid, non-expired Smallstep server cert
+  # already exists (survives reboots without re-minting on every boot).
+  RESTORED_SS_SRV=false
+  if fetch_secret "radius-smallstep-server-cert" > "$SS_SRV_LEAF" 2>/dev/null && [ -s "$SS_SRV_LEAF" ] \
+     && fetch_secret "radius-smallstep-server-key" > "$SS_SRV_KEY" 2>/dev/null && [ -s "$SS_SRV_KEY" ]; then
+    # Accept the cached pair only if the cert still has >30 days of validity, it
+    # chains to the CURRENT intermediate (a CA rotation would orphan an old
+    # leaf), AND the restored key matches the cert. The two secrets are read
+    # independently, so a partial earlier write could pair a cert with a key
+    # from a different issuance attempt — a mismatched key would otherwise be
+    # copied into FreeRADIUS and break server TLS after reboot.
+    if openssl x509 -in "$SS_SRV_LEAF" -noout -checkend 2592000 >/dev/null 2>&1 \
+       && openssl verify -CAfile <(cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt") "$SS_SRV_LEAF" >/dev/null 2>&1 \
+       && diff -q <(openssl x509 -in "$SS_SRV_LEAF" -pubkey -noout 2>/dev/null) \
+                  <(openssl pkey -in "$SS_SRV_KEY" -pubout 2>/dev/null) >/dev/null 2>&1; then
+      RESTORED_SS_SRV=true
+      echo "Restored Smallstep RADIUS server cert from Secret Manager."
+    else
+      echo "Cached Smallstep server cert is expiring, no longer chains to the live CA, or its key does not match — re-issuing."
+    fi
+  fi
+
+  if [ "$RESTORED_SS_SRV" = false ]; then
+    # Issue a fresh leaf signed by the Smallstep intermediate (KMS-backed key).
+    # Use `step certificate create` with --ca/--ca-key (NOT `certificate sign`,
+    # whose --kms tries to resolve the issuer CERT via the KMS plugin and fails
+    # with "cloudkms: does not implement a CertificateManager").
+    step certificate create "$SS_SRV_CN" "$SS_SRV_LEAF" "$SS_SRV_KEY" \
+      --ca "$STEPPATH/certs/intermediate_ca.crt" \
+      --ca-key "${smallstep_signing_key_uri}" --kms cloudkms: \
+      --san "$SS_SRV_CN" \
+      --not-after 2160h \
+      --kty RSA --size 2048 \
+      --no-password --insecure --force \
+    && openssl verify -CAfile <(cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt") "$SS_SRV_LEAF" >/dev/null 2>&1 \
+    && {
+      # Persist both halves. Report cache success ONLY if BOTH writes land — a
+      # cert-without-key (or vice versa) would let a later boot restore a
+      # mismatched pair. The freshly-issued pair on disk is still used this boot
+      # regardless; the warning only flags that the cache is incomplete.
+      ss_cert_cached=false
+      ss_key_cached=false
+      gcloud secrets versions add radius-smallstep-server-cert --data-file="$SS_SRV_LEAF" --project="$PROJECT_ID" >/dev/null 2>&1 && ss_cert_cached=true
+      gcloud secrets versions add radius-smallstep-server-key  --data-file="$SS_SRV_KEY"  --project="$PROJECT_ID" >/dev/null 2>&1 && ss_key_cached=true
+      if [ "$ss_cert_cached" = true ] && [ "$ss_key_cached" = true ]; then
+        echo "Issued + cached a fresh Smallstep RADIUS server cert (CN=$SS_SRV_CN)."
+      else
+        echo "WARNING: issued a fresh Smallstep RADIUS server cert but failed to cache a complete cert/key pair to Secret Manager (cert=$ss_cert_cached key=$ss_key_cached); a future boot will re-issue." >&2
+      fi
+    } || {
+      # Fail-OPEN to the legacy cert: a server-cert issuance failure must not
+      # take RADIUS down. Leave server-cert.pem as the legacy cert; migrated
+      # devices stay broken (logged) but Okta-trust devices keep working.
+      echo "WARNING: Smallstep RADIUS server-cert issuance failed; keeping the legacy server cert. EAP-TLS server-trust for migrated devices will fail until resolved." >&2
+      SS_SRV_LEAF=""
+    }
+  fi
+
+  # Swap in the Smallstep server cert + key. certificate_file MUST be the full
+  # chain (leaf + intermediate) so the device can build leaf->intermediate->root.
+  if [ -n "$SS_SRV_LEAF" ] && [ -s "$SS_SRV_LEAF" ]; then
+    cat "$SS_SRV_LEAF" "$STEPPATH/certs/intermediate_ca.crt" > "$CERT_DIR/server-cert.pem"
+    cp "$SS_SRV_KEY" "$CERT_DIR/server-key.pem"
+    chown freerad:freerad "$CERT_DIR/server-cert.pem" "$CERT_DIR/server-key.pem"
+    chmod 644 "$CERT_DIR/server-cert.pem"
+    chmod 600 "$CERT_DIR/server-key.pem"
+    echo "RADIUS now presents a Smallstep-chained server cert (leaf + intermediate)."
+  fi
+  rm -f /tmp/ss-server-cert.pem /tmp/ss-server-key.pem
+fi
 %{ endif ~}
 
 # ---------------------------------------------------------------------------

@@ -137,6 +137,34 @@ resource "google_secret_manager_secret" "radius_server_cert" {
   depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
 }
 
+# Smallstep-issued RADIUS server cert + key (server-trust direction). Separate
+# from radius-server-cert/-key (the legacy self-signed pair) so the two never
+# clobber each other and radius_trust_mode=okta rolls back cleanly. Only created
+# when the Smallstep CA is enabled.
+resource "google_secret_manager_secret" "radius_smallstep_server_cert" {
+  count     = var.enable_smallstep_ca ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = "radius-smallstep-server-cert"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret" "radius_smallstep_server_key" {
+  count     = var.enable_smallstep_ca ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = "radius-smallstep-server-key"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
+}
+
 resource "google_secret_manager_secret" "radius_dh_params" {
   project   = google_project.this.project_id
   secret_id = "radius-dh-params"
