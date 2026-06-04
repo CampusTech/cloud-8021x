@@ -513,6 +513,31 @@ resource "datadog_logs_custom_pipeline" "stepca" {
     }
   }
 
+  # 1b. Explode the nested "response" attribute. step-ca's ACME/SCEP request
+  #     logs carry the API response body as a JSON *string* in "response"
+  #     (e.g. {"status":"valid","identifier":{"value":"JP65M2W205"},...}), which
+  #     Datadog otherwise stores as one opaque string. Parsing it surfaces
+  #     response.status, response.identifier.value, response.challenges, etc. as
+  #     facetable attributes. Non-JSON responses (some errors) simply don't match
+  #     this rule and pass through unchanged.
+  processor {
+    grok_parser {
+      name       = "Parse nested response JSON"
+      is_enabled = true
+      source     = "response"
+      grok {
+        support_rules = ""
+        # Named target ":response:json" nests the parsed keys under "response.*"
+        # (response.status, response.identifier.value, response.expires, ...).
+        # An UNNAMED %%{data::json} would merge to the event root and collide
+        # with the top-level "status" (HTTP status) field.
+        match_rules = <<-GROK
+          stepca_response %%{data:response:json}
+        GROK
+      }
+    }
+  }
+
   # 2. Official timestamp: prefer the JSON "time" field, else the text date.
   processor {
     date_remapper {
