@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.9" # cross-variable validation (radius_trust_mode vs enable_smallstep_ca)
 
   required_providers {
     google = {

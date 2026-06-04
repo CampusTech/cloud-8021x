@@ -71,7 +71,9 @@ resource "google_kms_crypto_key" "smallstep_scep_decrypter" {
   }
 }
 
-# Grant the RADIUS VM service account use of both keys.
+# Grant the RADIUS VM service account use of the SIGNING key (the live CA
+# signer). The scep-decrypter KMS key is deprecated/unused — the SCEP decrypter
+# is now a software RSA key in Secret Manager — so it gets NO IAM grants here.
 resource "google_kms_crypto_key_iam_member" "smallstep_signing_use" {
   count         = local.smallstep_enabled
   crypto_key_id = google_kms_crypto_key.smallstep_signing[0].id
@@ -79,24 +81,10 @@ resource "google_kms_crypto_key_iam_member" "smallstep_signing_use" {
   member        = "serviceAccount:${google_service_account.radius.email}"
 }
 
-resource "google_kms_crypto_key_iam_member" "smallstep_scep_decrypt" {
-  count         = local.smallstep_enabled
-  crypto_key_id = google_kms_crypto_key.smallstep_scep_decrypter[0].id
-  role          = "roles/cloudkms.cryptoKeyDecrypter"
-  member        = "serviceAccount:${google_service_account.radius.email}"
-}
-
-# Also need viewer on the public keys to fetch them for ca.json / CSR signing.
+# Viewer on the signing key's public key (fetched for ca.json / CSR signing).
 resource "google_kms_crypto_key_iam_member" "smallstep_signing_viewer" {
   count         = local.smallstep_enabled
   crypto_key_id = google_kms_crypto_key.smallstep_signing[0].id
-  role          = "roles/cloudkms.publicKeyViewer"
-  member        = "serviceAccount:${google_service_account.radius.email}"
-}
-
-resource "google_kms_crypto_key_iam_member" "smallstep_scep_viewer" {
-  count         = local.smallstep_enabled
-  crypto_key_id = google_kms_crypto_key.smallstep_scep_decrypter[0].id
   role          = "roles/cloudkms.publicKeyViewer"
   member        = "serviceAccount:${google_service_account.radius.email}"
 }
