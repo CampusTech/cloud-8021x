@@ -4,7 +4,7 @@ Terraform deployment for cloud-hosted FreeRADIUS servers on Google Cloud, provid
 
 ## Architecture
 
-```
+```text
 Device (EAP-TLS client cert)
   ├─ macOS/iOS — ACME device-attest-01 from the self-hosted step-ca
   └─ Windows   — SCEP from the self-hosted step-ca (or Okta SCEP, legacy)
