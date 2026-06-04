@@ -1,0 +1,185 @@
+<!-- ===================================================================== -->
+<!-- Wi-Fi SCEP client certificate (Windows) - FLEET VARIANT                -->
+<!--                                                                        -->
+<!-- TEMPLATE ONLY - not deployed by Terraform. Same as                     -->
+<!-- examples/scep/wifi-scep.xml, but uses Fleet's $FLEET_VAR_* SCEP-proxy   -->
+<!-- substitutions. See examples/fleet/README.md.                            -->
+<!--                                                                        -->
+<!-- Windows MDM has no ACME enrollment CSP (ClientCertificateInstall =      -->
+<!-- SCEP/PFX only), so Windows enrolls the EAP-TLS client identity via SCEP  -->
+<!-- through Fleet's custom SCEP proxy named "CANAME" (see                  -->
+<!-- org_settings.certificate_authorities.custom_scep_proxy in your Fleet     -->
+<!-- gitops config), which proxies to the self-hosted step-ca SCEP            -->
+<!-- provisioner.                                                            -->
+<!--                                                                        -->
+<!-- Replace CANAME below with your custom_scep_proxy CA name (it appears   -->
+<!-- inside the FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME and                  -->
+<!-- FLEET_VAR_CUSTOM_SCEP_CHALLENGE_CANAME variable names).                -->
+<!--                                                                        -->
+<!-- Store: ./User (matches wifi-8021x.xml authMode=user). For pre-login      -->
+<!-- machine auth, move to ./Device and switch authMode to machine.           -->
+<!--                                                                        -->
+<!-- Fleet substitutions (var names in THIS COMMENT written WITHOUT the       -->
+<!-- leading "$" - Fleet rejects a profile if a custom-SCEP proxy            -->
+<!-- URL/challenge variable literal appears more than once, including inside   -->
+<!-- comments):                                                              -->
+<!--   FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID         -> cert-ID node          -->
+<!--   FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME      -> SCEP URL              -->
+<!--   FLEET_VAR_CUSTOM_SCEP_CHALLENGE_CANAME      -> challenge             -->
+<!--   FLEET_VAR_SCEP_RENEWAL_ID  -> OU value, enables automatic renewal      -->
+<!--   $FLEET_VAR_HOST_HARDWARE_SERIAL -> per-device CN                       -->
+<!--                                                                        -->
+<!-- CAThumbprint is the SHA-1 (40 hex) of the cert step-ca's SCEP GetCACert  -->
+<!-- returns = the step-ca INTERMEDIATE CA (NOT the root). Windows matches    -->
+<!-- CAThumbprint against that. Stable public fingerprint, so it is inlined   -->
+<!-- as CA_THUMBPRINT (no secret needed).                                     -->
+<!--                                                                        -->
+<!-- All nodes <Replace> (never <Add>): Fleet wraps the profile in <Atomic>   -->
+<!-- and re-sends every gitops run; <Add> on an existing node -> SyncML 418   -->
+<!-- -> Atomic 507 -> rollback -> no cert issued.                             -->
+<!-- ===================================================================== -->
+<Replace>
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">node</Format>
+    </Meta>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Retry count for SCEP installation. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/RetryCount</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>3</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Retry delay (minutes) for SCEP installation. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/RetryDelay</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>10</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Key usage: 0xA0 (digital signature + key encipherment). -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/KeyUsage</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>160</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Key length (2048, matches a typical SCEP provisioner minimum). -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/KeyLength</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">int</Format>
+    </Meta>
+    <Data>2048</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Hash algorithm. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/HashAlgorithm</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>SHA-2</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Subject. Per-device CN (hardware serial); renewal ID in the OU so -->
+  <!-- Fleet can rotate the certificate automatically. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/SubjectName</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>CN=$FLEET_VAR_HOST_HARDWARE_SERIAL,OU=$FLEET_VAR_SCEP_RENEWAL_ID</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- Extended key usage - TLS client auth only (1.3.6.1.5.5.7.3.2), for EAP-TLS. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/EKUMapping</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>1.3.6.1.5.5.7.3.2</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- SCEP server URL - Fleet's custom SCEP proxy for the CANAME CA. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/ServerURL</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>$FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- SCEP challenge. The upstream step-ca SCEP provisioner authenticates      -->
+  <!-- with a SINGLE STATIC shared challenge (not a per-host secret). The SCEP  -->
+  <!-- path is not webhook-gated - there is no host-level authorization on      -->
+  <!-- Windows, unlike the macOS ACME path (gated by device-attest-01 + an      -->
+  <!-- authorizing webhook). Fleet's proxy substitutes the configured           -->
+  <!-- challenge into this node at deploy time.                                 -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/Challenge</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>$FLEET_VAR_CUSTOM_SCEP_CHALLENGE_CANAME</Data>
+  </Item>
+</Replace>
+<Replace>
+  <!-- CA thumbprint (SHA-1, 40 hex) of the intermediate CA that step-ca's      -->
+  <!-- SCEP GetCACert returns. Stable public value, inlined. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/CAThumbprint</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+    </Meta>
+    <Data>CA_THUMBPRINT</Data>
+  </Item>
+</Replace>
+<Exec>
+  <!-- Trigger SCEP enrollment. -->
+  <Item>
+    <Target>
+      <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/Enroll</LocURI>
+    </Target>
+  </Item>
+</Exec>

@@ -1,0 +1,41 @@
+<!-- ===================================================================== -->
+<!-- Wi-Fi root CA trust (Windows)                                          -->
+<!--                                                                        -->
+<!-- TEMPLATE ONLY - not deployed by Terraform. Substitute the tokens       -->
+<!-- (see examples/README.md) and import into your MDM.                     -->
+<!--                                                                        -->
+<!-- Installs your self-hosted step-ca root CA into the Local Machine        -->
+<!-- Trusted Root store (RootCATrustedCertificates CSP) so Windows can       -->
+<!-- validate the RADIUS server certificate chain when joining the 802.1X    -->
+<!-- (EAP-TLS) network, once RADIUS trusts your CA.                          -->
+<!--                                                                        -->
+<!-- Windows counterpart of the com.apple.security.root payload in           -->
+<!-- examples/acme/wifi-acme.mobileconfig - same certificate, same trust     -->
+<!-- purpose.                                                                -->
+<!--                                                                        -->
+<!-- Tokens:                                                                 -->
+<!--   ROOT_CA_THUMBPRINT -> the ROOT cert's SHA-1 thumbprint, no colons (40 -->
+<!--                     hex chars). This is the node name; the LocURI breaks -->
+<!--                     if it is wrong. Get it with:                         -->
+<!--                       openssl x509 -in ca.pem -noout -fingerprint -sha1  -->
+<!--   CA_CERT_PEM    -> base64 DER of the same cert, inlined in <Data>.      -->
+<!--                                                                        -->
+<!-- Keep ROOT_CA_THUMBPRINT in sync with <TrustedRootCA> in wifi-8021x.xml.  -->
+<!--                                                                        -->
+<!-- <Replace> (not <Add>) so re-enrollment / profile updates overwrite the   -->
+<!-- existing node instead of erroring when it already exists.               -->
+<!-- ===================================================================== -->
+<Replace>
+  <Item>
+    <Target>
+      <LocURI>./Device/Vendor/MSFT/RootCATrustedCertificates/Root/ROOT_CA_THUMBPRINT/EncodedCertificate</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+      <Type xmlns="syncml:metinf">text/plain</Type>
+    </Meta>
+    <!-- Replace the CA_CERT_PEM token with the base64 DER of your CA cert
+         (openssl x509 -in ca.pem -outform DER | base64) -->
+    <Data>CA_CERT_PEM</Data>
+  </Item>
+</Replace>

@@ -1,0 +1,135 @@
+<!-- ===================================================================== -->
+<!-- 802.1X Wi-Fi (EAP-TLS) - Windows                                       -->
+<!--                                                                        -->
+<!-- TEMPLATE ONLY - not deployed by Terraform. Substitute the tokens       -->
+<!-- (see examples/README.md) and import into your MDM.                     -->
+<!--                                                                        -->
+<!-- Windows counterpart of the com.apple.wifi.managed payload in            -->
+<!-- examples/acme/wifi-acme.mobileconfig. Joins the SSID using 802.1X       -->
+<!-- EAP-TLS (WPA2-AES).                                                     -->
+<!--                                                                        -->
+<!-- Client identity:  the SCEP certificate from wifi-scep.xml (user store,  -->
+<!--                   auto-selected via the CAHashList issuer filter below). -->
+<!-- Server trust:     your root CA, validated by SHA-1 thumbprint           -->
+<!--                   (installed by root-ca.xml). Keep <TrustedRootCA>       -->
+<!--                   in sync with that profile.                            -->
+<!--                                                                        -->
+<!-- authMode is "user": Windows connects after the user signs in (the SCEP  -->
+<!-- certificate lives in the user store). For pre-login machine             -->
+<!-- authentication, deploy a device-store SCEP certificate and switch        -->
+<!-- authMode to "machine".                                                  -->
+<!--                                                                        -->
+<!-- Tokens:                                                                 -->
+<!--   SSID           -> your network SSID (used in 3 places below: the       -->
+<!--                     LocURI node name, <name>, and the human-readable     -->
+<!--                     <name> inside <SSID>).                               -->
+<!--   SSID_HEX       -> the SSID name as ASCII hex (no spaces). E.g. the     -->
+<!--                     SSID "WiFi" -> 57694669. Compute per-byte:           -->
+<!--                       printf '%s' 'YourSSID' | xxd -p -u                 -->
+<!--   ROOT_CA_THUMBPRINT         -> SHA-1 of the ROOT CA, for RADIUS server  -->
+<!--                                 trust (<TrustedRootCA>).                  -->
+<!--   INTERMEDIATE_CA_THUMBPRINT -> SHA-1 of the INTERMEDIATE CA that signed  -->
+<!--                                 client certs, for client-cert            -->
+<!--                                 auto-selection (<IssuerHash>).           -->
+<!--                     Both are space-separated lowercase hex pairs (e.g.   -->
+<!--                     "e5 1b 7a 17 ... 3e 8c"). They are DISTINCT certs    -->
+<!--                     when you have a root + intermediate, so they use     -->
+<!--                     separate tokens - a global search-replace must NOT   -->
+<!--                     set them to the same value.                          -->
+<!--                                                                        -->
+<!-- The WLANProfile is XML-escaped because the Wi-Fi CSP expects the profile -->
+<!-- blob as a string in the WlanXml node.                                    -->
+<!--                                                                        -->
+<!-- <Replace> (not <Add>) so re-enrollment / profile updates overwrite the   -->
+<!-- existing WlanXml node instead of erroring when it already exists.         -->
+<!-- ===================================================================== -->
+<Replace>
+  <Item>
+    <Target>
+      <LocURI>./Device/Vendor/MSFT/WiFi/Profile/SSID/WlanXml</LocURI>
+    </Target>
+    <Meta>
+      <Format xmlns="syncml:metinf">chr</Format>
+      <Type xmlns="syncml:metinf">text/plain</Type>
+    </Meta>
+    <Data>&lt;?xml version="1.0"?&gt;
+&lt;WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1"&gt;
+	&lt;name&gt;SSID&lt;/name&gt;
+	&lt;SSIDConfig&gt;
+		&lt;SSID&gt;
+			&lt;hex&gt;SSID_HEX&lt;/hex&gt;
+			&lt;name&gt;SSID&lt;/name&gt;
+		&lt;/SSID&gt;
+		&lt;nonBroadcast&gt;false&lt;/nonBroadcast&gt;
+	&lt;/SSIDConfig&gt;
+	&lt;connectionType&gt;ESS&lt;/connectionType&gt;
+	&lt;connectionMode&gt;auto&lt;/connectionMode&gt;
+	&lt;MSM&gt;
+		&lt;security&gt;
+			&lt;authEncryption&gt;
+				&lt;authentication&gt;WPA2&lt;/authentication&gt;
+				&lt;encryption&gt;AES&lt;/encryption&gt;
+				&lt;useOneX&gt;true&lt;/useOneX&gt;
+			&lt;/authEncryption&gt;
+			&lt;PMKCacheMode&gt;enabled&lt;/PMKCacheMode&gt;
+			&lt;PMKCacheTTL&gt;720&lt;/PMKCacheTTL&gt;
+			&lt;PMKCacheSize&gt;128&lt;/PMKCacheSize&gt;
+			&lt;preAuthMode&gt;disabled&lt;/preAuthMode&gt;
+			&lt;OneX xmlns="http://www.microsoft.com/networking/OneX/v1"&gt;
+				&lt;authMode&gt;user&lt;/authMode&gt;
+				&lt;EAPConfig&gt;
+					&lt;EapHostConfig xmlns="http://www.microsoft.com/provisioning/EapHostConfig"&gt;
+						&lt;EapMethod&gt;
+							&lt;Type xmlns="http://www.microsoft.com/provisioning/EapCommon"&gt;13&lt;/Type&gt;
+							&lt;VendorId xmlns="http://www.microsoft.com/provisioning/EapCommon"&gt;0&lt;/VendorId&gt;
+							&lt;VendorType xmlns="http://www.microsoft.com/provisioning/EapCommon"&gt;0&lt;/VendorType&gt;
+							&lt;AuthorId xmlns="http://www.microsoft.com/provisioning/EapCommon"&gt;0&lt;/AuthorId&gt;
+						&lt;/EapMethod&gt;
+						&lt;Config xmlns="http://www.microsoft.com/provisioning/EapHostConfig"&gt;
+							&lt;Eap xmlns="http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1"&gt;
+								&lt;Type&gt;13&lt;/Type&gt;
+								&lt;EapType xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV1"&gt;
+									&lt;CredentialsSource&gt;
+										&lt;CertificateStore&gt;
+											&lt;SimpleCertSelection&gt;true&lt;/SimpleCertSelection&gt;
+										&lt;/CertificateStore&gt;
+									&lt;/CredentialsSource&gt;
+									&lt;ServerValidation&gt;
+										&lt;DisableUserPromptForServerValidation&gt;true&lt;/DisableUserPromptForServerValidation&gt;
+										&lt;ServerNames&gt;&lt;/ServerNames&gt;
+										&lt;TrustedRootCA&gt;ROOT_CA_THUMBPRINT&lt;/TrustedRootCA&gt;
+									&lt;/ServerValidation&gt;
+									&lt;DifferentUsername&gt;false&lt;/DifferentUsername&gt;
+									&lt;PerformServerValidation xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;true&lt;/PerformServerValidation&gt;
+									&lt;AcceptServerName xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;false&lt;/AcceptServerName&gt;
+									&lt;!-- Suppress the "choose a certificate" prompt: auto-select the
+									     client cert issued by your intermediate CA. CAHashList pins the
+									     issuer by SHA-1 thumbprint (the same intermediate as the SCEP
+									     CAThumbprint), so Windows silently picks the EAP-TLS cert from
+									     that issuer instead of prompting. The hash is space-separated
+									     lowercase hex pairs. --&gt;
+									&lt;TLSExtensions xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;
+										&lt;FilteringInfo xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV3"&gt;
+											&lt;CAHashList Enabled="true"&gt;
+												&lt;IssuerHash&gt;INTERMEDIATE_CA_THUMBPRINT&lt;/IssuerHash&gt;
+											&lt;/CAHashList&gt;
+										&lt;/FilteringInfo&gt;
+									&lt;/TLSExtensions&gt;
+								&lt;/EapType&gt;
+							&lt;/Eap&gt;
+						&lt;/Config&gt;
+					&lt;/EapHostConfig&gt;
+				&lt;/EAPConfig&gt;
+			&lt;/OneX&gt;
+		&lt;/security&gt;
+	&lt;/MSM&gt;
+	&lt;!-- Disable Windows per-SSID MAC randomization on this network. EAP-TLS
+	     auth is cert-based (not MAC), but a randomized MAC defeats per-device
+	     tracking, DHCP reservations, and RADIUS accounting by hardware
+	     address. Pin the hardware MAC for this network only. --&gt;
+	&lt;MacRandomization xmlns="http://www.microsoft.com/networking/WLAN/profile/v3"&gt;
+		&lt;enableRandomization&gt;false&lt;/enableRandomization&gt;
+	&lt;/MacRandomization&gt;
+&lt;/WLANProfile&gt;</Data>
+  </Item>
+</Replace>
