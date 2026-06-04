@@ -1636,7 +1636,7 @@ instances:
     tags:
       - "service:smallstep-ca"
     metrics:
-      - step_ca_uptime: uptime
+      - step_ca_uptime_seconds: uptime
       - step_ca_provisioner_signed_total: provisioner.signed
       - step_ca_provisioner_renewed_total: provisioner.renewed
       - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
