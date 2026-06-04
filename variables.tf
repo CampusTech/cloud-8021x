@@ -198,6 +198,10 @@ variable "radius_trust_mode" {
     condition     = contains(["okta", "both", "smallstep"], var.radius_trust_mode)
     error_message = "radius_trust_mode must be one of \"okta\", \"both\", or \"smallstep\"."
   }
+  validation {
+    condition     = var.radius_trust_mode == "okta" || var.enable_smallstep_ca
+    error_message = "radius_trust_mode \"both\" or \"smallstep\" requires enable_smallstep_ca = true (RADIUS can't trust a Smallstep CA that isn't deployed)."
+  }
 }
 
 variable "smallstep_ca_dns_name" {
