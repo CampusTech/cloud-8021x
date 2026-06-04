@@ -29,8 +29,8 @@ locals {
         name   = "host"
         prefix = "host"
         available_values = [
-          "radius-primary.${var.zone}.c.${google_project.this.project_id}.internal",
-          "radius-secondary.${var.secondary_zone}.c.${google_project.this.project_id}.internal"
+          "${google_compute_instance.radius.name}.${var.zone}.c.${google_project.this.project_id}.internal",
+          "${google_compute_instance.radius_secondary.name}.${var.secondary_zone}.c.${google_project.this.project_id}.internal"
         ]
         defaults = ["*"]
       }

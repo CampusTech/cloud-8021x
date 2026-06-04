@@ -1,0 +1,510 @@
+{
+  "description": "Self-hosted step-ca: issuance by provisioner (ACME/SCEP), KMS, health, cert expiry, and logs.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "available_values": [
+        "radius-primary",
+        "radius-secondary"
+      ],
+      "defaults": [
+        "*"
+      ],
+      "name": "host",
+      "prefix": "host"
+    }
+  ],
+  "title": "Smallstep step-ca (Wi-Fi CA)",
+  "widgets": [
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Overview",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "check": "http.can_connect",
+              "grouping": "cluster",
+              "tags": [
+                "instance:stepca-health"
+              ],
+              "title": "CA Health (/health)",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "check": "process.up",
+              "grouping": "cluster",
+              "tags": [
+                "process:step-ca"
+              ],
+              "title": "step-ca Process Up",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "precision": 0,
+              "requests": [
+                {
+                  "conditional_formats": [
+                    {
+                      "comparator": "<",
+                      "palette": "white_on_red",
+                      "value": 1
+                    },
+                    {
+                      "comparator": ">=",
+                      "palette": "white_on_green",
+                      "value": 1
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "last",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "min:smallstep.scep.decrypter_ready{$host}"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "SCEP Decrypter Ready",
+              "type": "query_value"
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "days",
+              "precision": 1,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "a / 86400"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "last",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "max:smallstep.uptime{$host}"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "CA Uptime (days)",
+              "type": "query_value"
+            }
+          },
+          {
+            "definition": {
+              "autoscale": true,
+              "precision": 1,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "a * 60"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "avg",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.provisioner.signed.count{$host}.as_rate()"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Certs Signed / min (all provisioners)",
+              "type": "query_value"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Issuance",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "alias": "signed",
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "show_legend": true,
+              "title": "Certificates Signed by Provisioner",
+              "type": "timeseries"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "line",
+                  "formulas": [
+                    {
+                      "alias": "renewed",
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.provisioner.renewed.count{$host} by {provisioner}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "style": {
+                    "palette": "cool"
+                  }
+                },
+                {
+                  "display_type": "line",
+                  "formulas": [
+                    {
+                      "alias": "rekeyed",
+                      "formula": "b"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "b",
+                      "query": "sum:smallstep.provisioner.rekeyed.count{$host} by {provisioner}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "style": {
+                    "palette": "warm"
+                  }
+                }
+              ],
+              "show_legend": true,
+              "title": "Renewed + Rekeyed by Provisioner",
+              "type": "timeseries"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "sum",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_count()"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Total Signed by Provisioner (window)",
+              "type": "toplist"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Webhook & KMS",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "alias": "authorized",
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.provisioner.webhook_authorized.count{$host} by {provisioner}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "show_legend": true,
+              "title": "ACME Authorizing Webhook Calls",
+              "type": "timeseries"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "line",
+                  "formulas": [
+                    {
+                      "alias": "signed",
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "sum:smallstep.kms.signed.count{$host}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "style": {
+                    "palette": "green"
+                  }
+                },
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "alias": "errors",
+                      "formula": "b"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "b",
+                      "query": "sum:smallstep.kms.errors.count{$host}.as_rate()"
+                    }
+                  ],
+                  "response_format": "timeseries",
+                  "style": {
+                    "palette": "red"
+                  }
+                }
+              ],
+              "show_legend": true,
+              "title": "KMS Signatures vs Errors",
+              "type": "timeseries"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Certificate Expiry",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "days",
+              "precision": 0,
+              "requests": [
+                {
+                  "conditional_formats": [
+                    {
+                      "comparator": "<",
+                      "palette": "white_on_red",
+                      "value": 30
+                    },
+                    {
+                      "comparator": "<",
+                      "palette": "white_on_yellow",
+                      "value": 90
+                    },
+                    {
+                      "comparator": ">=",
+                      "palette": "white_on_green",
+                      "value": 90
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "last",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "min:smallstep.cert.days_until_expiry{cert:intermediate,$host}"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Intermediate CA \u2014 days until expiry",
+              "type": "query_value"
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "days",
+              "precision": 0,
+              "requests": [
+                {
+                  "conditional_formats": [
+                    {
+                      "comparator": "<",
+                      "palette": "white_on_red",
+                      "value": 30
+                    },
+                    {
+                      "comparator": "<",
+                      "palette": "white_on_yellow",
+                      "value": 90
+                    },
+                    {
+                      "comparator": ">=",
+                      "palette": "white_on_green",
+                      "value": 90
+                    }
+                  ],
+                  "formulas": [
+                    {
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "last",
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "min:smallstep.cert.days_until_expiry{cert:decrypter,$host}"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "SCEP Decrypter \u2014 days until expiry",
+              "type": "query_value"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "line",
+                  "formulas": [
+                    {
+                      "formula": "a"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "data_source": "metrics",
+                      "name": "a",
+                      "query": "min:smallstep.cert.days_until_expiry{$host} by {cert}"
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "show_legend": true,
+              "title": "Cert expiry trend",
+              "type": "timeseries"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Logs",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "columns": [
+                "@timestamp",
+                "host",
+                "@status",
+                "@method",
+                "@path",
+                "@request-id"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "message_display": "inline",
+              "query": "service:smallstep-ca $host",
+              "sort": {
+                "column": "@timestamp",
+                "order": "desc"
+              },
+              "title": "step-ca request log",
+              "type": "log_stream"
+            }
+          },
+          {
+            "definition": {
+              "columns": [
+                "@timestamp",
+                "host",
+                "@level",
+                "@msg",
+                "@error"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "message_display": "expanded-md",
+              "query": "service:smallstep-ca $host (status:error OR status:warn OR @level:error OR @level:warn)",
+              "sort": {
+                "column": "@timestamp",
+                "order": "desc"
+              },
+              "title": "Errors / warnings",
+              "type": "log_stream"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

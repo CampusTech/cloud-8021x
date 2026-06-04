@@ -233,7 +233,7 @@ If you provide a Datadog Application key, Terraform creates a dashboard with aut
 
 3. `terraform apply` — creates the dashboard, outputs the URL via `terraform output datadog_dashboard_url`.
 
-**Without Terraform**: Import `datadog-dashboard.json` via Datadog UI → Dashboards → New Dashboard → Import Dashboard JSON.
+**Without Terraform**: Import `datadog-dashboard.json` (FreeRADIUS) and, if you run the Smallstep CA, `datadog-smallstep-dashboard.json` via Datadog UI → Dashboards → New Dashboard → Import Dashboard JSON.
 
 **Required: Create Log Facets**
 
@@ -305,7 +305,9 @@ sudo mysql radius -e "SELECT * FROM radacct ORDER BY radacctid DESC LIMIT 5"
 ├── compute.tf               # Service account, IAM, GCE instance
 ├── outputs.tf               # IP, SSH command, RADIUS config
 ├── datadog.tf               # Optional Datadog dashboard (requires datadog_app_key)
-├── datadog-dashboard.json   # Dashboard JSON export (importable via Datadog UI)
+├── datadog-smallstep.tf     # Smallstep CA dashboard + monitors + log pipeline
+├── datadog-dashboard.json            # FreeRADIUS dashboard JSON export (importable via Datadog UI)
+├── datadog-smallstep-dashboard.json  # Smallstep CA dashboard JSON export
 ├── terraform.tfvars.example # Example configuration with office IPs
 ├── ARCHITECTURE.md          # Technical deep-dive: auth flow, startup script, log enrichment
 ├── scripts/

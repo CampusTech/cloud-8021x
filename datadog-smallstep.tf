@@ -27,8 +27,8 @@ locals {
         name   = "host"
         prefix = "host"
         available_values = [
-          "radius-primary",
-          "radius-secondary"
+          google_compute_instance.radius.name,
+          google_compute_instance.radius_secondary.name
         ]
         defaults = ["*"]
       }
@@ -449,7 +449,7 @@ resource "datadog_monitor" "radius_down" {
   name    = "FreeRADIUS down (no server reporting up)"
   type    = "metric alert"
   query   = "max(last_5m):max:freeradius.up{*} + max:freeradius.freeradius_up{*} < 1"
-  message = "No FreeRADIUS server is reporting healthy — 802.1X Wi-Fi authentication is down network-wide. Check radius-primary and radius-secondary.${local.dd_notify}"
+  message = "No FreeRADIUS server is reporting healthy — 802.1X Wi-Fi authentication is down network-wide. Check ${google_compute_instance.radius.name} and ${google_compute_instance.radius_secondary.name}.${local.dd_notify}"
   monitor_thresholds {
     critical = 1
   }
