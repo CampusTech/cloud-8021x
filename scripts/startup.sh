@@ -262,36 +262,47 @@ ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-w
 # (IAM propagation lag at boot, Secret Manager 5xx) must NEVER trigger init.
 # History: a boot once ran init even though smallstep-intermediate-cert already
 # existed, because the SA's secretAccessor grant hadn't propagated yet and the
-# one-shot read returned non-zero. We now:
-#   1. Probe EXISTENCE with `gcloud secrets describe` (independent of versions).
-#   2. If it exists, RETRY the version read with backoff and ABORT (never init)
-#      if it stays unreadable — a present-but-unreadable CA is an error, not a
-#      signal to mint a new one.
-#   3. Only init when the secret genuinely does NOT exist.
-CA_SECRET_EXISTS=""
+# one-shot read returned non-zero.
+#
+# IMPORTANT: the existence probe must be VERSION-level, not container-level.
+# Terraform creates the secret CONTAINER (google_secret_manager_secret) but adds
+# NO version — the first init publishes the first version. So `gcloud secrets
+# describe` (container) succeeds on a brand-new deploy with zero versions, which
+# would make us treat an UN-initialized CA as "exists" and FATAL instead of
+# initializing (a fresh deploy could never bootstrap). We therefore key on an
+# ENABLED version:
+#   1. List enabled versions (retry on transient errors).
+#   2. >=1 enabled version  -> CA initialized: RESTORE (retry read; ABORT, never
+#      re-init, if it stays unreadable — a present-but-unreadable CA is an error,
+#      not a signal to mint a new one).
+#   3. 0 enabled versions   -> genuine first init.
+CA_HAS_VERSION=""
 for attempt in 1 2 3 4 5; do
-  if gcloud secrets describe smallstep-intermediate-cert --project="${project_id}" >/dev/null 2>&1; then
-    CA_SECRET_EXISTS=yes
+  LIST_OUT="$(gcloud secrets versions list smallstep-intermediate-cert \
+      --project="${project_id}" --filter='state=ENABLED' --format='value(name)' \
+      --limit=1 2>/tmp/ca-version-list.err)"
+  LIST_RC=$?
+  if [ "$LIST_RC" -eq 0 ]; then
+    if [ -n "$LIST_OUT" ]; then CA_HAS_VERSION=yes; else CA_HAS_VERSION=no; fi
     break
   fi
-  # describe can also fail transiently; distinguish NOT_FOUND from other errors.
-  DESCRIBE_ERR="$(gcloud secrets describe smallstep-intermediate-cert --project="${project_id}" 2>&1 || true)"
-  if echo "$DESCRIBE_ERR" | grep -qiE 'NOT_FOUND|was not found|does not exist'; then
-    CA_SECRET_EXISTS=no
+  # A NOT_FOUND on the container itself also means "no usable CA yet" -> init.
+  if grep -qiE 'NOT_FOUND|was not found|does not exist' /tmp/ca-version-list.err; then
+    CA_HAS_VERSION=no
     break
   fi
-  echo "smallstep-intermediate-cert existence probe failed (attempt $attempt), retrying: $DESCRIBE_ERR" >&2
+  echo "smallstep-intermediate-cert version probe failed (attempt $attempt), retrying: $(cat /tmp/ca-version-list.err)" >&2
   sleep $((attempt * 5))
 done
-if [ -z "$CA_SECRET_EXISTS" ]; then
-  echo "FATAL: could not determine whether smallstep-intermediate-cert exists after retries; refusing to re-init (would rotate the CA)" >&2
+if [ -z "$CA_HAS_VERSION" ]; then
+  echo "FATAL: could not determine whether smallstep-intermediate-cert has an enabled version after retries; refusing to re-init (would rotate the CA)" >&2
   exit 1
 fi
 
 RESTORE_CA=""
-if [ "$CA_SECRET_EXISTS" = "yes" ]; then
-  # The secret exists — the CA is already initialized. Read it with backoff;
-  # a persistent read failure is FATAL (we must not mint a competing CA).
+if [ "$CA_HAS_VERSION" = "yes" ]; then
+  # An enabled version exists — the CA is already initialized. Read it with
+  # backoff; a persistent read failure is FATAL (we must not mint a competing CA).
   for attempt in 1 2 3 4 5; do
     if gcloud secrets versions access latest --secret=smallstep-intermediate-cert --project="${project_id}" >"$STEPPATH/certs/intermediate_ca.crt" 2>/dev/null && [ -s "$STEPPATH/certs/intermediate_ca.crt" ]; then
       RESTORE_CA=yes
@@ -301,7 +312,7 @@ if [ "$CA_SECRET_EXISTS" = "yes" ]; then
     sleep $((attempt * 5))
   done
   if [ "$RESTORE_CA" != "yes" ]; then
-    echo "FATAL: smallstep-intermediate-cert exists but is unreadable after retries; refusing to re-init (would rotate the CA and break enrolled devices)" >&2
+    echo "FATAL: smallstep-intermediate-cert has an enabled version but is unreadable after retries; refusing to re-init (would rotate the CA and break enrolled devices)" >&2
     exit 1
   fi
 fi
