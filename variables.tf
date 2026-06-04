@@ -168,10 +168,16 @@ variable "datadog_site" {
 }
 
 variable "datadog_app_key" {
-  description = "Datadog Application key (enables Terraform-managed dashboard). Leave empty to skip. Scope to dashboards_read + dashboards_write only."
+  description = "Datadog Application key (enables Terraform-managed dashboards + monitors). Leave empty to skip. Scope to dashboards_read/write + monitors_read/write."
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "datadog_monitor_notify" {
+  description = "Datadog notification handle(s) appended to monitor messages (e.g. \"@slack-it-alerts @pagerduty-Campus\"). Empty = monitors still trigger in-app, just no routed notification."
+  type        = string
+  default     = ""
 }
 
 # -----------------------------------------------------------------------------
