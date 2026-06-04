@@ -1,25 +1,33 @@
 # cloud-8021x
 
-Terraform deployment for cloud-hosted FreeRADIUS servers on Google Cloud, providing RADIUS/802.1X authentication for WiFi networks using certificate-based EAP-TLS. Works with any RADIUS-capable access point (Ubiquiti UniFi, Cisco Meraki, etc.). Deploys primary and secondary VMs in separate availability zones for HA failover.
+Terraform deployment for cloud-hosted FreeRADIUS servers on Google Cloud, providing RADIUS/802.1X authentication for WiFi networks using certificate-based EAP-TLS. The recommended setup also stands up a co-located self-hosted [Smallstep](https://smallstep.com/docs/step-ca/) `step-ca` that issues the client certificates (ACME hardware-attestation for Apple, SCEP for Windows) — no external CA dependency or rate limits. Works with any RADIUS-capable access point (Ubiquiti UniFi, Cisco Meraki, etc.) and deploys primary + secondary VMs in separate zones for HA failover.
 
 ## Architecture
 
 ```
-MacBook (Okta SCEP cert via Jamf)
-  → WiFi AP (WPA2/WPA3 Enterprise — UniFi, Meraki, etc.)
-    → RADIUS (UDP 1812/1813) over internet
-      → Primary:   FreeRADIUS on GCE VM (us-east4-a, static public IP)
-      → Secondary: FreeRADIUS on GCE VM (us-east4-c, static public IP)
-        → EAP-TLS: validates client cert against Okta Intermediate CA
-        → Access-Accept → WiFi connected
+Device (EAP-TLS client cert)
+  ├─ macOS/iOS — ACME device-attest-01 from the self-hosted step-ca
+  └─ Windows   — SCEP from the self-hosted step-ca (or Okta SCEP, legacy)
+      → WiFi AP (WPA2/WPA3 Enterprise — UniFi, Meraki, etc.)
+        → RADIUS (UDP 1812/1813) over internet
+          → Primary:   FreeRADIUS on GCE VM (us-east4-a, static public IP)
+          → Secondary: FreeRADIUS on GCE VM (us-east4-c, static public IP)
+            → EAP-TLS: validates client cert against the configured CA(s)
+            → Access-Accept → WiFi connected
+
+Self-hosted CA (when enable_smallstep_ca = true), co-located on the RADIUS VMs:
+  GCLB (HTTPS, Cloud Armor) → step-ca :8443 (ACME + SCEP)
+    ├─ KMS-backed intermediate (Cloud KMS HSM signing key)
+    └─ ACME HA state in Cloud SQL (Postgres)
 ```
 
-- **Authentication**: EAP-TLS only (no passwords). Client certificates issued by Okta Managed Attestation via Jamf SCEP.
-- **Trust model**: Two independent CA chains. Server cert signed by a self-signed RADIUS CA (generated on first boot). Client certs signed by Okta Intermediate CA.
+- **Authentication**: EAP-TLS only (no passwords). Client certificates come from the self-hosted step-ca (ACME for Apple, SCEP for Windows); Okta Managed Attestation SCEP remains supported for existing/migrating deployments.
+- **Trust model**: Independent server and client chains. The RADIUS server cert is signed by a self-signed RADIUS CA (generated on first boot, persisted in Secret Manager). Client certs are validated against the CA selected by `radius_trust_mode` — `smallstep`, `okta`, or `both` (transitional dual-trust for migration).
+- **Self-hosted CA** (optional, recommended): step-ca runs on the RADIUS VMs behind a global HTTPS load balancer + Cloud Armor, with a Cloud KMS–backed intermediate and Cloud SQL for ACME HA state. CA material persists in Secret Manager and is restored on reboot/rebuild (never re-minted on a transient failure).
 - **Accounting**: FreeRADIUS native SQL module writes to local MariaDB (`radacct` table).
-- **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server certs, Okta CA, Datadog API key).
-- **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. FreeRADIUS Prometheus exporter for RADIUS-specific metrics. Structured JSON auth and accounting logs via FreeRADIUS `linelog`.
-- **Log enrichment**: Optional MDM (Jamf **or** Fleet) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs. MDM data is served from a local cache (no API calls on the auth path).
+- **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server + CA certs, Datadog API key, Fleet token). No secrets on disk at rest.
+- **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. Prometheus exporters for FreeRADIUS and step-ca metrics. Structured JSON auth/accounting logs via FreeRADIUS `linelog`, plus step-ca request logs (with real client IP via `X-Forwarded-For`).
+- **Log enrichment**: Optional MDM (Fleet **or** Jamf) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs, resolved by serial from a local cache (no API calls on the auth path).
 
 ## Client Certificate Issuance: Two Trust Modes
 
