@@ -263,6 +263,11 @@ variable "fleet_api_base_url" {
   description = "Base URL of the Fleet server the webhook queries (e.g. https://fleet.example.com)."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !var.enable_acme_webhook || trimspace(var.fleet_api_base_url) != ""
+    error_message = "fleet_api_base_url must be set when enable_acme_webhook is true."
+  }
 }
 
 # NOTE: the Fleet API token is NOT a Terraform variable — it is a standing

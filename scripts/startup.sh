@@ -553,6 +553,10 @@ for i in $(seq 1 15); do
   sleep 1
 done
 echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
+# step-ca was started before this block; restart it now that the webhook is
+# reachable so ACME orders arriving during the bootstrap window aren't rejected
+# fail-closed on a connection-refused to the authorize endpoint.
+systemctl restart step-ca
 %{ endif ~}
 
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.

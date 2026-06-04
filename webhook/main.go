@@ -55,8 +55,10 @@ func serveCmd() *cobra.Command {
 			h := server.New(cfg.SigningSecret, server.DeciderFunc(func(serial string) bool {
 				return authz.Decide(context.Background(), serial)
 			}))
+			// Bind to loopback only — step-ca calls it over localhost on the
+			// same VM. Defense-in-depth in case host firewall rules ever drift.
 			logrus.WithField("port", cfg.Port).Info("authorizing webhook listening")
-			return http.ListenAndServe(":"+cfg.Port, h)
+			return http.ListenAndServe("127.0.0.1:"+cfg.Port, h)
 		},
 	}
 }
