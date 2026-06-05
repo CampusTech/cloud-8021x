@@ -89,6 +89,41 @@ resource "google_kms_crypto_key_iam_member" "smallstep_signing_viewer" {
   member        = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# RSA CA signing key — backs the SECOND step-ca instance's intermediate, which
+# issues SCEP leaves for Windows + non-ADE/DEP Macs. Windows native SCEP and
+# Apple SCEP both require an RSA-signed leaf; the EC key (above) cannot serve
+# them. ASYMMETRIC_SIGN purpose (issuing only — distinct from the single-purpose
+# ASYMMETRIC_DECRYPT scep-decrypter key). HSM for FIPS posture, matching ca-signing.
+resource "google_kms_crypto_key" "smallstep_signing_rsa" {
+  count    = local.smallstep_enabled
+  name     = "ca-signing-rsa"
+  key_ring = google_kms_key_ring.smallstep[0].id
+  purpose  = "ASYMMETRIC_SIGN"
+
+  version_template {
+    algorithm        = "RSA_SIGN_PKCS1_2048_SHA256"
+    protection_level = "HSM"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "smallstep_signing_rsa_use" {
+  count         = local.smallstep_enabled
+  crypto_key_id = google_kms_crypto_key.smallstep_signing_rsa[0].id
+  role          = "roles/cloudkms.signerVerifier"
+  member        = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_kms_crypto_key_iam_member" "smallstep_signing_rsa_viewer" {
+  count         = local.smallstep_enabled
+  crypto_key_id = google_kms_crypto_key.smallstep_signing_rsa[0].id
+  role          = "roles/cloudkms.publicKeyViewer"
+  member        = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Cloud SQL Postgres for ACME state (shared by both step-ca instances) ----
 
 resource "random_password" "smallstep_db" {
