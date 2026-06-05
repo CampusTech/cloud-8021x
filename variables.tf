@@ -238,6 +238,23 @@ variable "smallstep_scep_provisioner_name" {
   }
 }
 
+variable "smallstep_ca_rsa_dns_name" {
+  description = "DNS name for the RSA SCEP step-ca instance (instance #2). A record must point at smallstep_rsa_lb_ip. Required when enable_smallstep_ca is true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.enable_smallstep_ca || trimspace(var.smallstep_ca_rsa_dns_name) != ""
+    error_message = "smallstep_ca_rsa_dns_name must be set when enable_smallstep_ca is true."
+  }
+}
+
+variable "smallstep_scep_rsa_provisioner_name" {
+  description = "Name of the SCEP provisioner on the RSA step-ca instance (path segment in the SCEP URL)."
+  type        = string
+  default     = "wifi-scep"
+}
+
 variable "acme_authorizing_webhook_url" {
   description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback http://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty = ACME provisioner configured but no device should enroll yet."
   type        = string
@@ -299,7 +316,7 @@ variable "webhook_allow_label" {
 variable "webhook_release_version" {
   description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = "1.0.0"
+  default     = "1.1.0"
 }
 
 variable "webhook_port" {

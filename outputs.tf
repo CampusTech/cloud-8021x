@@ -53,6 +53,16 @@ output "smallstep_scep_url" {
   value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_dns_name}/scep/${var.smallstep_scep_provisioner_name}" : ""
 }
 
+output "smallstep_scep_rsa_url" {
+  description = "RSA SCEP enrollment URL (Windows + non-ADE Macs point here). Empty if disabled."
+  value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_rsa_dns_name}/scep/${var.smallstep_scep_rsa_provisioner_name}" : ""
+}
+
+output "smallstep_rsa_lb_ip" {
+  description = "Public IP of the RSA step-ca load balancer; point smallstep_ca_rsa_dns_name at this A record. Empty if disabled."
+  value       = var.enable_smallstep_ca ? google_compute_global_address.smallstep_rsa_lb[0].address : ""
+}
+
 output "smallstep_ca_cert_secret_id" {
   description = "Secret Manager secret holding the Smallstep CA root cert PEM (for RADIUS trust + MDM root payloads). Empty if disabled."
   value       = var.enable_smallstep_ca ? google_secret_manager_secret.smallstep_ca_cert[0].secret_id : ""

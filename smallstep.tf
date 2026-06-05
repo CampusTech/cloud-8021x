@@ -89,6 +89,41 @@ resource "google_kms_crypto_key_iam_member" "smallstep_signing_viewer" {
   member        = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# RSA CA signing key — backs the SECOND step-ca instance's intermediate, which
+# issues SCEP leaves for Windows + non-ADE/DEP Macs. Windows native SCEP and
+# Apple SCEP both require an RSA-signed leaf; the EC key (above) cannot serve
+# them. ASYMMETRIC_SIGN purpose (issuing only — distinct from the single-purpose
+# ASYMMETRIC_DECRYPT scep-decrypter key). HSM for FIPS posture, matching ca-signing.
+resource "google_kms_crypto_key" "smallstep_signing_rsa" {
+  count    = local.smallstep_enabled
+  name     = "ca-signing-rsa"
+  key_ring = google_kms_key_ring.smallstep[0].id
+  purpose  = "ASYMMETRIC_SIGN"
+
+  version_template {
+    algorithm        = "RSA_SIGN_PKCS1_2048_SHA256"
+    protection_level = "HSM"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "smallstep_signing_rsa_use" {
+  count         = local.smallstep_enabled
+  crypto_key_id = google_kms_crypto_key.smallstep_signing_rsa[0].id
+  role          = "roles/cloudkms.signerVerifier"
+  member        = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_kms_crypto_key_iam_member" "smallstep_signing_rsa_viewer" {
+  count         = local.smallstep_enabled
+  crypto_key_id = google_kms_crypto_key.smallstep_signing_rsa[0].id
+  role          = "roles/cloudkms.publicKeyViewer"
+  member        = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Cloud SQL Postgres for ACME state (shared by both step-ca instances) ----
 
 resource "random_password" "smallstep_db" {
@@ -150,6 +185,13 @@ resource "google_sql_database" "smallstep" {
   count    = local.smallstep_enabled
   project  = google_project.this.project_id
   name     = "stepca"
+  instance = google_sql_database_instance.smallstep[0].name
+}
+
+resource "google_sql_database" "smallstep_rsa" {
+  count    = local.smallstep_enabled
+  project  = google_project.this.project_id
+  name     = "stepca_rsa"
   instance = google_sql_database_instance.smallstep[0].name
 }
 
@@ -343,6 +385,116 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# --- RSA CA (instance #2) persisted artifacts. Same model as instance #1:
+#     created empty here, populated by the first VM at RSA-CA init, restored by
+#     the 2nd VM / any reboot. smallstep-rsa-intermediate-cert is the readiness
+#     marker (published LAST). -------------------------------------------------
+# RSA CA self-signed ROOT cert. The RSA instance has its OWN root (not the EC
+# root): the EC root's private key is discarded after EC init and is not
+# persisted, and the EC intermediate is pathlen:0 (can't sign a sub-CA), so the
+# RSA intermediate cannot chain under the existing EC chain. The RSA root is
+# self-signed at RSA init and persisted here for HA restore; RADIUS trusts BOTH
+# roots (EC for ACME Macs, RSA for SCEP Windows/non-ADE Macs).
+resource "google_secret_manager_secret" "smallstep_rsa_root_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-root-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_root_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_root_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_root_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_root_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret" "smallstep_rsa_intermediate_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-intermediate-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_intermediate_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_intermediate_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_intermediate_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_intermediate_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret" "smallstep_rsa_scep_decrypter_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-scep-decrypter-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret" "smallstep_rsa_scep_decrypter_key" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-scep-decrypter-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_key_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_key[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_key_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Firewall: step-ca HTTPS listener reachable by the GCP load-balancer +
 #     health-check ranges (the public front door is the GCLB in Task 5). ------
 resource "google_compute_firewall" "allow_stepca_lb" {
@@ -388,6 +540,13 @@ resource "google_compute_instance_group" "smallstep_primary" {
     name = "stepca"
     port = 8443
   }
+  # RSA step-ca (instance #2) is served from the SAME instance group on a second
+  # named port — GCP forbids a VM being in two load-balanced instance groups, so
+  # the RSA backend reuses this group rather than its own.
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
+  }
 }
 
 resource "google_compute_instance_group" "smallstep_secondary" {
@@ -399,6 +558,11 @@ resource "google_compute_instance_group" "smallstep_secondary" {
   named_port {
     name = "stepca"
     port = 8443
+  }
+  # RSA step-ca (instance #2) — second named port on the shared group (see primary).
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
   }
 }
 
@@ -493,4 +657,92 @@ resource "google_compute_global_forwarding_rule" "smallstep" {
   ip_address            = google_compute_global_address.smallstep_lb[0].address
   port_range            = "443"
   target                = google_compute_target_https_proxy.smallstep[0].id
+}
+
+# --- RSA step-ca (instance #2): firewall + external HTTPS LB on :8444 ----------
+resource "google_compute_firewall" "allow_stepca_rsa_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "allow-stepca-rsa-lb"
+  network = google_compute_network.radius.id
+  allow {
+    protocol = "tcp"
+    ports    = ["8444"]
+  }
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  target_tags   = ["radius-server"]
+}
+
+resource "google_compute_global_address" "smallstep_rsa_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-lb-ip"
+}
+
+resource "google_compute_managed_ssl_certificate" "smallstep_rsa" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-cert"
+  managed {
+    domains = [var.smallstep_ca_rsa_dns_name]
+  }
+}
+
+# NOTE: the RSA backend reuses the EXISTING smallstep_primary/secondary instance
+# groups (via their second "stepca-rsa" named port on 8444). GCP forbids a VM in
+# two load-balanced instance groups, so there are intentionally no dedicated RSA
+# instance groups.
+
+resource "google_compute_health_check" "smallstep_rsa" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-hc"
+  https_health_check {
+    port         = 8444
+    request_path = "/health"
+  }
+}
+
+resource "google_compute_backend_service" "smallstep_rsa" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-rsa-backend"
+  protocol              = "HTTPS"
+  port_name             = "stepca-rsa"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = 30
+  health_checks         = [google_compute_health_check.smallstep_rsa[0].id]
+  security_policy       = google_compute_security_policy.smallstep[0].id
+
+  backend {
+    group = google_compute_instance_group.smallstep_primary[0].id
+  }
+  backend {
+    group = google_compute_instance_group.smallstep_secondary[0].id
+  }
+}
+
+resource "google_compute_url_map" "smallstep_rsa" {
+  count           = local.smallstep_enabled
+  project         = google_project.this.project_id
+  name            = "smallstep-ca-rsa-urlmap"
+  default_service = google_compute_backend_service.smallstep_rsa[0].id
+}
+
+resource "google_compute_target_https_proxy" "smallstep_rsa" {
+  count            = local.smallstep_enabled
+  project          = google_project.this.project_id
+  name             = "smallstep-ca-rsa-https-proxy"
+  url_map          = google_compute_url_map.smallstep_rsa[0].id
+  ssl_certificates = [google_compute_managed_ssl_certificate.smallstep_rsa[0].id]
+}
+
+resource "google_compute_global_forwarding_rule" "smallstep_rsa" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-rsa-fr"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  ip_address            = google_compute_global_address.smallstep_rsa_lb[0].address
+  port_range            = "443"
+  target                = google_compute_target_https_proxy.smallstep_rsa[0].id
 }

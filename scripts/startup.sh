@@ -430,6 +430,115 @@ else
   rm -f "$STEPPATH/secrets/root_ca_key"
 fi
 
+# =============================================================================
+# RSA CA (step-ca instance #2) — SELF-CONTAINED, independent of the EC CA above.
+# Windows native SCEP + Apple SCEP require an RSA-signed leaf; the EC chain can't
+# serve them. This CA has its OWN self-signed RSA root (the EC root key is
+# discarded and the EC intermediate is pathlen:0, so the RSA intermediate cannot
+# chain under the EC chain). RADIUS trusts BOTH roots. Its own init-or-restore
+# decision keys on smallstep-rsa-intermediate-cert (the readiness marker).
+# =============================================================================
+%{ if smallstep_enabled ~}
+mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
+
+# Probe: does the RSA CA already exist? (enabled version of the readiness marker)
+RSA_CA_HAS_VERSION=""
+for attempt in 1 2 3 4 5; do
+  RSA_LIST_OUT="$(gcloud secrets versions list smallstep-rsa-intermediate-cert \
+      --project="${project_id}" --filter='state=ENABLED' --format='value(name)' \
+      --limit=1 2>/tmp/rsa-ca-version-list.err)"
+  RSA_LIST_RC=$?
+  if [ "$RSA_LIST_RC" -eq 0 ]; then
+    if [ -n "$RSA_LIST_OUT" ]; then RSA_CA_HAS_VERSION=yes; else RSA_CA_HAS_VERSION=no; fi
+    break
+  fi
+  if grep -qiE 'NOT_FOUND|was not found|does not exist' /tmp/rsa-ca-version-list.err; then
+    RSA_CA_HAS_VERSION=no
+    break
+  fi
+  echo "smallstep-rsa-intermediate-cert version probe failed (attempt $attempt), retrying: $(cat /tmp/rsa-ca-version-list.err)" >&2
+  sleep $((attempt * 5))
+done
+if [ -z "$RSA_CA_HAS_VERSION" ]; then
+  echo "FATAL: could not determine whether smallstep-rsa-intermediate-cert has an enabled version after retries; refusing to proceed" >&2
+  exit 1
+fi
+
+RSA_RESTORE_CA=""
+if [ "$RSA_CA_HAS_VERSION" = "yes" ]; then
+  for attempt in 1 2 3 4 5; do
+    if gcloud secrets versions access latest --secret=smallstep-rsa-intermediate-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/intermediate_ca.crt" 2>/dev/null && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ]; then
+      RSA_RESTORE_CA=yes
+      break
+    fi
+    echo "smallstep-rsa-intermediate-cert read failed (attempt $attempt), retrying..." >&2
+    sleep $((attempt * 5))
+  done
+  if [ "$RSA_RESTORE_CA" != "yes" ]; then
+    echo "FATAL: smallstep-rsa-intermediate-cert has an enabled version but is unreadable after retries; refusing to re-init (would rotate the RSA CA)" >&2
+    exit 1
+  fi
+fi
+
+if [ "$RSA_RESTORE_CA" = "yes" ]; then
+  echo "Existing RSA CA found — restoring RSA root + intermediate + SCEP decrypter."
+  gcloud secrets versions access latest --secret=smallstep-rsa-root-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/root_ca.crt"
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-key --project="${project_id}" >"/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
+  [ -s "/etc/step-ca-rsa/certs/root_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: RSA CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
+    exit 1
+  }
+else
+  echo "Initializing new RSA CA (self-signed RSA root + KMS-backed RSA intermediate)..."
+  # Self-signed RSA root. The root key signs the RSA intermediate once here, then
+  # is discarded (like the EC root). Only the root CERT is persisted.
+  step certificate create "${ca_name_prefix} RSA Root CA" \
+    "/etc/step-ca-rsa/certs/root_ca.crt" "/etc/step-ca-rsa/secrets/root_ca_key" \
+    --profile root-ca --kty RSA --size 4096 \
+    --not-after 175200h --no-password --insecure --force
+  # RSA intermediate: public key from the Cloud KMS RSA signing key; signed by the
+  # local RSA root. /dev/null for the key (private key lives in Cloud KMS).
+  step certificate create "${ca_name_prefix} RSA Intermediate CA" \
+    "/etc/step-ca-rsa/certs/intermediate_ca.crt" /dev/null \
+    --profile intermediate-ca \
+    --ca "/etc/step-ca-rsa/certs/root_ca.crt" --ca-key "/etc/step-ca-rsa/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_rsa_signing_key_uri}" \
+    --no-password --insecure --force
+  # RSA SCEP decrypter: dual-purpose software RSA key, signed BY the RSA
+  # intermediate (its key is in Cloud KMS -> --kms cloudkms: --ca-key <rsa-uri>).
+  step certificate create "${ca_name_prefix} RSA SCEP Decrypter" \
+    "/etc/step-ca-rsa/certs/scep_decrypter.crt" "/etc/step-ca-rsa/secrets/scep_decrypter_key" \
+    --ca "/etc/step-ca-rsa/certs/intermediate_ca.crt" \
+    --kms "cloudkms:" --ca-key "${smallstep_rsa_signing_key_uri}" \
+    --kty RSA --size 2048 \
+    --not-after 87600h --no-password --insecure --force
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
+  # Gate: all RSA artifacts present before publishing.
+  [ -s "/etc/step-ca-rsa/certs/root_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: RSA CA bootstrap did not produce all certificates/keys" >&2
+    exit 1
+  }
+  # Publish. Readiness marker smallstep-rsa-intermediate-cert LAST.
+  gcloud secrets versions add smallstep-rsa-root-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/root_ca.crt"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-key --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  gcloud secrets versions add smallstep-rsa-intermediate-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/intermediate_ca.crt"
+  # Discard the RSA root key — the KMS key (intermediate signer) is the live signer.
+  rm -f "/etc/step-ca-rsa/secrets/root_ca_key"
+fi
+
+# Append the RSA intermediate + RSA root to the RADIUS client-cert trust bundle
+# (the EC block already wrote the EC chain to /tmp/smallstep-ca.crt). RADIUS now
+# trusts BOTH chains.
+cat "/etc/step-ca-rsa/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/root_ca.crt" >> /tmp/smallstep-ca.crt
+%{ endif ~}
+
 # Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
 # and SCEP provisioners.
 #
@@ -442,6 +551,21 @@ fi
 # step-ca's SCEP provisioner wants decrypterCertificate + decrypterKeyPEM as
 # base64-encoded PEM. The decrypter key is the shared software RSA key restored
 # from / generated into Secret Manager above.
+#
+# excludeIntermediate=true: by default step-ca's GetCACert returns BOTH the RSA
+# decrypter (RA) cert AND the EC intermediate (scep/authority.go
+# GetCACertificates: appends a.intermediates unless ShouldIncludeIntermediateInChain
+# is false). The Windows native SCEP CSP (ClientCertificateInstall) can't handle
+# the EC intermediate in that bundle — it picks the wrong PKCS#7 recipient /
+# can't build a chain and fails to initialize with "server certs ''" / 0x80092004
+# (CRYPT_E_NO_MATCH) on host 733. step-ca's own source documents this exact case
+# ("useful in environments where the SCEP client doesn't select the right RSA
+# decrypter certificate"). Setting excludeIntermediate makes GetCACert return
+# ONLY the RSA decrypter, so the CSP has an unambiguous RSA recipient. The issued
+# Wi-Fi cert is still signed by the EC intermediate (signAuth.SignWithContext) and
+# the EC chain / all macOS ACME certs are completely unaffected — this only
+# changes what the SCEP GetCACert response advertises. macOS uses ACME, not SCEP,
+# so it never calls GetCACert and is untouched.
 SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
 SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < "$STEPPATH/secrets/scep_decrypter_key")"
 cat > "$STEPPATH/config/ca.json" <<CAJSON
@@ -485,6 +609,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "encryptionAlgorithmIdentifier": 2,
         "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${SCEP_DECRYPTER_KEY_B64}",
+        "excludeIntermediate": true,
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -585,6 +710,108 @@ systemctl daemon-reload
 systemctl enable --now step-ca
 echo "step-ca started."
 
+%{ if smallstep_enabled ~}
+# --- RSA step-ca (instance #2): ca.json, unit, log, probe -------------------
+RSA_SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < /etc/step-ca-rsa/certs/scep_decrypter.crt)"
+RSA_SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < /etc/step-ca-rsa/secrets/scep_decrypter_key)"
+cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
+{
+  "root": "/etc/step-ca-rsa/certs/root_ca.crt",
+  "crt": "/etc/step-ca-rsa/certs/intermediate_ca.crt",
+  "key": "${smallstep_rsa_signing_key_uri}",
+  "kms": { "type": "cloudkms" },
+  "address": ":8444",
+  "dnsNames": ["${smallstep_ca_rsa_dns_name}"],
+  "metricsAddress": "127.0.0.1:9091",
+  "db": {
+    "type": "postgresql",
+    "dataSource": "postgresql://${smallstep_db_user}:$${SMALLSTEP_DB_PASSWORD}@${smallstep_db_host}:5432/stepca_rsa?sslmode=require"
+  },
+  "authority": {
+    "provisioners": [
+      {
+        "type": "SCEP",
+        "name": "${smallstep_scep_rsa_name}",
+        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
+        "minimumPublicKeyLength": 2048,
+        "encryptionAlgorithmIdentifier": 2,
+        "excludeIntermediate": true,
+        "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
+        "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
+%{ if acme_webhook_enabled ~}
+        "webhooks": [
+          {
+            "name": "scep-challenge",
+            "url": "http://127.0.0.1:${webhook_port}/scep-challenge",
+            "kind": "SCEPCHALLENGE",
+            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
+          }
+        ],
+%{ endif ~}
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
+      }
+    ]
+  },
+  "tls": { "minVersion": 1.2, "maxVersion": 1.3 },
+  "logger": { "format": "json" }
+}
+CARSAJSON
+%{ endif ~}
+
+%{ if smallstep_enabled ~}
+cat > /usr/local/bin/stepca-rsa-decrypter-probe.sh <<'PROBE'
+#!/bin/bash
+for i in $(seq 1 30); do
+  curl -fsS -k https://127.0.0.1:8444/health >/dev/null 2>&1 && break
+  sleep 1
+done
+since=$(systemctl show step-ca-rsa -p ActiveEnterTimestamp --value)
+if journalctl -u step-ca-rsa --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  echo "stepca-rsa-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
+  exit 1
+fi
+echo "stepca-rsa-decrypter-probe: SCEP decrypter OK"
+exit 0
+PROBE
+chmod +x /usr/local/bin/stepca-rsa-decrypter-probe.sh
+mkdir -p /var/log/step-ca-rsa
+cat > /etc/logrotate.d/step-ca-rsa <<'LOGROTATE'
+/var/log/step-ca-rsa/step-ca-rsa.log {
+  daily
+  rotate 7
+  compress
+  delaycompress
+  missingok
+  notifempty
+  copytruncate
+}
+LOGROTATE
+%{ endif ~}
+
+%{ if smallstep_enabled ~}
+cat > /etc/systemd/system/step-ca-rsa.service <<'RSAUNIT'
+[Unit]
+Description=Smallstep step-ca (RSA SCEP instance)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=STEPPATH=/etc/step-ca-rsa
+Environment=STEP_LOGGER_LOG_REAL_IP=true
+ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca-rsa/config/ca.json 2>&1 | tee -a /var/log/step-ca-rsa/step-ca-rsa.log'
+ExecStartPost=/usr/local/bin/stepca-rsa-decrypter-probe.sh
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+RSAUNIT
+systemctl daemon-reload
+systemctl enable --now step-ca-rsa
+echo "step-ca-rsa started."
+%{ endif ~}
+
 %{ if acme_webhook_enabled ~}
 # ---------------------------------------------------------------------------
 # ACME authorizing webhook — localhost systemd service (not Cloud Run).
@@ -624,6 +851,7 @@ FLEET_API_BASE_URL=${fleet_api_base_url}
 ALLOW_LABEL=${webhook_allow_label}
 WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
 FLEET_API_TOKEN=$FLEET_API_TOKEN
+SMALLSTEP_SCEP_CHALLENGE=$SMALLSTEP_SCEP_CHALLENGE
 WEBHOOKENV
 umask 022
 chmod 600 /etc/acme-authz-webhook/env
@@ -657,10 +885,14 @@ for i in $(seq 1 15); do
   sleep 1
 done
 echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
-# step-ca was started before this block; restart it now that the webhook is
-# reachable so ACME orders arriving during the bootstrap window aren't rejected
-# fail-closed on a connection-refused to the authorize endpoint.
+# step-ca services were started before this block; restart them now that the
+# webhook is reachable so ACME orders / SCEP challenges arriving during the
+# bootstrap window aren't rejected fail-closed on a connection-refused to the
+# webhook. The RSA instance's SCEP provisioner uses the /scep-challenge webhook.
 systemctl restart step-ca
+%{ if smallstep_enabled ~}
+systemctl restart step-ca-rsa
+%{ endif ~}
 %{ endif ~}
 
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.
