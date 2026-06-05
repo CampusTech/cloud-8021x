@@ -106,3 +106,7 @@ EOT
 # smallstep_scep_provisioner_name  = "wifi-scep"   # step-ca rejects duplicate provisioner names
 # acme_authorizing_webhook_url     = ""          # set to the Plan 2 webhook before enabling ACME
 # smallstep_db_tier                = "db-custom-1-3840"  # standard tier required for REGIONAL HA
+
+# DNS name for the RSA SCEP step-ca instance (Windows + non-ADE Macs). Point an
+# A record at the `smallstep_rsa_lb_ip` output. Required when enable_smallstep_ca=true.
+# smallstep_ca_rsa_dns_name = "ca-rsa.example.com"

@@ -142,13 +142,16 @@ locals {
     smallstep_scep_name   = var.smallstep_scep_provisioner_name
     acme_webhook_url      = var.acme_authorizing_webhook_url
     # On-VM ACME authorizing webhook (localhost systemd service).
-    acme_webhook_enabled      = var.enable_acme_webhook
-    webhook_release_version   = var.webhook_release_version
-    webhook_port              = var.webhook_port
-    webhook_allow_label       = var.webhook_allow_label
-    fleet_api_base_url        = var.fleet_api_base_url
-    webhook_repo              = "CampusTech/cloud-8021x"
-    smallstep_signing_key_uri = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/ca-signing/cryptoKeyVersions/1" : ""
+    acme_webhook_enabled          = var.enable_acme_webhook
+    webhook_release_version       = var.webhook_release_version
+    webhook_port                  = var.webhook_port
+    webhook_allow_label           = var.webhook_allow_label
+    fleet_api_base_url            = var.fleet_api_base_url
+    webhook_repo                  = "CampusTech/cloud-8021x"
+    smallstep_signing_key_uri     = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/ca-signing/cryptoKeyVersions/1" : ""
+    smallstep_ca_rsa_dns_name     = var.smallstep_ca_rsa_dns_name
+    smallstep_scep_rsa_name       = var.smallstep_scep_rsa_provisioner_name
+    smallstep_rsa_signing_key_uri = var.enable_smallstep_ca ? "cloudkms:projects/${google_project.this.project_id}/locations/${var.region}/keyRings/smallstep-ca/cryptoKeys/ca-signing-rsa/cryptoKeyVersions/1" : ""
     # SCEP decrypter is a shared software RSA key in Secret Manager, not KMS
     # (Cloud KMS keys are single-purpose; step-ca's SCEP decrypter must both
     # decrypt and sign). No KMS URI needed for it.
