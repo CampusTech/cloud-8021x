@@ -378,6 +378,85 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# --- RSA CA (instance #2) persisted artifacts. Same model as instance #1:
+#     created empty here, populated by the first VM at RSA-CA init, restored by
+#     the 2nd VM / any reboot. smallstep-rsa-intermediate-cert is the readiness
+#     marker (published LAST). -------------------------------------------------
+resource "google_secret_manager_secret" "smallstep_rsa_intermediate_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-intermediate-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_intermediate_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_intermediate_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_intermediate_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_intermediate_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret" "smallstep_rsa_scep_decrypter_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-scep-decrypter-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret" "smallstep_rsa_scep_decrypter_key" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-scep-decrypter-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_key_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_key[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter_key_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # --- Firewall: step-ca HTTPS listener reachable by the GCP load-balancer +
 #     health-check ranges (the public front door is the GCLB in Task 5). ------
 resource "google_compute_firewall" "allow_stepca_lb" {
