@@ -509,6 +509,13 @@ resource "google_compute_instance_group" "smallstep_primary" {
     name = "stepca"
     port = 8443
   }
+  # RSA step-ca (instance #2) is served from the SAME instance group on a second
+  # named port — GCP forbids a VM being in two load-balanced instance groups, so
+  # the RSA backend reuses this group rather than its own.
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
+  }
 }
 
 resource "google_compute_instance_group" "smallstep_secondary" {
@@ -520,6 +527,11 @@ resource "google_compute_instance_group" "smallstep_secondary" {
   named_port {
     name = "stepca"
     port = 8443
+  }
+  # RSA step-ca (instance #2) — second named port on the shared group (see primary).
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
   }
 }
 
@@ -645,29 +657,10 @@ resource "google_compute_managed_ssl_certificate" "smallstep_rsa" {
   }
 }
 
-resource "google_compute_instance_group" "smallstep_rsa_primary" {
-  count     = local.smallstep_enabled
-  project   = google_project.this.project_id
-  name      = "smallstep-rsa-ig-primary"
-  zone      = var.zone
-  instances = [google_compute_instance.radius.self_link]
-  named_port {
-    name = "stepca-rsa"
-    port = 8444
-  }
-}
-
-resource "google_compute_instance_group" "smallstep_rsa_secondary" {
-  count     = local.smallstep_enabled
-  project   = google_project.this.project_id
-  name      = "smallstep-rsa-ig-secondary"
-  zone      = var.secondary_zone
-  instances = [google_compute_instance.radius_secondary.self_link]
-  named_port {
-    name = "stepca-rsa"
-    port = 8444
-  }
-}
+# NOTE: the RSA backend reuses the EXISTING smallstep_primary/secondary instance
+# groups (via their second "stepca-rsa" named port on 8444). GCP forbids a VM in
+# two load-balanced instance groups, so there are intentionally no dedicated RSA
+# instance groups.
 
 resource "google_compute_health_check" "smallstep_rsa" {
   count   = local.smallstep_enabled
@@ -691,10 +684,10 @@ resource "google_compute_backend_service" "smallstep_rsa" {
   security_policy       = google_compute_security_policy.smallstep[0].id
 
   backend {
-    group = google_compute_instance_group.smallstep_rsa_primary[0].id
+    group = google_compute_instance_group.smallstep_primary[0].id
   }
   backend {
-    group = google_compute_instance_group.smallstep_rsa_secondary[0].id
+    group = google_compute_instance_group.smallstep_secondary[0].id
   }
 }
 
