@@ -42,22 +42,33 @@ structurally EC/Secure-Enclave).
 
 ## Decision
 
-Three issuance paths, two CA instances, one shared EC root → **one RADIUS trust anchor**:
+Two CA instances split by **protocol**, one shared EC root → **one RADIUS trust anchor**:
 
 | Path | Issuer | Instance | Devices |
 |---|---|---|---|
 | ACME `device-attest-01` | existing **EC** intermediate | step-ca #1 (existing, :8443) | ~460 ADE/DEP Macs (unchanged) |
-| **EC SCEP** | existing **EC** intermediate | step-ca #1 (existing, :8443) | <40 non-ADE/DEP Macs |
-| **RSA SCEP** | **NEW RSA** intermediate | **step-ca #2 (new, :8444)** | <15 Windows |
+| **RSA SCEP** | **NEW RSA** intermediate | **step-ca #2 (new, :8444)** | <15 Windows **+** <40 non-ADE/DEP Macs |
 
-- The non-ADE/DEP Macs use the **existing** EC `wifi-scep` provisioner — macOS/SE is
-  EC-happy, so **no new CA** is needed for them. (Resume the paused
-  `feat/macos-scep-wifi-fallback` fleet-gitops branch.)
-- Only **Windows** forces new infra: a **second step-ca process** on the same two VMs
-  whose top-level intermediate is **RSA** (RSA-2048, Cloud KMS HSM `ASYMMETRIC_SIGN`),
-  signed by the **existing EC root** (EC-root-signing-RSA-intermediate is valid X.509
-  — already done today for the RSA SCEP decrypter). RADIUS already trusts the EC root,
-  so adding the RSA intermediate to its client-cert trust bundle is the only RADIUS change.
+**Both SCEP populations require RSA — including the Macs.** Apple's native SCEP payload
+fixes `Key Type` to **"Always RSA"** (file-based key, *not* Secure Enclave; the SE is
+EC-only and is used only by the ACME path), and Apple's SCEP client is **not compatible
+with an EC issuing CA** — it needs an RSA-signed leaf, same as the Windows CSP. So the
+non-ADE/DEP Macs **cannot** use the existing EC SCEP provisioner; they go to the new RSA
+instance alongside Windows. (Correction to an earlier assumption that macOS SCEP was
+EC-happy — that conflated Apple's *ACME* path, which is EC/Secure-Enclave, with Apple's
+*SCEP* path, which is RSA/file-based.)
+
+This makes the split **cleaner**: instance #1 serves ACME only (EC); instance #2 serves
+all SCEP (RSA). The current EC `wifi-scep` provisioner on instance #1 becomes unused once
+SCEP moves to instance #2 and can be removed in a later cleanup.
+
+- The **second step-ca process** runs on the same two VMs; its top-level intermediate is
+  **RSA-2048, Cloud KMS HSM `ASYMMETRIC_SIGN`**, signed by the **existing EC root**
+  (EC-root-signing-RSA-intermediate is valid X.509 — already done today for the RSA SCEP
+  decrypter). RADIUS already trusts the EC root, so adding the RSA intermediate to its
+  client-cert trust bundle is the only RADIUS change.
+- One RSA SCEP endpoint serves both OSes → both the Windows profile and the non-ADE Mac
+  `.mobileconfig` point at the same `ca-rsa.campusgroup.co/scep/wifi-scep`.
 
 ### Accepted tradeoff (scope-driven)
 
@@ -107,27 +118,35 @@ Windows Wi-Fi key is explicitly **not** a requirement here.
   check `/health` on 8444, Cloud Armor reuse. Mirrors the existing `smallstep_*` LB
   block. Firewall: allow `:8444` from the LB/health-check ranges (extend the existing
   rule or add a sibling).
-- Existing `ca.campusgroup.co` (ACME + EC SCEP, :8443) is **unchanged**.
+- Existing `ca.campusgroup.co` (ACME, :8443) is **unchanged**. Its EC `wifi-scep`
+  provisioner becomes unused once both SCEP populations move to instance #2; remove in a
+  later cleanup.
 
 ### RADIUS trust
 
 - FreeRADIUS `ca_file` (client-cert trust) must include the **RSA intermediate** so it
-  can build Windows leaf → RSA intermediate → EC root. The EC root and EC intermediate
-  are already present. Add the RSA intermediate to the staged
+  can build SCEP leaf (Windows *and* Mac) → RSA intermediate → EC root. The EC root and
+  EC intermediate are already present. Add the RSA intermediate to the staged
   `/tmp/smallstep-ca.crt` bundle (and the `both`/`smallstep` trust modes). One concat.
 
 ### Fleet (fleet-gitops) profiles
 
-- **Windows:** point `campus-wifi-smallstep-scep-direct.xml` (test-pilots → later all
-  Windows) ServerURL at `https://ca-rsa.campusgroup.co/scep/wifi-scep`, CAThumbprint =
-  the **RSA decrypter** of instance #2 (GetCACert position 0), static challenge inlined
-  (per the proven fleet-gitops #40 finding that `$FLEET_SECRET_` isn't substituted into
-  Windows SCEP `<Data>`). Subject key stays RSA 2048.
-- **non-ADE/DEP Macs:** resume `feat/macos-scep-wifi-fallback` — SCEP `.mobileconfig`
-  against the **existing EC** `https://ca.campusgroup.co/scep/wifi-scep`, scoped to the
-  dynamic label `mdm.installed_from_dep != 'true'`, EC key (`ECSECPrimeRandom`, SE),
-  include the EC intermediate in the profile (macOS doesn't persist the SCEP-returned
-  intermediate — known gotcha).
+Both SCEP profiles point at the **same** RSA endpoint `https://ca-rsa.campusgroup.co/scep/wifi-scep`,
+RSA subject key, CAThumbprint = the **RSA decrypter** of instance #2 (GetCACert position
+0, with `excludeIntermediate` → it's the only cert returned).
+
+- **Windows:** `campus-wifi-smallstep-scep-direct.xml` (test-pilots → later all Windows).
+  Static challenge inlined (per the proven fleet-gitops #40 finding that `$FLEET_SECRET_`
+  isn't substituted into Windows SCEP `<Data>`). Subject key RSA 2048.
+- **non-ADE/DEP Macs:** resume `feat/macos-scep-wifi-fallback`, but **repoint it from the
+  EC instance to the RSA instance** (the branch was built assuming the existing EC
+  provisioner — that assumption was wrong; Apple SCEP needs RSA issuer + RSA key). SCEP
+  `.mobileconfig`: `Key Type` RSA (Apple-mandated; `Keysize` 2048), scoped to the dynamic
+  label `mdm.installed_from_dep != 'true'`. Include the **RSA intermediate** in the
+  profile (macOS doesn't persist the SCEP-returned intermediate — known gotcha; and with
+  `excludeIntermediate` the CA won't return it, so the profile MUST carry it as a separate
+  certificate payload). The key is file-based (not Secure Enclave — Apple SCEP keys never
+  are); accepted.
 
 ## Components (isolation / interfaces)
 
@@ -142,21 +161,24 @@ Windows Wi-Fi key is explicitly **not** a requirement here.
    RSA decrypter, render `ca.json` #2, `step-ca-rsa.service`, log/probe. Bounded,
    mirrors the EC bootstrap; the readiness/partial-publish gates are reused verbatim.
 5. **startup.sh: RADIUS trust** — append RSA intermediate to the client-cert bundle.
-6. **fleet-gitops: Windows profile** — repoint to `ca-rsa`, new CAThumbprint.
-7. **fleet-gitops: non-ADE Mac SCEP** — finish the paused branch (scoping + PR).
+6. **fleet-gitops: Windows profile** — repoint to `ca-rsa`, new CAThumbprint, ensure the
+   RSA intermediate is present on-device for chain building.
+7. **fleet-gitops: non-ADE Mac SCEP** — finish the paused branch, **repointed to the RSA
+   instance** (RSA key, `ca-rsa` endpoint) + a separate RSA-intermediate cert payload in
+   the `.mobileconfig`.
 
 ## Rollout
 
 1. Terraform apply (KMS, secrets, LB) — additive, no disruption to instance #1.
 2. Re-run startup.sh on both VMs (documented stop-FreeRADIUS + metadata re-exec) — brings
    up step-ca #2, persists RSA chain, updates RADIUS trust. Instance #1 untouched.
-3. Verify `ca-rsa.campusgroup.co` GetCACert returns the single RSA decrypter; verify
-   leaf chains RSA-intermediate → EC root.
-4. fleet-gitops: ship non-ADE Mac EC-SCEP (existing instance) → verify a non-ADE Mac
-   gets an EC cert + joins Campus.
-5. fleet-gitops: repoint Windows (test-pilots/733) at `ca-rsa` → verify 733's SCEP
-   event log shows success (no `signature ... cannot be verified`), cert in
-   `LocalMachine\My`, RADIUS Access-Accept. Then widen to all Windows.
+3. Verify `ca-rsa.campusgroup.co` GetCACert returns the single RSA decrypter; verify a
+   test leaf chains RSA-intermediate → EC root and RADIUS trusts it.
+4. fleet-gitops: ship Windows (test-pilots/733) at `ca-rsa` first (it's the proven
+   failure case) → verify 733's SCEP event log shows success (no `signature ... cannot be
+   verified`), cert in `LocalMachine\My`, RADIUS Access-Accept. Then widen to all Windows.
+5. fleet-gitops: ship non-ADE Mac SCEP at `ca-rsa` → verify a non-ADE Mac gets an RSA cert
+   + joins Campus. (Same endpoint/CA as Windows, just an Apple `.mobileconfig`.)
 
 ## Error handling / safety
 
@@ -184,7 +206,9 @@ Windows Wi-Fi key is explicitly **not** a requirement here.
 ## Non-goals
 
 - No change to the 460 ADE/DEP ACME Macs.
-- No hardware-binding of Windows Wi-Fi keys (accepted).
+- No hardware-binding of the SCEP Wi-Fi keys — neither Windows nor non-ADE Macs. (Mac
+  SCEP keys are file-based RSA by Apple's design, not a choice; SE is EC-only and used
+  only by ACME.) Accepted.
 - No custom ACME/TPM client (the earlier exploration) — SCEP suffices for both SCEP
   populations once the RSA instance exists.
-- No conversion of the existing CA to RSA.
+- No conversion of the existing CA to RSA (would break the attested-ACME Macs).
