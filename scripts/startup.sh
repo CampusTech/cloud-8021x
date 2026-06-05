@@ -398,10 +398,38 @@ else
     --kty RSA --size 2048 \
     --not-after 87600h --no-password --insecure --force
   chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
+  # --- RSA CA (instance #2): intermediate + SCEP decrypter --------------------
+  # Windows native SCEP and Apple SCEP both require an RSA-signed leaf. The EC
+  # intermediate (above) cannot serve them, and step-ca can't issue from two
+  # chains in one process, so instance #2 has its OWN RSA intermediate, signed by
+  # the SAME local EC root (valid X.509: EC issuer signs RSA subject) so RADIUS
+  # keeps one trust anchor. KMS-backed signer, same hand-built approach as EC.
+  mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
+  # RSA intermediate: public key from the Cloud KMS RSA signing key; signed by
+  # the local EC root. /dev/null for the key (private key lives in Cloud KMS).
+  step certificate create "${ca_name_prefix} RSA Intermediate CA" \
+    "/etc/step-ca-rsa/certs/intermediate_ca.crt" /dev/null \
+    --profile intermediate-ca \
+    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_rsa_signing_key_uri}" \
+    --no-password --insecure --force
+  # RSA SCEP decrypter (dedicated to instance #2): a dual-purpose software RSA
+  # key (KMS keys are single-purpose; the SCEP decrypter must decrypt AND sign),
+  # signed BY the RSA intermediate. The intermediate's private key lives in Cloud
+  # KMS, so sign with `--kms cloudkms: --ca-key <rsa-kms-uri>` (NOT the local root
+  # key). Issuer of the decrypter == the RSA intermediate; verified at apply time.
+  step certificate create "${ca_name_prefix} RSA SCEP Decrypter" \
+    "/etc/step-ca-rsa/certs/scep_decrypter.crt" "/etc/step-ca-rsa/secrets/scep_decrypter_key" \
+    --ca "/etc/step-ca-rsa/certs/intermediate_ca.crt" \
+    --kms "cloudkms:" --ca-key "${smallstep_rsa_signing_key_uri}" \
+    --kty RSA --size 2048 \
+    --not-after 87600h --no-password --insecure --force
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
   # Single gate: only publish secrets + discard the root key once ALL certs +
   # the decrypter key genuinely exist and are non-empty. On failure, abort.
-  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
-    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys" >&2
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] \
+    && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys (EC + RSA)" >&2
     exit 1
   }
   # Publish ALL certs + the decrypter key so reboots / the 2nd VM restore a
@@ -417,6 +445,13 @@ else
     --data-file="$STEPPATH/certs/scep_decrypter.crt"
   gcloud secrets versions add smallstep-scep-decrypter-key --project="${project_id}" \
     --data-file="$STEPPATH/secrets/scep_decrypter_key"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-key --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  # RSA readiness marker — published last among RSA artifacts.
+  gcloud secrets versions add smallstep-rsa-intermediate-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/intermediate_ca.crt"
   # Readiness marker — published last, only after everything else is durable.
   gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/intermediate_ca.crt"
@@ -425,7 +460,7 @@ else
   # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
   # build leaf->intermediate->root; root alone yields OpenSSL error 20
   # ("unable to get local issuer certificate") and rejects every client.
-  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
+  cat "$STEPPATH/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
   rm -f "$STEPPATH/secrets/root_ca_key"
 fi
