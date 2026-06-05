@@ -341,12 +341,38 @@ if [ "$RESTORE_CA" = "yes" ]; then
     echo "FATAL: Smallstep CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
     exit 1
   }
+  # Restore the RSA CA (instance #2). Same model: the RSA intermediate cert is
+  # the readiness marker. Read with backoff; FATAL on persistent failure (a
+  # present-but-unreadable RSA CA must not be re-minted).
+  mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
+  RSA_RESTORE=""
+  for attempt in 1 2 3 4 5; do
+    if gcloud secrets versions access latest --secret=smallstep-rsa-intermediate-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/intermediate_ca.crt" 2>/dev/null && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ]; then
+      RSA_RESTORE=yes
+      break
+    fi
+    echo "smallstep-rsa-intermediate-cert read failed (attempt $attempt), retrying..." >&2
+    sleep $((attempt * 5))
+  done
+  if [ "$RSA_RESTORE" != "yes" ]; then
+    echo "FATAL: smallstep-rsa-intermediate-cert unreadable after retries; refusing to start (RSA SCEP would be broken)" >&2
+    exit 1
+  fi
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-key --project="${project_id}" >"/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
+  [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: RSA SCEP decrypter cert/key partially published" >&2
+    exit 1
+  }
+  # RSA instance reuses the SAME root cert (already restored to $STEPPATH/certs/root_ca.crt).
+  cp "$STEPPATH/certs/root_ca.crt" "/etc/step-ca-rsa/certs/root_ca.crt"
   # Stage the Smallstep client-cert trust chain (INTERMEDIATE + root) for the
   # RADIUS-trust step later in this script. The intermediate is the issuer that
   # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
   # build leaf->intermediate->root; root alone yields OpenSSL error 20
   # ("unable to get local issuer certificate") and rejects every client.
-  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
+  cat "$STEPPATH/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
 else
   echo "Initializing new KMS-backed Smallstep CA..."
   # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
