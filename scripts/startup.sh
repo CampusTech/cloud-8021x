@@ -738,6 +738,16 @@ cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
         "excludeIntermediate": true,
         "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
+%{ if acme_webhook_enabled ~}
+        "webhooks": [
+          {
+            "name": "scep-challenge",
+            "url": "http://127.0.0.1:${webhook_port}/scep-challenge",
+            "kind": "SCEPCHALLENGE",
+            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
+          }
+        ],
+%{ endif ~}
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -841,6 +851,7 @@ FLEET_API_BASE_URL=${fleet_api_base_url}
 ALLOW_LABEL=${webhook_allow_label}
 WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
 FLEET_API_TOKEN=$FLEET_API_TOKEN
+SMALLSTEP_SCEP_CHALLENGE=$SMALLSTEP_SCEP_CHALLENGE
 WEBHOOKENV
 umask 022
 chmod 600 /etc/acme-authz-webhook/env
@@ -874,10 +885,14 @@ for i in $(seq 1 15); do
   sleep 1
 done
 echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
-# step-ca was started before this block; restart it now that the webhook is
-# reachable so ACME orders arriving during the bootstrap window aren't rejected
-# fail-closed on a connection-refused to the authorize endpoint.
+# step-ca services were started before this block; restart them now that the
+# webhook is reachable so ACME orders / SCEP challenges arriving during the
+# bootstrap window aren't rejected fail-closed on a connection-refused to the
+# webhook. The RSA instance's SCEP provisioner uses the /scep-challenge webhook.
 systemctl restart step-ca
+%{ if smallstep_enabled ~}
+systemctl restart step-ca-rsa
+%{ endif ~}
 %{ endif ~}
 
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.
