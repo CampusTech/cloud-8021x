@@ -15,6 +15,7 @@ type Config struct {
 	FleetBaseURL  string
 	FleetToken    string
 	AllowLabel    string // empty = no label gate
+	SCEPChallenge string // shared SCEP challenge; empty = /scep-challenge denies
 	FleetTimeout  time.Duration
 }
 
@@ -25,6 +26,7 @@ func Load() (*Config, error) {
 		FleetBaseURL:  os.Getenv("FLEET_API_BASE_URL"),
 		FleetToken:    os.Getenv("FLEET_API_TOKEN"),
 		AllowLabel:    os.Getenv("ALLOW_LABEL"),
+		SCEPChallenge: os.Getenv("SMALLSTEP_SCEP_CHALLENGE"),
 		FleetTimeout:  5 * time.Second,
 	}
 	if c.SigningSecret == "" || c.FleetBaseURL == "" || c.FleetToken == "" {

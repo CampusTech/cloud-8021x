@@ -52,7 +52,7 @@ func serveCmd() *cobra.Command {
 			}
 			fc := fleet.New(cfg.FleetBaseURL, cfg.FleetToken, cfg.FleetTimeout)
 			authz := authorize.New(fc, cfg.AllowLabel)
-			h := server.New(cfg.SigningSecret, server.DeciderFunc(func(serial string) bool {
+			h := server.New(cfg.SigningSecret, cfg.SCEPChallenge, server.DeciderFunc(func(serial string) bool {
 				return authz.Decide(context.Background(), serial)
 			}))
 			// Bind to loopback only — step-ca calls it over localhost on the
