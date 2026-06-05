@@ -341,38 +341,12 @@ if [ "$RESTORE_CA" = "yes" ]; then
     echo "FATAL: Smallstep CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
     exit 1
   }
-  # Restore the RSA CA (instance #2). Same model: the RSA intermediate cert is
-  # the readiness marker. Read with backoff; FATAL on persistent failure (a
-  # present-but-unreadable RSA CA must not be re-minted).
-  mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
-  RSA_RESTORE=""
-  for attempt in 1 2 3 4 5; do
-    if gcloud secrets versions access latest --secret=smallstep-rsa-intermediate-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/intermediate_ca.crt" 2>/dev/null && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ]; then
-      RSA_RESTORE=yes
-      break
-    fi
-    echo "smallstep-rsa-intermediate-cert read failed (attempt $attempt), retrying..." >&2
-    sleep $((attempt * 5))
-  done
-  if [ "$RSA_RESTORE" != "yes" ]; then
-    echo "FATAL: smallstep-rsa-intermediate-cert unreadable after retries; refusing to start (RSA SCEP would be broken)" >&2
-    exit 1
-  fi
-  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/scep_decrypter.crt"
-  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-key --project="${project_id}" >"/etc/step-ca-rsa/secrets/scep_decrypter_key"
-  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
-  [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
-    echo "FATAL: RSA SCEP decrypter cert/key partially published" >&2
-    exit 1
-  }
-  # RSA instance reuses the SAME root cert (already restored to $STEPPATH/certs/root_ca.crt).
-  cp "$STEPPATH/certs/root_ca.crt" "/etc/step-ca-rsa/certs/root_ca.crt"
   # Stage the Smallstep client-cert trust chain (INTERMEDIATE + root) for the
   # RADIUS-trust step later in this script. The intermediate is the issuer that
   # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
   # build leaf->intermediate->root; root alone yields OpenSSL error 20
   # ("unable to get local issuer certificate") and rejects every client.
-  cat "$STEPPATH/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
+  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
 else
   echo "Initializing new KMS-backed Smallstep CA..."
   # CONFIRMED ON-BOX (radius-primary, step/step-ca 0.30.2, 2026-06-03):
@@ -424,38 +398,10 @@ else
     --kty RSA --size 2048 \
     --not-after 87600h --no-password --insecure --force
   chmod 600 "$STEPPATH/secrets/scep_decrypter_key"
-  # --- RSA CA (instance #2): intermediate + SCEP decrypter --------------------
-  # Windows native SCEP and Apple SCEP both require an RSA-signed leaf. The EC
-  # intermediate (above) cannot serve them, and step-ca can't issue from two
-  # chains in one process, so instance #2 has its OWN RSA intermediate, signed by
-  # the SAME local EC root (valid X.509: EC issuer signs RSA subject) so RADIUS
-  # keeps one trust anchor. KMS-backed signer, same hand-built approach as EC.
-  mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
-  # RSA intermediate: public key from the Cloud KMS RSA signing key; signed by
-  # the local EC root. /dev/null for the key (private key lives in Cloud KMS).
-  step certificate create "${ca_name_prefix} RSA Intermediate CA" \
-    "/etc/step-ca-rsa/certs/intermediate_ca.crt" /dev/null \
-    --profile intermediate-ca \
-    --ca "$STEPPATH/certs/root_ca.crt" --ca-key "$STEPPATH/secrets/root_ca_key" \
-    --kms "cloudkms:" --key "${smallstep_rsa_signing_key_uri}" \
-    --no-password --insecure --force
-  # RSA SCEP decrypter (dedicated to instance #2): a dual-purpose software RSA
-  # key (KMS keys are single-purpose; the SCEP decrypter must decrypt AND sign),
-  # signed BY the RSA intermediate. The intermediate's private key lives in Cloud
-  # KMS, so sign with `--kms cloudkms: --ca-key <rsa-kms-uri>` (NOT the local root
-  # key). Issuer of the decrypter == the RSA intermediate; verified at apply time.
-  step certificate create "${ca_name_prefix} RSA SCEP Decrypter" \
-    "/etc/step-ca-rsa/certs/scep_decrypter.crt" "/etc/step-ca-rsa/secrets/scep_decrypter_key" \
-    --ca "/etc/step-ca-rsa/certs/intermediate_ca.crt" \
-    --kms "cloudkms:" --ca-key "${smallstep_rsa_signing_key_uri}" \
-    --kty RSA --size 2048 \
-    --not-after 87600h --no-password --insecure --force
-  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
   # Single gate: only publish secrets + discard the root key once ALL certs +
   # the decrypter key genuinely exist and are non-empty. On failure, abort.
-  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] \
-    && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
-    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys (EC + RSA)" >&2
+  [ -s "$STEPPATH/certs/root_ca.crt" ] && [ -s "$STEPPATH/certs/intermediate_ca.crt" ] && [ -s "$STEPPATH/certs/scep_decrypter.crt" ] && [ -s "$STEPPATH/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: Smallstep CA bootstrap did not produce all certificates/keys" >&2
     exit 1
   }
   # Publish ALL certs + the decrypter key so reboots / the 2nd VM restore a
@@ -471,13 +417,6 @@ else
     --data-file="$STEPPATH/certs/scep_decrypter.crt"
   gcloud secrets versions add smallstep-scep-decrypter-key --project="${project_id}" \
     --data-file="$STEPPATH/secrets/scep_decrypter_key"
-  gcloud secrets versions add smallstep-rsa-scep-decrypter-cert --project="${project_id}" \
-    --data-file="/etc/step-ca-rsa/certs/scep_decrypter.crt"
-  gcloud secrets versions add smallstep-rsa-scep-decrypter-key --project="${project_id}" \
-    --data-file="/etc/step-ca-rsa/secrets/scep_decrypter_key"
-  # RSA readiness marker — published last among RSA artifacts.
-  gcloud secrets versions add smallstep-rsa-intermediate-cert --project="${project_id}" \
-    --data-file="/etc/step-ca-rsa/certs/intermediate_ca.crt"
   # Readiness marker — published last, only after everything else is durable.
   gcloud secrets versions add smallstep-intermediate-cert --project="${project_id}" \
     --data-file="$STEPPATH/certs/intermediate_ca.crt"
@@ -486,10 +425,119 @@ else
   # directly signs Wi-Fi client certs, so FreeRADIUS MUST have it in ca_file to
   # build leaf->intermediate->root; root alone yields OpenSSL error 20
   # ("unable to get local issuer certificate") and rejects every client.
-  cat "$STEPPATH/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
+  cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > /tmp/smallstep-ca.crt
   # Discard the local root key — the KMS HSM key is the only live private key.
   rm -f "$STEPPATH/secrets/root_ca_key"
 fi
+
+# =============================================================================
+# RSA CA (step-ca instance #2) — SELF-CONTAINED, independent of the EC CA above.
+# Windows native SCEP + Apple SCEP require an RSA-signed leaf; the EC chain can't
+# serve them. This CA has its OWN self-signed RSA root (the EC root key is
+# discarded and the EC intermediate is pathlen:0, so the RSA intermediate cannot
+# chain under the EC chain). RADIUS trusts BOTH roots. Its own init-or-restore
+# decision keys on smallstep-rsa-intermediate-cert (the readiness marker).
+# =============================================================================
+%{ if smallstep_enabled ~}
+mkdir -p /etc/step-ca-rsa/certs /etc/step-ca-rsa/secrets /etc/step-ca-rsa/config
+
+# Probe: does the RSA CA already exist? (enabled version of the readiness marker)
+RSA_CA_HAS_VERSION=""
+for attempt in 1 2 3 4 5; do
+  RSA_LIST_OUT="$(gcloud secrets versions list smallstep-rsa-intermediate-cert \
+      --project="${project_id}" --filter='state=ENABLED' --format='value(name)' \
+      --limit=1 2>/tmp/rsa-ca-version-list.err)"
+  RSA_LIST_RC=$?
+  if [ "$RSA_LIST_RC" -eq 0 ]; then
+    if [ -n "$RSA_LIST_OUT" ]; then RSA_CA_HAS_VERSION=yes; else RSA_CA_HAS_VERSION=no; fi
+    break
+  fi
+  if grep -qiE 'NOT_FOUND|was not found|does not exist' /tmp/rsa-ca-version-list.err; then
+    RSA_CA_HAS_VERSION=no
+    break
+  fi
+  echo "smallstep-rsa-intermediate-cert version probe failed (attempt $attempt), retrying: $(cat /tmp/rsa-ca-version-list.err)" >&2
+  sleep $((attempt * 5))
+done
+if [ -z "$RSA_CA_HAS_VERSION" ]; then
+  echo "FATAL: could not determine whether smallstep-rsa-intermediate-cert has an enabled version after retries; refusing to proceed" >&2
+  exit 1
+fi
+
+RSA_RESTORE_CA=""
+if [ "$RSA_CA_HAS_VERSION" = "yes" ]; then
+  for attempt in 1 2 3 4 5; do
+    if gcloud secrets versions access latest --secret=smallstep-rsa-intermediate-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/intermediate_ca.crt" 2>/dev/null && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ]; then
+      RSA_RESTORE_CA=yes
+      break
+    fi
+    echo "smallstep-rsa-intermediate-cert read failed (attempt $attempt), retrying..." >&2
+    sleep $((attempt * 5))
+  done
+  if [ "$RSA_RESTORE_CA" != "yes" ]; then
+    echo "FATAL: smallstep-rsa-intermediate-cert has an enabled version but is unreadable after retries; refusing to re-init (would rotate the RSA CA)" >&2
+    exit 1
+  fi
+fi
+
+if [ "$RSA_RESTORE_CA" = "yes" ]; then
+  echo "Existing RSA CA found — restoring RSA root + intermediate + SCEP decrypter."
+  gcloud secrets versions access latest --secret=smallstep-rsa-root-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/root_ca.crt"
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-cert --project="${project_id}" >"/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions access latest --secret=smallstep-rsa-scep-decrypter-key --project="${project_id}" >"/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
+  [ -s "/etc/step-ca-rsa/certs/root_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: RSA CA secrets are partially published (intermediate present but root/decrypter missing)" >&2
+    exit 1
+  }
+else
+  echo "Initializing new RSA CA (self-signed RSA root + KMS-backed RSA intermediate)..."
+  # Self-signed RSA root. The root key signs the RSA intermediate once here, then
+  # is discarded (like the EC root). Only the root CERT is persisted.
+  step certificate create "${ca_name_prefix} RSA Root CA" \
+    "/etc/step-ca-rsa/certs/root_ca.crt" "/etc/step-ca-rsa/secrets/root_ca_key" \
+    --profile root-ca --kty RSA --size 4096 \
+    --not-after 175200h --no-password --insecure --force
+  # RSA intermediate: public key from the Cloud KMS RSA signing key; signed by the
+  # local RSA root. /dev/null for the key (private key lives in Cloud KMS).
+  step certificate create "${ca_name_prefix} RSA Intermediate CA" \
+    "/etc/step-ca-rsa/certs/intermediate_ca.crt" /dev/null \
+    --profile intermediate-ca \
+    --ca "/etc/step-ca-rsa/certs/root_ca.crt" --ca-key "/etc/step-ca-rsa/secrets/root_ca_key" \
+    --kms "cloudkms:" --key "${smallstep_rsa_signing_key_uri}" \
+    --no-password --insecure --force
+  # RSA SCEP decrypter: dual-purpose software RSA key, signed BY the RSA
+  # intermediate (its key is in Cloud KMS -> --kms cloudkms: --ca-key <rsa-uri>).
+  step certificate create "${ca_name_prefix} RSA SCEP Decrypter" \
+    "/etc/step-ca-rsa/certs/scep_decrypter.crt" "/etc/step-ca-rsa/secrets/scep_decrypter_key" \
+    --ca "/etc/step-ca-rsa/certs/intermediate_ca.crt" \
+    --kms "cloudkms:" --ca-key "${smallstep_rsa_signing_key_uri}" \
+    --kty RSA --size 2048 \
+    --not-after 87600h --no-password --insecure --force
+  chmod 600 /etc/step-ca-rsa/secrets/scep_decrypter_key
+  # Gate: all RSA artifacts present before publishing.
+  [ -s "/etc/step-ca-rsa/certs/root_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/intermediate_ca.crt" ] && [ -s "/etc/step-ca-rsa/certs/scep_decrypter.crt" ] && [ -s "/etc/step-ca-rsa/secrets/scep_decrypter_key" ] || {
+    echo "FATAL: RSA CA bootstrap did not produce all certificates/keys" >&2
+    exit 1
+  }
+  # Publish. Readiness marker smallstep-rsa-intermediate-cert LAST.
+  gcloud secrets versions add smallstep-rsa-root-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/root_ca.crt"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/scep_decrypter.crt"
+  gcloud secrets versions add smallstep-rsa-scep-decrypter-key --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/secrets/scep_decrypter_key"
+  gcloud secrets versions add smallstep-rsa-intermediate-cert --project="${project_id}" \
+    --data-file="/etc/step-ca-rsa/certs/intermediate_ca.crt"
+  # Discard the RSA root key — the KMS key (intermediate signer) is the live signer.
+  rm -f "/etc/step-ca-rsa/secrets/root_ca_key"
+fi
+
+# Append the RSA intermediate + RSA root to the RADIUS client-cert trust bundle
+# (the EC block already wrote the EC chain to /tmp/smallstep-ca.crt). RADIUS now
+# trusts BOTH chains.
+cat "/etc/step-ca-rsa/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/root_ca.crt" >> /tmp/smallstep-ca.crt
+%{ endif ~}
 
 # Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
 # and SCEP provisioners.

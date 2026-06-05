@@ -389,6 +389,37 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key
 #     created empty here, populated by the first VM at RSA-CA init, restored by
 #     the 2nd VM / any reboot. smallstep-rsa-intermediate-cert is the readiness
 #     marker (published LAST). -------------------------------------------------
+# RSA CA self-signed ROOT cert. The RSA instance has its OWN root (not the EC
+# root): the EC root's private key is discarded after EC init and is not
+# persisted, and the EC intermediate is pathlen:0 (can't sign a sub-CA), so the
+# RSA intermediate cannot chain under the existing EC chain. The RSA root is
+# self-signed at RSA init and persisted here for HA restore; RADIUS trusts BOTH
+# roots (EC for ACME Macs, RSA for SCEP Windows/non-ADE Macs).
+resource "google_secret_manager_secret" "smallstep_rsa_root_cert" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = "smallstep-rsa-root-cert"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_root_cert_version_manager" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_root_cert[0].secret_id
+  role      = "roles/secretmanager.secretVersionManager"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "smallstep_rsa_root_cert_accessor" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.smallstep_rsa_root_cert[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
 resource "google_secret_manager_secret" "smallstep_rsa_intermediate_cert" {
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
