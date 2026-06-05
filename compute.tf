@@ -223,6 +223,21 @@ resource "google_compute_instance" "radius" {
     google_kms_crypto_key_iam_member.smallstep_signing_viewer,
     google_sql_database.smallstep,
     google_sql_user.smallstep,
+    # RSA step-ca (instance #2) bootstrap prerequisites — the startup script's
+    # standalone RSA CA block needs the RSA KMS signing grant, the RSA secret
+    # IAM (root/intermediate/decrypter cert + key), and the RSA DB before first
+    # boot. (Self-contained RSA root; no dependency on the EC chain.)
+    google_kms_crypto_key_iam_member.smallstep_signing_rsa_use,
+    google_kms_crypto_key_iam_member.smallstep_signing_rsa_viewer,
+    google_secret_manager_secret_iam_member.smallstep_rsa_root_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_root_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_intermediate_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_intermediate_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_key_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_key_accessor,
+    google_sql_database.smallstep_rsa,
   ]
 }
 
@@ -285,5 +300,17 @@ resource "google_compute_instance" "radius_secondary" {
     google_kms_crypto_key_iam_member.smallstep_signing_viewer,
     google_sql_database.smallstep,
     google_sql_user.smallstep,
+    # RSA step-ca (instance #2) bootstrap prerequisites (see primary VM).
+    google_kms_crypto_key_iam_member.smallstep_signing_rsa_use,
+    google_kms_crypto_key_iam_member.smallstep_signing_rsa_viewer,
+    google_secret_manager_secret_iam_member.smallstep_rsa_root_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_root_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_intermediate_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_intermediate_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_cert_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_cert_accessor,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_key_version_manager,
+    google_secret_manager_secret_iam_member.smallstep_rsa_scep_decrypter_key_accessor,
+    google_sql_database.smallstep_rsa,
   ]
 }
