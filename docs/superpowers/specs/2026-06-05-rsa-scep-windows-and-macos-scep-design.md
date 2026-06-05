@@ -40,14 +40,24 @@ and the issue tracker (#244 closed, not this feature). Converting the whole CA t
 RSA is rejected: it would break the 460 attested-ACME Macs (Apple ACME is
 structurally EC/Secure-Enclave).
 
+> **Implementation note (shipped):** the design below originally proposed signing the
+> RSA intermediate under the *existing EC root* (one shared trust anchor). That turned
+> out to be impossible: the EC root's private key is **discarded** after EC init (only
+> the root cert is persisted) and the EC intermediate is `pathlen:0` (can't sign a
+> sub-CA). So the shipped RSA CA is **fully self-contained** — its own self-signed
+> **RSA root** → RSA intermediate → RSA decrypter — and **RADIUS trusts BOTH roots** (EC
+> for ACME, RSA for SCEP). Wherever the text below says "signed by the EC root" or "one
+> trust anchor," read it as "self-signed RSA root" and "two trust anchors."
+
 ## Decision
 
-Two CA instances split by **protocol**, one shared EC root → **one RADIUS trust anchor**:
+Two CA instances split by **protocol**; the RSA CA has its **own self-signed RSA root**
+→ **RADIUS trusts both the EC and RSA roots**:
 
 | Path | Issuer | Instance | Devices |
 |---|---|---|---|
-| ACME `device-attest-01` | existing **EC** intermediate | step-ca #1 (existing, :8443) | ~460 ADE/DEP Macs (unchanged) |
-| **RSA SCEP** | **NEW RSA** intermediate | **step-ca #2 (new, :8444)** | <15 Windows **+** <40 non-ADE/DEP Macs |
+| ACME `device-attest-01` | existing **EC** intermediate (EC root) | step-ca #1 (existing, :8443) | ~460 ADE/DEP Macs (unchanged) |
+| **RSA SCEP** | **NEW RSA** intermediate (self-signed **RSA root**) | **step-ca #2 (new, :8444)** | <15 Windows **+** <40 non-ADE/DEP Macs |
 
 **Both SCEP populations require RSA — including the Macs.** Apple's native SCEP payload
 fixes `Key Type` to **"Always RSA"** (file-based key, *not* Secure Enclave; the SE is
@@ -62,13 +72,15 @@ This makes the split **cleaner**: instance #1 serves ACME only (EC); instance #2
 all SCEP (RSA). The current EC `wifi-scep` provisioner on instance #1 becomes unused once
 SCEP moves to instance #2 and can be removed in a later cleanup.
 
-- The **second step-ca process** runs on the same two VMs; its top-level intermediate is
-  **RSA-2048, Cloud KMS HSM `ASYMMETRIC_SIGN`**, signed by the **existing EC root**
-  (EC-root-signing-RSA-intermediate is valid X.509 — already done today for the RSA SCEP
-  decrypter). RADIUS already trusts the EC root, so adding the RSA intermediate to its
-  client-cert trust bundle is the only RADIUS change.
+- The **second step-ca process** runs on the same two VMs. Its top-level intermediate is
+  **RSA-2048, Cloud KMS HSM `ASYMMETRIC_SIGN`**, signed by its **own self-signed RSA-4096
+  root** (NOT the EC root — that key is gone; see the note above). RADIUS must add BOTH
+  the RSA intermediate **and** the RSA root to its client-cert trust bundle (it already
+  has the EC int/root). Net: 4 trust anchors in the bundle.
 - One RSA SCEP endpoint serves both OSes → both the Windows profile and the non-ADE Mac
-  `.mobileconfig` point at the same `ca-rsa.campusgroup.co/scep/wifi-scep`.
+  `.mobileconfig` point at the same `ca-rsa.campusgroup.co/scep/wifi-scep`, and both carry
+  the RSA intermediate (+ root, on Mac) as profile payloads since `excludeIntermediate`
+  strips it from GetCACert.
 
 ### Accepted tradeoff (scope-driven)
 
