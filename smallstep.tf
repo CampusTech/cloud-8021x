@@ -608,3 +608,110 @@ resource "google_compute_global_forwarding_rule" "smallstep" {
   port_range            = "443"
   target                = google_compute_target_https_proxy.smallstep[0].id
 }
+
+# --- RSA step-ca (instance #2): firewall + external HTTPS LB on :8444 ----------
+resource "google_compute_firewall" "allow_stepca_rsa_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "allow-stepca-rsa-lb"
+  network = google_compute_network.radius.id
+  allow {
+    protocol = "tcp"
+    ports    = ["8444"]
+  }
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  target_tags   = ["radius-server"]
+}
+
+resource "google_compute_global_address" "smallstep_rsa_lb" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-lb-ip"
+}
+
+resource "google_compute_managed_ssl_certificate" "smallstep_rsa" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-cert"
+  managed {
+    domains = [var.smallstep_ca_rsa_dns_name]
+  }
+}
+
+resource "google_compute_instance_group" "smallstep_rsa_primary" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  name      = "smallstep-rsa-ig-primary"
+  zone      = var.zone
+  instances = [google_compute_instance.radius.self_link]
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
+  }
+}
+
+resource "google_compute_instance_group" "smallstep_rsa_secondary" {
+  count     = local.smallstep_enabled
+  project   = google_project.this.project_id
+  name      = "smallstep-rsa-ig-secondary"
+  zone      = var.secondary_zone
+  instances = [google_compute_instance.radius_secondary.self_link]
+  named_port {
+    name = "stepca-rsa"
+    port = 8444
+  }
+}
+
+resource "google_compute_health_check" "smallstep_rsa" {
+  count   = local.smallstep_enabled
+  project = google_project.this.project_id
+  name    = "smallstep-ca-rsa-hc"
+  https_health_check {
+    port         = 8444
+    request_path = "/health"
+  }
+}
+
+resource "google_compute_backend_service" "smallstep_rsa" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-rsa-backend"
+  protocol              = "HTTPS"
+  port_name             = "stepca-rsa"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = 30
+  health_checks         = [google_compute_health_check.smallstep_rsa[0].id]
+  security_policy       = google_compute_security_policy.smallstep[0].id
+
+  backend {
+    group = google_compute_instance_group.smallstep_rsa_primary[0].id
+  }
+  backend {
+    group = google_compute_instance_group.smallstep_rsa_secondary[0].id
+  }
+}
+
+resource "google_compute_url_map" "smallstep_rsa" {
+  count           = local.smallstep_enabled
+  project         = google_project.this.project_id
+  name            = "smallstep-ca-rsa-urlmap"
+  default_service = google_compute_backend_service.smallstep_rsa[0].id
+}
+
+resource "google_compute_target_https_proxy" "smallstep_rsa" {
+  count            = local.smallstep_enabled
+  project          = google_project.this.project_id
+  name             = "smallstep-ca-rsa-https-proxy"
+  url_map          = google_compute_url_map.smallstep_rsa[0].id
+  ssl_certificates = [google_compute_managed_ssl_certificate.smallstep_rsa[0].id]
+}
+
+resource "google_compute_global_forwarding_rule" "smallstep_rsa" {
+  count                 = local.smallstep_enabled
+  project               = google_project.this.project_id
+  name                  = "smallstep-ca-rsa-fr"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  ip_address            = google_compute_global_address.smallstep_rsa_lb[0].address
+  port_range            = "443"
+  target                = google_compute_target_https_proxy.smallstep_rsa[0].id
+}
