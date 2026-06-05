@@ -662,6 +662,98 @@ systemctl daemon-reload
 systemctl enable --now step-ca
 echo "step-ca started."
 
+%{ if smallstep_enabled ~}
+# --- RSA step-ca (instance #2): ca.json, unit, log, probe -------------------
+RSA_SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < /etc/step-ca-rsa/certs/scep_decrypter.crt)"
+RSA_SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < /etc/step-ca-rsa/secrets/scep_decrypter_key)"
+cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
+{
+  "root": "/etc/step-ca-rsa/certs/root_ca.crt",
+  "crt": "/etc/step-ca-rsa/certs/intermediate_ca.crt",
+  "key": "${smallstep_rsa_signing_key_uri}",
+  "kms": { "type": "cloudkms" },
+  "address": ":8444",
+  "dnsNames": ["${smallstep_ca_rsa_dns_name}"],
+  "metricsAddress": "127.0.0.1:9091",
+  "db": {
+    "type": "postgresql",
+    "dataSource": "postgresql://${smallstep_db_user}:$${SMALLSTEP_DB_PASSWORD}@${smallstep_db_host}:5432/stepca_rsa?sslmode=require"
+  },
+  "authority": {
+    "provisioners": [
+      {
+        "type": "SCEP",
+        "name": "${smallstep_scep_rsa_name}",
+        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
+        "minimumPublicKeyLength": 2048,
+        "encryptionAlgorithmIdentifier": 2,
+        "excludeIntermediate": true,
+        "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
+        "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
+        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
+      }
+    ]
+  },
+  "tls": { "minVersion": 1.2, "maxVersion": 1.3 },
+  "logger": { "format": "json" }
+}
+CARSAJSON
+%{ endif ~}
+
+%{ if smallstep_enabled ~}
+cat > /usr/local/bin/stepca-rsa-decrypter-probe.sh <<'PROBE'
+#!/bin/bash
+for i in $(seq 1 30); do
+  curl -fsS -k https://127.0.0.1:8444/health >/dev/null 2>&1 && break
+  sleep 1
+done
+since=$(systemctl show step-ca-rsa -p ActiveEnterTimestamp --value)
+if journalctl -u step-ca-rsa --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  echo "stepca-rsa-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
+  exit 1
+fi
+echo "stepca-rsa-decrypter-probe: SCEP decrypter OK"
+exit 0
+PROBE
+chmod +x /usr/local/bin/stepca-rsa-decrypter-probe.sh
+mkdir -p /var/log/step-ca-rsa
+cat > /etc/logrotate.d/step-ca-rsa <<'LOGROTATE'
+/var/log/step-ca-rsa/step-ca-rsa.log {
+  daily
+  rotate 7
+  compress
+  delaycompress
+  missingok
+  notifempty
+  copytruncate
+}
+LOGROTATE
+%{ endif ~}
+
+%{ if smallstep_enabled ~}
+cat > /etc/systemd/system/step-ca-rsa.service <<'RSAUNIT'
+[Unit]
+Description=Smallstep step-ca (RSA SCEP instance)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=STEPPATH=/etc/step-ca-rsa
+Environment=STEP_LOGGER_LOG_REAL_IP=true
+ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca-rsa/config/ca.json 2>&1 | tee -a /var/log/step-ca-rsa/step-ca-rsa.log'
+ExecStartPost=/usr/local/bin/stepca-rsa-decrypter-probe.sh
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+RSAUNIT
+systemctl daemon-reload
+systemctl enable --now step-ca-rsa
+echo "step-ca-rsa started."
+%{ endif ~}
+
 %{ if acme_webhook_enabled ~}
 # ---------------------------------------------------------------------------
 # ACME authorizing webhook — localhost systemd service (not Cloud Run).

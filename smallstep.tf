@@ -188,6 +188,13 @@ resource "google_sql_database" "smallstep" {
   instance = google_sql_database_instance.smallstep[0].name
 }
 
+resource "google_sql_database" "smallstep_rsa" {
+  count    = local.smallstep_enabled
+  project  = google_project.this.project_id
+  name     = "stepca_rsa"
+  instance = google_sql_database_instance.smallstep[0].name
+}
+
 resource "google_sql_user" "smallstep" {
   count    = local.smallstep_enabled
   project  = google_project.this.project_id
