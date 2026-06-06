@@ -754,17 +754,51 @@ echo "=== Installing ACME authorizing webhook ==="
 WEBHOOK_BIN=/usr/local/bin/acme-authz-webhook
 WEBHOOK_VERSION="${webhook_release_version}"
 WEBHOOK_URL="https://github.com/${webhook_repo}/releases/download/webhook-v$${WEBHOOK_VERSION}/acme-authz-webhook-linux-amd64"
-if [ ! -x "$WEBHOOK_BIN" ] || [ "$($WEBHOOK_BIN version 2>/dev/null || true)" != "$${WEBHOOK_VERSION}" ]; then
+# Decide whether to (re)install by comparing the on-disk binary's sha256 to the
+# PUBLISHED sha256, NOT the version STRING. A version-string check alone is unsafe:
+# a stale binary that happens to report the right `version` (e.g. a hand-built
+# dev binary, or a re-tagged release) slips through and is never replaced. The
+# content hash is the source of truth. Fetch the published sha256 first; if it's
+# available, install only when the on-disk hash differs.
+WEBHOOK_NEED_INSTALL=yes
+if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
+  WEBHOOK_EXPECTED_SHA=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
+  # A successful fetch is NOT proof of integrity: an empty or malformed checksum
+  # file would leave WEBHOOK_EXPECTED_SHA blank and silently skip the download
+  # verification below. Require a well-formed 64-hex-char SHA256 or fail fast —
+  # a published-but-corrupt .sha256 is a signal to stop, not to install blind.
+  if ! printf '%s' "$WEBHOOK_EXPECTED_SHA" | grep -qiE '^[0-9a-f]{64}$'; then
+    echo "FATAL: fetched $WEBHOOK_URL.sha256 but it does not contain a valid SHA256 (got '$WEBHOOK_EXPECTED_SHA')" >&2
+    exit 1
+  fi
+  if [ -x "$WEBHOOK_BIN" ] && [ "$(sha256sum "$WEBHOOK_BIN" | awk '{print $1}')" = "$WEBHOOK_EXPECTED_SHA" ]; then
+    WEBHOOK_NEED_INSTALL=no
+  fi
+else
+  # No published sha256 — fall back to the version-string check (best effort).
+  WEBHOOK_EXPECTED_SHA=""
+  if [ -x "$WEBHOOK_BIN" ] && [ "$($WEBHOOK_BIN version 2>/dev/null || true)" = "$${WEBHOOK_VERSION}" ]; then
+    WEBHOOK_NEED_INSTALL=no
+  fi
+fi
+if [ "$WEBHOOK_NEED_INSTALL" = "yes" ]; then
   curl -fsSL "$WEBHOOK_URL" -o /tmp/acme-authz-webhook
-  # Verify the published sha256 if present (asset built alongside the binary).
-  if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
-    EXPECTED=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
+  if [ -n "$WEBHOOK_EXPECTED_SHA" ]; then
     ACTUAL=$(sha256sum /tmp/acme-authz-webhook | awk '{print $1}')
-    [ "$EXPECTED" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
+    [ "$WEBHOOK_EXPECTED_SHA" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
   fi
   install -m 0755 /tmp/acme-authz-webhook "$WEBHOOK_BIN"
-  rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
+  # The binary changed — make sure a RUNNING unit picks it up (systemd won't
+  # restart a long-lived process just because the on-disk binary was replaced).
+  # Only restart if the unit is already active (on first install it's created +
+  # started later in this script). Warn but don't fail on a restart error, so a
+  # transient restart failure doesn't abort the whole bootstrap — but it's no
+  # longer silently swallowed by `|| true`.
+  if systemctl is-active --quiet acme-authz-webhook 2>/dev/null; then
+    systemctl restart acme-authz-webhook || echo "WARNING: acme-authz-webhook restart failed after binary update; the new binary will take effect on the later enable/start." >&2
+  fi
 fi
+rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 
 # Dedicated unprivileged user for the webhook.
 id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
