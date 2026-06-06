@@ -240,20 +240,9 @@ variable "ca_name_prefix" {
 }
 
 variable "smallstep_acme_provisioner_name" {
-  description = "Name of the step-ca ACME provisioner (also the URL path segment: /acme/<name>/directory). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_scep_provisioner_name."
+  description = "Name of the step-ca ACME provisioner on the EC CA (also the URL path segment: /acme/<name>/directory). The EC CA is ACME-only; SCEP lives on the RSA instance (see smallstep_scep_rsa_provisioner_name)."
   type        = string
   default     = "wifi-acme"
-}
-
-variable "smallstep_scep_provisioner_name" {
-  description = "Name of the step-ca SCEP provisioner (also the URL path segment: /scep/<name>). Must be globally unique across ALL provisioners (step-ca rejects duplicate names even across types), so it must differ from smallstep_acme_provisioner_name."
-  type        = string
-  default     = "wifi-scep"
-
-  validation {
-    condition     = var.smallstep_scep_provisioner_name != var.smallstep_acme_provisioner_name
-    error_message = "smallstep_scep_provisioner_name must differ from smallstep_acme_provisioner_name (step-ca rejects duplicate provisioner names even across types)."
-  }
 }
 
 variable "smallstep_ca_rsa_dns_name" {

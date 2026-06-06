@@ -48,11 +48,6 @@ output "smallstep_acme_directory_url" {
   value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_dns_name}/acme/${var.smallstep_acme_provisioner_name}/directory" : ""
 }
 
-output "smallstep_scep_url" {
-  description = "SCEP URL for Fleet's custom_scep_proxy (Windows). Empty if disabled."
-  value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_dns_name}/scep/${var.smallstep_scep_provisioner_name}" : ""
-}
-
 output "smallstep_scep_rsa_url" {
   description = "RSA SCEP enrollment URL (Windows + non-ADE Macs point here). Empty if disabled."
   value       = var.enable_smallstep_ca ? "https://${var.smallstep_ca_rsa_dns_name}/scep/${var.smallstep_scep_rsa_provisioner_name}" : ""

@@ -150,7 +150,6 @@ locals {
     ca_name_prefix        = var.ca_name_prefix
     smallstep_ca_dns_name = var.smallstep_ca_dns_name
     smallstep_acme_name   = var.smallstep_acme_provisioner_name
-    smallstep_scep_name   = var.smallstep_scep_provisioner_name
     acme_webhook_url      = var.acme_authorizing_webhook_url
     # On-VM ACME authorizing webhook (localhost systemd service).
     acme_webhook_enabled          = var.enable_acme_webhook
