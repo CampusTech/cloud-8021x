@@ -70,6 +70,15 @@ resource "google_secret_manager_secret_iam_member" "unifi_api_key_access" {
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# Secret Manager access for Meraki API key (optional)
+resource "google_secret_manager_secret_iam_member" "meraki_api_key_access" {
+  count     = var.meraki_api_key != "" ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.meraki_api_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # Secret Manager read+write for RADIUS server certificates
 # The VM generates certs on first boot and stores them in Secret Manager
 # so they persist across VM replacements.
@@ -119,6 +128,8 @@ locals {
     has_jamf_lookup            = var.jamf_url != ""
     has_fleet_lookup           = var.enable_fleet_lookup
     has_unifi_lookup           = var.unifi_api_key != ""
+    has_meraki_lookup          = var.meraki_api_key != ""
+    meraki_org_id              = var.meraki_org_id
     rewrite_username           = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
     rewrite_username_separator = var.rewrite_username_separator
     tls_session_cache          = var.tls_session_cache

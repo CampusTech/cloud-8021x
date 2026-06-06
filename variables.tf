@@ -120,6 +120,24 @@ variable "unifi_api_key" {
   sensitive   = true
 }
 
+variable "meraki_api_key" {
+  description = "Cisco Meraki Dashboard API key — enables AP name and network (site) name lookup in RADIUS auth logs for Meraki-managed sites (the counterpart to unifi_api_key for offices on Meraki APs). Independent of and optional alongside unifi_api_key. Requires meraki_org_id."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "meraki_org_id" {
+  description = "Cisco Meraki organization ID the AP cache reads from (whole-org BSSID→AP-name map). Required when meraki_api_key is set. Find it in the Dashboard URL or via GET /organizations."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.meraki_api_key == "" || trimspace(var.meraki_org_id) != ""
+    error_message = "meraki_org_id must be set when meraki_api_key is provided (the cache builder queries a specific organization)."
+  }
+}
+
 variable "rewrite_username" {
   description = "Rewrite reply:User-Name to 'email - serial' in Access-Accept (requires Jamf lookup). Shown as 802.1X Identity in UniFi."
   type        = bool

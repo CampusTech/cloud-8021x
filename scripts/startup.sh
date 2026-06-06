@@ -19,6 +19,8 @@ HAS_JAMF_LOOKUP="${has_jamf_lookup}"
 HAS_FLEET_LOOKUP="${has_fleet_lookup}"
 FLEET_API_BASE_URL="${fleet_api_base_url}"
 HAS_UNIFI_LOOKUP="${has_unifi_lookup}"
+HAS_MERAKI_LOOKUP="${has_meraki_lookup}"
+MERAKI_ORG_ID="${meraki_org_id}"
 REWRITE_USERNAME="${rewrite_username}"
 REWRITE_USERNAME_SEPARATOR="${rewrite_username_separator}"
 TLS_SESSION_CACHE="${tls_session_cache}"
@@ -1725,11 +1727,124 @@ UNIFICACHEEOF
 fi
 
 # ---------------------------------------------------------------------------
-# 10a. Python lookup module (rlm_python3)
-#      Single module handles both Jamf and UniFi lookups in post-auth and
-#      accounting. Sets reply attributes directly — no exec output parsing.
+# 10b. Meraki AP name + network (site) name lookup (optional)
+#      For offices whose APs are Meraki-managed (the counterpart to the UniFi
+#      lookup above). Caches a BSSID -> AP-name map from the org-wide wireless
+#      SSID statuses endpoint. The Meraki BSSID
+#      is the exact MAC the AP advertises per SSID/band, so it matches the
+#      Called-Station-Id BSSID directly — no base-MAC offset arithmetic (unlike
+#      UniFi). Independent of and additive to the UniFi lookup.
 # ---------------------------------------------------------------------------
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+    echo "=== Configuring Meraki AP name lookup ==="
+
+    # Fetch Meraki Dashboard API key from Secret Manager
+    MERAKI_API_KEY=$(gcloud secrets versions access latest \
+        --secret=meraki-api-key --project="$PROJECT_ID")
+
+    # Write credentials file for the cache script
+    cat > "$RADDB/meraki-credentials.conf" << MERAKICREDEOF
+MERAKI_API_KEY=$MERAKI_API_KEY
+MERAKI_ORG_ID=$MERAKI_ORG_ID
+MERAKICREDEOF
+    chown freerad:freerad "$RADDB/meraki-credentials.conf"
+    chmod 640 "$RADDB/meraki-credentials.conf"
+
+    # Deploy the cache refresh script
+    cat > /usr/local/bin/meraki-ap-cache.sh << 'MERAKICACHEEOF'
+#!/bin/bash
+# Fetches Meraki org-wide wireless SSID statuses, builds a BSSID -> AP name +
+# network (site) name cache. Called on boot and every 5 minutes via cron.
+# The cache spans the whole Meraki org (every network), so no network filter is
+# needed; the org-wide BSSID map covers all Meraki-managed offices.
+set -uo pipefail
+
+CRED_FILE="/etc/freeradius/3.0/meraki-credentials.conf"
+CACHE_FILE="/etc/freeradius/3.0/meraki-ap-cache.json"
+
+[ -f "$CRED_FILE" ] || exit 0
+source "$CRED_FILE"
+
+[ -n "$${MERAKI_API_KEY:-}" ] || exit 0
+[ -n "$${MERAKI_ORG_ID:-}" ] || exit 0
+
+API="https://api.meraki.com/api/v1"
+URL="$API/organizations/$MERAKI_ORG_ID/wireless/ssids/statuses/byDevice?perPage=500"
+
+# Page through the result set, following the RFC 5988 Link header's "next"
+# relation. Accumulate each page body for parsing below. Meraki emits the rel
+# value UNQUOTED (rel=next), unlike RFC 5988's quoted form (rel="next"), and the
+# last page omits "next" entirely — match both quoted and unquoted, optional
+# whitespace, so the loop terminates correctly either way.
+PAGES_DIR=$(mktemp -d)
+trap 'rm -rf "$PAGES_DIR"' EXIT
+page=0
+while [ -n "$URL" ]; do
+    HDR="$PAGES_DIR/h$page"
+    BODY="$PAGES_DIR/b$page"
+    curl -sf --connect-timeout 5 --max-time 20 \
+        -H "Authorization: Bearer $MERAKI_API_KEY" \
+        -H "Accept: application/json" \
+        -D "$HDR" -o "$BODY" \
+        "$URL" 2>/dev/null || exit 0
+    # Extract the next link: find <...>; rel=next (or rel="next") in the Link
+    # header and keep only the URL inside the angle brackets.
+    URL=$(grep -i '^link:' "$HDR" | grep -oE '<[^>]*>; *rel="?next"?' | grep -oE '<[^>]*>' | tr -d '<>' | head -n1)
+    page=$((page + 1))
+    [ "$page" -ge 50 ] && break  # safety cap (50 * 500 = 25k devices)
+done
+
+python3 << PYEOF
+import glob, json, os
+
+by_bssid = {}
+for body in sorted(glob.glob(os.path.join("$PAGES_DIR", "b*"))):
+    try:
+        with open(body) as f:
+            page = json.load(f)
+    except Exception:
+        continue
+    # byDevice returns {"items": [...], "meta": {...}}. Tolerate a bare list too.
+    if isinstance(page, dict):
+        items = page.get("items", [])
+    elif isinstance(page, list):
+        items = page
+    else:
+        continue
+    for dev in items:
+        ap_name = dev.get("name") or ""
+        net = dev.get("network") or {}
+        site_name = net.get("name") or ""
+        for bss in dev.get("basicServiceSets", []) or []:
+            bssid = (bss.get("bssid") or "").replace("-", "").replace(":", "").replace(".", "").upper()
+            if len(bssid) == 12 and ap_name:
+                by_bssid[bssid] = {"ap_name": ap_name, "site_name": site_name}
+
+with open("$${CACHE_FILE}.tmp", "w") as f:
+    json.dump({"by_bssid": by_bssid}, f)
+PYEOF
+
+    mv "$${CACHE_FILE}.tmp" "$CACHE_FILE" 2>/dev/null
+MERAKICACHEEOF
+    chmod 755 /usr/local/bin/meraki-ap-cache.sh
+
+    # Run initial cache build
+    /usr/local/bin/meraki-ap-cache.sh || true
+
+    # Set up cron to refresh cache every 5 minutes
+    echo "*/5 * * * * root /usr/local/bin/meraki-ap-cache.sh" > /etc/cron.d/meraki-ap-cache
+    chmod 644 /etc/cron.d/meraki-ap-cache
+
+    echo "Meraki AP cache configured."
+fi
+
+# ---------------------------------------------------------------------------
+# 10a. Python lookup module (rlm_python3)
+#      Single module handles Jamf/Fleet device-owner + UniFi + Meraki AP
+#      lookups in post-auth and accounting. Sets reply attributes directly —
+#      no exec output parsing.
+# ---------------------------------------------------------------------------
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     echo "=== Configuring Python lookup module ==="
 
     mkdir -p "$RADDB/mods-config/python3"
@@ -1775,6 +1890,7 @@ _MDM_SOURCES = [
 ]
 DEVICE_CACHE_TTL = 3600  # 1 hour
 UNIFI_CACHE_FILE = "/etc/freeradius/3.0/unifi-ap-cache.json"
+MERAKI_CACHE_FILE = "/etc/freeradius/3.0/meraki-ap-cache.json"
 
 # In-memory device cache — loaded from disk on startup and periodically
 _device_cache = {}    # serial -> {"email":..., "device_name":..., "device_model":..., "ts": epoch}
@@ -1871,6 +1987,27 @@ def _get_cached_device(serial):
     return None
 
 
+def _bssid_from_called_station(called_station_id):
+    """Extract the 12-hex-char AP BSSID from a Called-Station-Id, returning it
+    uppercased with no separators, or "" if it doesn't contain a MAC.
+
+    The NAS sets Called-Station-Id and the MAC delimiter varies by vendor:
+      - dash-separated, SSID suffix:  "AA-BB-CC-DD-EE-FF:Campus"   (common / UniFi)
+      - colon-separated, SSID suffix: "AA:BB:CC:DD:EE:FF:Campus"   (some Meraki)
+      - no SSID suffix:               "AA-BB-CC-DD-EE-FF"
+    Splitting on the first ":" breaks the colon-separated form (it would yield
+    just "AA"). Instead, strip every non-hex character and take the FIRST 12 hex
+    digits — the BSSID always leads, and any trailing SSID text is dropped even
+    if it happens to contain hex-looking characters.
+    """
+    if not called_station_id:
+        return ""
+    hex_only = "".join(c for c in called_station_id if c in "0123456789abcdefABCDEF")
+    if len(hex_only) < 12:
+        return ""
+    return hex_only[:12].upper()
+
+
 def _unifi_lookup(called_station_id):
     """Look up AP name and site from UniFi cache by Called-Station-Id MAC.
 
@@ -1882,11 +2019,7 @@ def _unifi_lookup(called_station_id):
     if not called_station_id or not os.path.isfile(UNIFI_CACHE_FILE):
         return None
 
-    # Called-Station-Id format: "AA-BB-CC-DD-EE-FF:SSID" or "AA-BB-CC-DD-EE-FF"
-    # Extract MAC portion (before colon) and normalize to uppercase hex without separators
-    mac_part = called_station_id.split(":")[0] if ":" in called_station_id else called_station_id
-    mac = mac_part.replace("-", "").replace(".", "").upper()
-
+    mac = _bssid_from_called_station(called_station_id)
     if len(mac) != 12:
         return None
 
@@ -1910,6 +2043,42 @@ def _unifi_lookup(called_station_id):
             return {"ap_name": entry.get("ap_name", ""), "site_name": entry.get("site_name", "")}
 
     return None
+
+
+def _meraki_lookup(called_station_id):
+    """Look up AP name and network (site) from the Meraki cache by
+    Called-Station-Id BSSID.
+
+    Unlike UniFi, the Meraki cache is keyed on the exact per-SSID/band BSSID the
+    AP advertises (from basicServiceSets[].bssid), which is what shows up in the
+    Called-Station-Id — so this is an exact match only, no base-MAC offset
+    search. Self-gates on the cache file's presence so a deployment without the
+    Meraki key (or before its first cache build) just returns None.
+    Returns dict or None.
+    """
+    if not called_station_id or not os.path.isfile(MERAKI_CACHE_FILE):
+        return None
+
+    mac = _bssid_from_called_station(called_station_id)
+    if len(mac) != 12:
+        return None
+
+    with open(MERAKI_CACHE_FILE, "r") as f:
+        cache = json.load(f)
+
+    entry = cache.get("by_bssid", {}).get(mac)
+    if entry:
+        return {"ap_name": entry.get("ap_name", ""), "site_name": entry.get("site_name", "")}
+
+    return None
+
+
+def _ap_lookup(called_station_id):
+    """Resolve AP name + site from whichever AP source has it. Tries UniFi
+    first, then Meraki. Either source self-gates on its own cache file, so this
+    is safe to call regardless of which keys are configured. Returns dict or
+    None."""
+    return _unifi_lookup(called_station_id) or _meraki_lookup(called_station_id)
 
 
 def _get_attr(p, attr_name):
@@ -1992,17 +2161,18 @@ def post_auth(p):
             if ssid:
                 reply_attrs.append(("Login-LAT-Port", ssid))
 
-        # UniFi lookup — use Called-Station-Id (AP BSSID) to identify AP
+        # AP lookup — use Called-Station-Id (AP BSSID) to resolve AP/site name
+        # from whichever source manages this AP (UniFi most sites, Meraki Sac).
         if called_station:
             try:
-                unifi = _unifi_lookup(called_station)
-                if unifi:
-                    if unifi["ap_name"]:
-                        reply_attrs.append(("Callback-Id", unifi["ap_name"]))
-                    if unifi["site_name"]:
-                        reply_attrs.append(("Connect-Info", unifi["site_name"]))
+                ap = _ap_lookup(called_station)
+                if ap:
+                    if ap["ap_name"]:
+                        reply_attrs.append(("Callback-Id", ap["ap_name"]))
+                    if ap["site_name"]:
+                        reply_attrs.append(("Connect-Info", ap["site_name"]))
             except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"UniFi lookup failed: {e}")
+                radiusd.radlog(radiusd.L_ERR, f"AP lookup failed: {e}")
 
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
@@ -2043,17 +2213,17 @@ def accounting(p):
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
 
-        # UniFi lookup
+        # AP lookup (UniFi or Meraki, by Called-Station-Id BSSID)
         if called_station:
             try:
-                unifi = _unifi_lookup(called_station)
-                if unifi:
-                    if unifi["ap_name"]:
-                        reply_attrs.append(("Callback-Id", unifi["ap_name"]))
-                    if unifi["site_name"]:
-                        reply_attrs.append(("Connect-Info", unifi["site_name"]))
+                ap = _ap_lookup(called_station)
+                if ap:
+                    if ap["ap_name"]:
+                        reply_attrs.append(("Callback-Id", ap["ap_name"]))
+                    if ap["site_name"]:
+                        reply_attrs.append(("Connect-Info", ap["site_name"]))
             except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"UniFi lookup in accounting failed: {e}")
+                radiusd.radlog(radiusd.L_ERR, f"AP lookup in accounting failed: {e}")
 
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
@@ -2150,9 +2320,9 @@ chmod 640 /var/log/freeradius/radius-acct.json
 # ---------------------------------------------------------------------------
 echo "=== Configuring default virtual server ==="
 
-# Build post-auth section — single Python module handles Jamf/Fleet + UniFi
+# Build post-auth section — single Python module handles Jamf/Fleet + UniFi + Meraki
 POSTAUTH_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     POSTAUTH_MODULES="radius_lookups
         "
 fi
@@ -2173,7 +2343,7 @@ POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 
 # Build accounting section — enrichment + SQL + JSON log
 ACCT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     ACCT_MODULES="radius_lookups
         "
 fi

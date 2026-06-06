@@ -305,6 +305,30 @@ resource "google_secret_manager_secret_version" "unifi_api_key" {
 }
 
 # -----------------------------------------------------------------------------
+# Secret Manager — Meraki Dashboard API key (optional)
+# Enables AP name and network (site) name lookup in RADIUS auth logs for
+# Meraki-managed sites. Independent of the UniFi key.
+# -----------------------------------------------------------------------------
+
+resource "google_secret_manager_secret" "meraki_api_key" {
+  count     = var.meraki_api_key != "" ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = "meraki-api-key"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "meraki_api_key" {
+  count       = var.meraki_api_key != "" ? 1 : 0
+  secret      = google_secret_manager_secret.meraki_api_key[0].id
+  secret_data = var.meraki_api_key
+}
+
+# -----------------------------------------------------------------------------
 # Secret Manager — Datadog API key
 # -----------------------------------------------------------------------------
 
