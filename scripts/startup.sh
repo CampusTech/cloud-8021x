@@ -849,9 +849,15 @@ if [ "$WEBHOOK_NEED_INSTALL" = "yes" ]; then
     [ "$WEBHOOK_EXPECTED_SHA" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
   fi
   install -m 0755 /tmp/acme-authz-webhook "$WEBHOOK_BIN"
-  # The binary changed — make sure a running unit picks it up (systemd won't
+  # The binary changed — make sure a RUNNING unit picks it up (systemd won't
   # restart a long-lived process just because the on-disk binary was replaced).
-  systemctl restart acme-authz-webhook 2>/dev/null || true
+  # Only restart if the unit is already active (on first install it's created +
+  # started later in this script). Warn but don't fail on a restart error, so a
+  # transient restart failure doesn't abort the whole bootstrap — but it's no
+  # longer silently swallowed by `|| true`.
+  if systemctl is-active --quiet acme-authz-webhook 2>/dev/null; then
+    systemctl restart acme-authz-webhook || echo "WARNING: acme-authz-webhook restart failed after binary update; the new binary will take effect on the later enable/start." >&2
+  fi
 fi
 rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 
