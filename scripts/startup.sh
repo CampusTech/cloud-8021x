@@ -735,7 +735,6 @@ cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
         "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
         "minimumPublicKeyLength": 2048,
         "encryptionAlgorithmIdentifier": 2,
-        "excludeIntermediate": true,
         "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
 %{ if acme_webhook_enabled ~}
