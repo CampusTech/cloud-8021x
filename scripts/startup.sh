@@ -832,6 +832,14 @@ WEBHOOK_URL="https://github.com/${webhook_repo}/releases/download/webhook-v$${WE
 WEBHOOK_NEED_INSTALL=yes
 if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
   WEBHOOK_EXPECTED_SHA=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
+  # A successful fetch is NOT proof of integrity: an empty or malformed checksum
+  # file would leave WEBHOOK_EXPECTED_SHA blank and silently skip the download
+  # verification below. Require a well-formed 64-hex-char SHA256 or fail fast —
+  # a published-but-corrupt .sha256 is a signal to stop, not to install blind.
+  if ! printf '%s' "$WEBHOOK_EXPECTED_SHA" | grep -qiE '^[0-9a-f]{64}$'; then
+    echo "FATAL: fetched $WEBHOOK_URL.sha256 but it does not contain a valid SHA256 (got '$WEBHOOK_EXPECTED_SHA')" >&2
+    exit 1
+  fi
   if [ -x "$WEBHOOK_BIN" ] && [ "$(sha256sum "$WEBHOOK_BIN" | awk '{print $1}')" = "$WEBHOOK_EXPECTED_SHA" ]; then
     WEBHOOK_NEED_INSTALL=no
   fi
