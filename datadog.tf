@@ -93,20 +93,24 @@ locals {
               # NOT the freeradius.total_access_* counters — those stay 0 under
               # EAP-TLS (FreeRADIUS counts total_access_requests but not
               # accepts/rejects for EAP). See the radius_no_accepts monitor note.
+              # Raw counts over the dashboard's selected window (not a per-minute
+              # rate): a count widget can't know the global time selector, so a
+              # fixed divisor would be wrong whenever the window changes. The
+              # title reflects "over the selected time range".
               {
                 definition = {
-                  title     = "Accepts / min"
+                  title     = "Accepts"
                   type      = "query_value"
                   autoscale = true
-                  precision = 1
+                  precision = 0
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept $host" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "default_zero(a) / 30" }
+                        { formula = "default_zero(a)" }
                       ]
                       conditional_formats = [
                         { comparator = ">", value = 0, palette = "white_on_green" }
@@ -117,18 +121,18 @@ locals {
               },
               {
                 definition = {
-                  title     = "Rejects / min"
+                  title     = "Rejects"
                   type      = "query_value"
                   autoscale = true
-                  precision = 1
+                  precision = 0
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Reject $host" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "default_zero(a) / 30" }
+                        { formula = "default_zero(a)" }
                       ]
                       conditional_formats = [
                         { comparator = ">", value = 0, palette = "white_on_yellow" }
@@ -147,8 +151,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept $host" }, compute = { aggregation = "count" } },
-                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject $host" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } },
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -186,7 +190,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept $host" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -195,7 +199,7 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject $host" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
