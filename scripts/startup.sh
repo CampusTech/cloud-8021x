@@ -30,12 +30,34 @@ RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
 
 # ---------------------------------------------------------------------------
-# Idempotency — skip if FreeRADIUS is already running
+# Idempotency — skip only if FreeRADIUS is running AND this exact script has
+# already bootstrapped the host. The old guard skipped whenever freeradius was
+# active, so a `gcloud reset` (freeradius autostarts from the persisted disk
+# before this metadata script runs) never applied an updated startup script.
+# Now we content-stamp the rendered script's sha256 to a disk-persistent file;
+# a changed script (new Terraform render) has a new hash, so the guard misses
+# and the FULL bootstrap re-runs to apply the change. The bootstrap is safe to
+# re-run: clients.conf is rebuilt from a fresh `>` truncate, datadog.yaml edits
+# are grep-guarded, and the CA/cert sections restore-or-init idempotently.
+# Stamp is written only at the very end (set -e aborts before stamping on any
+# failure, so a partial run re-runs next boot).
 # ---------------------------------------------------------------------------
-if systemctl is-active --quiet freeradius 2>/dev/null; then
-    echo "FreeRADIUS already running, skipping bootstrap."
+BOOTSTRAP_STAMP=/var/lib/radius-bootstrap.sha256
+# Hash this script (the file GCE wrote to disk and is executing). If $0 isn't a
+# readable regular file (unusual invocation), SCRIPT_SHA stays empty and the
+# guard below can't match -> we run the full bootstrap (fail-safe).
+SCRIPT_SHA=""
+if [ -f "$0" ]; then
+    SCRIPT_SHA=$(sha256sum "$0" 2>/dev/null | awk '{print $1}')
+fi
+if systemctl is-active --quiet freeradius 2>/dev/null \
+    && [ -n "$SCRIPT_SHA" ] \
+    && [ -f "$BOOTSTRAP_STAMP" ] \
+    && [ "$(cat "$BOOTSTRAP_STAMP" 2>/dev/null)" = "$SCRIPT_SHA" ]; then
+    echo "FreeRADIUS running and bootstrap script unchanged (sha $SCRIPT_SHA) — skipping."
     exit 0
 fi
+echo "Running bootstrap (script sha $${SCRIPT_SHA:-unknown})."
 
 # ---------------------------------------------------------------------------
 # 1. System prerequisites
@@ -2834,6 +2856,15 @@ systemctl restart datadog-agent
 # ---------------------------------------------------------------------------
 EXTERNAL_IP=$(curl -sf -H "Metadata-Flavor: Google" \
     http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+
+# Record the stamp LAST, only on a fully successful run (set -e aborts earlier
+# on any failure). On the next boot, an unchanged script with freeradius running
+# short-circuits at the guard above; a changed script re-bootstraps.
+if [ -n "$SCRIPT_SHA" ]; then
+    mkdir -p "$(dirname "$BOOTSTRAP_STAMP")"
+    echo "$SCRIPT_SHA" > "$BOOTSTRAP_STAMP"
+    echo "Wrote bootstrap stamp $BOOTSTRAP_STAMP ($SCRIPT_SHA)."
+fi
 
 echo ""
 echo "=== FreeRADIUS bootstrap completed at $(date) ==="
