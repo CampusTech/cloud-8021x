@@ -89,21 +89,28 @@ locals {
                   ]
                 }
               },
+              # Accepts/Rejects come from the radius-auth LOG (one line per event),
+              # NOT the freeradius.total_access_* counters — those stay 0 under
+              # EAP-TLS (FreeRADIUS counts total_access_requests but not
+              # accepts/rejects for EAP). See the radius_no_accepts monitor note.
+              # Raw counts over the dashboard's selected window (not a per-minute
+              # rate): a count widget can't know the global time selector, so a
+              # fixed divisor would be wrong whenever the window changes. The
+              # title reflects "over the selected time range".
               {
                 definition = {
-                  title     = "Accepts / min"
+                  title     = "Accepts"
                   type      = "query_value"
                   autoscale = true
-                  precision = 1
+                  precision = 0
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_accepts.count{$host}.as_rate()", aggregator = "avg" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_rate()", aggregator = "avg" }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "(default_zero(a) + default_zero(b)) * 60" }
+                        { formula = "default_zero(a)" }
                       ]
                       conditional_formats = [
                         { comparator = ">", value = 0, palette = "white_on_green" }
@@ -114,19 +121,18 @@ locals {
               },
               {
                 definition = {
-                  title     = "Rejects / min"
+                  title     = "Rejects"
                   type      = "query_value"
                   autoscale = true
-                  precision = 1
+                  precision = 0
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_rejects.count{$host}.as_rate()", aggregator = "avg" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_rate()", aggregator = "avg" }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "(default_zero(a) + default_zero(b)) * 60" }
+                        { formula = "default_zero(a)" }
                       ]
                       conditional_formats = [
                         { comparator = ">", value = 0, palette = "white_on_yellow" }
@@ -145,15 +151,13 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_accepts.count{$host}.as_count()", aggregator = "sum" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_count()", aggregator = "sum" },
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_access_rejects.count{$host}.as_count()", aggregator = "sum" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_count()", aggregator = "sum" }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } },
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
                         {
-                          formula = "((default_zero(a) + default_zero(b)) / (default_zero(a) + default_zero(b) + default_zero(c) + default_zero(d))) * 100"
+                          formula = "(default_zero(a) / (default_zero(a) + default_zero(c))) * 100"
                         }
                       ]
                       conditional_formats = [
@@ -186,23 +190,21 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_accepts.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_rate()" }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
                       style           = { palette = "green" }
-                      formulas        = [{ formula = "default_zero(a) + default_zero(b)", alias = "Accepts" }]
+                      formulas        = [{ formula = "a", alias = "Accepts" }]
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_access_rejects.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_rate()" }
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
                       style           = { palette = "red" }
-                      formulas        = [{ formula = "default_zero(c) + default_zero(d)", alias = "Rejects" }]
+                      formulas        = [{ formula = "c", alias = "Rejects" }]
                     },
                     {
                       queries = [
