@@ -539,35 +539,17 @@ fi
 cat "/etc/step-ca-rsa/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/root_ca.crt" >> /tmp/smallstep-ca.crt
 %{ endif ~}
 
-# Render ca.json with ACME (device-attest-01 + optional authorizing webhook)
-# and SCEP provisioners.
+# Render ca.json for the EC CA with a single ACME provisioner
+# (device-attest-01 + optional authorizing webhook).
 #
-# The AUTHORIZING webhook is attached ONLY to the ACME provisioner and uses
-# certType "X509" — it gates X509 issuance by checking the attested device
-# serial (attestationData.permanentIdentifier) against Fleet. The SCEP
-# provisioner is intentionally NOT webhook-gated; it authenticates with the
-# static challenge, so the webhook never receives a serial-less SCEP request.
+# The AUTHORIZING webhook is attached to the ACME provisioner and uses certType
+# "X509" — it gates X509 issuance by checking the attested device serial
+# (attestationData.permanentIdentifier) against Fleet.
 #
-# step-ca's SCEP provisioner wants decrypterCertificate + decrypterKeyPEM as
-# base64-encoded PEM. The decrypter key is the shared software RSA key restored
-# from / generated into Secret Manager above.
-#
-# excludeIntermediate=true: by default step-ca's GetCACert returns BOTH the RSA
-# decrypter (RA) cert AND the EC intermediate (scep/authority.go
-# GetCACertificates: appends a.intermediates unless ShouldIncludeIntermediateInChain
-# is false). The Windows native SCEP CSP (ClientCertificateInstall) can't handle
-# the EC intermediate in that bundle — it picks the wrong PKCS#7 recipient /
-# can't build a chain and fails to initialize with "server certs ''" / 0x80092004
-# (CRYPT_E_NO_MATCH) on host 733. step-ca's own source documents this exact case
-# ("useful in environments where the SCEP client doesn't select the right RSA
-# decrypter certificate"). Setting excludeIntermediate makes GetCACert return
-# ONLY the RSA decrypter, so the CSP has an unambiguous RSA recipient. The issued
-# Wi-Fi cert is still signed by the EC intermediate (signAuth.SignWithContext) and
-# the EC chain / all macOS ACME certs are completely unaffected — this only
-# changes what the SCEP GetCACert response advertises. macOS uses ACME, not SCEP,
-# so it never calls GetCACert and is untouched.
-SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < "$STEPPATH/certs/scep_decrypter.crt")"
-SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < "$STEPPATH/secrets/scep_decrypter_key")"
+# This EC instance is ACME-only: macOS/iOS get EAP-TLS Wi-Fi certs via ACME
+# device-attest-01. SCEP lives on the separate RSA CA (instance #2, :8444)
+# because Windows native SCEP + non-ADE Macs need an RSA-signed leaf, which the
+# EC chain can't serve. The former EC SCEP provisioner has been removed.
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -600,17 +582,6 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         ],
 %{ endif ~}
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
-      },
-      {
-        "type": "SCEP",
-        "name": "${smallstep_scep_name}",
-        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
-        "minimumPublicKeyLength": 2048,
-        "encryptionAlgorithmIdentifier": 2,
-        "decrypterCertificate": "$${SCEP_DECRYPTER_CERT_B64}",
-        "decrypterKeyPEM": "$${SCEP_DECRYPTER_KEY_B64}",
-        "excludeIntermediate": true,
-        "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
   },
@@ -619,48 +590,12 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
 }
 CAJSON
 
-# SCEP decrypter readiness probe.
-#
-# step-ca 0.30.2 validates the SCEP decrypter (decrypterCertificate +
-# decrypterKeyURI -> Cloud KMS) exactly ONCE at startup. If that KMS call
-# fails transiently (IAM propagation lag, KMS latency, network blip on a
-# fresh boot), step-ca logs the NON-FATAL line:
-#   "failed validating SCEP authority: SCEP provisioner ... does not have decrypter"
-# then keeps serving with the provisioner DEGRADED — every SCEP PKIOperation
-# returns HTTP 500 ("does not have a decrypter available") for the life of the
-# process, with no crash and no retry. On an HA pair behind a round-robin LB
-# this silently breaks ~half of all SCEP enrollments until a manual restart.
-#
-# This probe runs after step-ca comes up and fails the unit (-> Restart=always
-# re-execs it, by which point KMS is reachable) if the decrypter didn't load.
-# Gated on a working SCEP provisioner via the marker file written above.
-%{ if smallstep_enabled ~}
-cat > /usr/local/bin/stepca-decrypter-probe.sh <<'PROBE'
-#!/bin/bash
-# Wait for the CA to answer health, then assert the SCEP decrypter initialized.
-for i in $(seq 1 30); do
-  curl -fsS -k https://127.0.0.1:8443/health >/dev/null 2>&1 && break
-  sleep 1
-done
-# Look only at THIS invocation's logs (since the unit's current start).
-since=$(systemctl show step-ca -p ActiveEnterTimestamp --value)
-if journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
-  echo "stepca-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
-  exit 1
-fi
-echo "stepca-decrypter-probe: SCEP decrypter OK"
-exit 0
-PROBE
-chmod +x /usr/local/bin/stepca-decrypter-probe.sh
-%{ endif ~}
-
 # Log file for step-ca. step-ca has no native file-logging (its logger config is
 # only format/traceHeader; logrus + Go's std log both write to stderr), and the
 # Datadog journald tailer drops step-ca's PLAIN-TEXT operational lines (startup,
-# "Serving HTTPS", and the "does not have decrypter" error) — only the JSON
-# request lines survive journald. So tee step-ca's stdout/stderr to a file and
-# tail THAT in Datadog (file tailer ships every line verbatim). journald is kept
-# too (tee's stdout), so the decrypter ExecStartPost probe still works.
+# "Serving HTTPS") — only the JSON request lines survive journald. So tee
+# step-ca's stdout/stderr to a file and tail THAT in Datadog (file tailer ships
+# every line verbatim). journald is kept too (tee's stdout).
 mkdir -p /var/log/step-ca
 cat > /etc/logrotate.d/step-ca <<'LOGROTATE'
 /var/log/step-ca/step-ca.log {
@@ -693,11 +628,6 @@ Environment=STEP_LOGGER_LOG_REAL_IP=true
 # tee to journald (stdout) AND the log file Datadog tails. A shell wraps the
 # pipe; it stays as the unit's main process and Restart=always covers crashes.
 ExecStart=/bin/sh -c '/usr/bin/step-ca /etc/step-ca/config/ca.json 2>&1 | tee -a /var/log/step-ca/step-ca.log'
-%{ if smallstep_enabled ~}
-# Assert the SCEP decrypter loaded; non-zero here trips Restart=always so a
-# transient KMS failure at boot self-heals instead of silently 500-ing SCEP.
-ExecStartPost=/usr/local/bin/stepca-decrypter-probe.sh
-%{ endif ~}
 Restart=always
 RestartSec=5
 User=root
