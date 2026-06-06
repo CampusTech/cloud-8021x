@@ -1742,13 +1742,14 @@ if [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     MERAKI_API_KEY=$(gcloud secrets versions access latest \
         --secret=meraki-api-key --project="$PROJECT_ID")
 
-    # Write credentials file for the cache script
-    cat > "$RADDB/meraki-credentials.conf" << MERAKICREDEOF
-MERAKI_API_KEY=$MERAKI_API_KEY
-MERAKI_ORG_ID=$MERAKI_ORG_ID
-MERAKICREDEOF
-    chown freerad:freerad "$RADDB/meraki-credentials.conf"
-    chmod 640 "$RADDB/meraki-credentials.conf"
+    # Write credentials file for the cache script as a small JSON object. The
+    # cache script PARSES this (jq) rather than `source`-ing it, so a key value
+    # containing shell metacharacters can never be executed. jq -n --arg both
+    # JSON-escapes the values safely.
+    jq -n --arg key "$MERAKI_API_KEY" --arg org "$MERAKI_ORG_ID" \
+        '{api_key: $key, org_id: $org}' > "$RADDB/meraki-credentials.json"
+    chown freerad:freerad "$RADDB/meraki-credentials.json"
+    chmod 640 "$RADDB/meraki-credentials.json"
 
     # Deploy the cache refresh script
     cat > /usr/local/bin/meraki-ap-cache.sh << 'MERAKICACHEEOF'
@@ -1759,14 +1760,17 @@ MERAKICREDEOF
 # needed; the org-wide BSSID map covers all Meraki-managed offices.
 set -uo pipefail
 
-CRED_FILE="/etc/freeradius/3.0/meraki-credentials.conf"
+CRED_FILE="/etc/freeradius/3.0/meraki-credentials.json"
 CACHE_FILE="/etc/freeradius/3.0/meraki-ap-cache.json"
 
 [ -f "$CRED_FILE" ] || exit 0
-source "$CRED_FILE"
+# Parse the JSON cred file with jq — never `source` it, so a key value with
+# shell metacharacters can't be executed. jq -e fails if a field is missing.
+MERAKI_API_KEY=$(jq -re '.api_key' "$CRED_FILE" 2>/dev/null) || exit 0
+MERAKI_ORG_ID=$(jq -re '.org_id' "$CRED_FILE" 2>/dev/null) || exit 0
 
-[ -n "$${MERAKI_API_KEY:-}" ] || exit 0
-[ -n "$${MERAKI_ORG_ID:-}" ] || exit 0
+[ -n "$MERAKI_API_KEY" ] || exit 0
+[ -n "$MERAKI_ORG_ID" ] || exit 0
 
 API="https://api.meraki.com/api/v1"
 URL="$API/organizations/$MERAKI_ORG_ID/wireless/ssids/statuses/byDevice?perPage=500"
@@ -2008,6 +2012,38 @@ def _bssid_from_called_station(called_station_id):
     return hex_only[:12].upper()
 
 
+def _ssid_from_called_station(called_station_id):
+    """Return the SSID portion of a Called-Station-Id, or "" if there's none.
+
+    Called-Station-Id is "<BSSID>:<SSID>" where the BSSID's own separators may be
+    dashes OR colons, e.g. "AA-BB-CC-DD-EE-FF:Campus" or "AA:BB:CC:DD:EE:FF:Campus".
+    A naive split(":", 1) breaks the colon-MAC form (it would return
+    "BB:CC:DD:EE:FF:Campus"). Instead, walk past the leading MAC: consume the
+    first 12 hex digits and their interleaved separators, then return whatever
+    remains after the delimiter that follows the MAC.
+    """
+    if not called_station_id:
+        return ""
+    seen_hex = 0
+    i = 0
+    n = len(called_station_id)
+    # Advance through the leading MAC: hex digits plus its ':'/'-'/'.' separators.
+    while i < n and seen_hex < 12:
+        c = called_station_id[i]
+        if c in "0123456789abcdefABCDEF":
+            seen_hex += 1
+        elif c not in ":-.":
+            break
+        i += 1
+    if seen_hex < 12:
+        return ""  # no full MAC prefix -> treat whole thing as not-an-SSID
+    # Skip the single delimiter (": " / "-") between the MAC and the SSID.
+    while i < n and called_station_id[i] in ":-":
+        i += 1
+        break
+    return called_station_id[i:]
+
+
 def _unifi_lookup(called_station_id):
     """Look up AP name and site from UniFi cache by Called-Station-Id MAC.
 
@@ -2155,14 +2191,16 @@ def post_auth(p):
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
 
-        # Extract SSID from Called-Station-Id (format: "AA-BB-CC-DD-EE-FF:SSID")
-        if called_station and ":" in called_station:
-            ssid = called_station.split(":", 1)[1]
+        # Extract SSID from Called-Station-Id ("<BSSID>:<SSID>"). Strips the
+        # leading MAC regardless of dash/colon separators (a naive split(":")
+        # would mangle a colon-separated BSSID).
+        if called_station:
+            ssid = _ssid_from_called_station(called_station)
             if ssid:
                 reply_attrs.append(("Login-LAT-Port", ssid))
 
         # AP lookup — use Called-Station-Id (AP BSSID) to resolve AP/site name
-        # from whichever source manages this AP (UniFi most sites, Meraki Sac).
+        # from whichever source manages this AP (UniFi or Meraki).
         if called_station:
             try:
                 ap = _ap_lookup(called_station)
