@@ -2628,6 +2628,9 @@ DDMETRICSEOF
 #      Datadog OpenMetrics. Plus: journald log shipping, a /health HTTP check, a
 #      process check, and custom cert-expiry + decrypter-readiness gauges (which
 #      step_ca metrics don't cover). No OTLP — step-ca has no OpenTelemetry.
+#      Covers BOTH CA instances: the EC CA (:8443, metrics :9090, ca_instance:ec)
+#      and the RSA SCEP CA (:8444, metrics :9091, ca_instance:rsa). Same metric
+#      names/namespace/service on both; the ca_instance tag breaks them apart.
 # ---------------------------------------------------------------------------
 echo "=== Configuring Datadog for step-ca ==="
 
@@ -2641,6 +2644,7 @@ instances:
     namespace: smallstep
     tags:
       - "service:smallstep-ca"
+      - "ca_instance:ec"
     metrics:
       - step_ca_uptime_seconds: uptime
       - step_ca_provisioner_signed_total: provisioner.signed
@@ -2651,6 +2655,29 @@ instances:
       - step_ca_kms_signed: kms.signed
       - step_ca_kms_errors: kms.errors
 DDSTEPCAMETRICSEOF
+
+# --- OpenMetrics (RSA CA): scrape the RSA step-ca's native Prometheus endpoint
+# on :9091. SAME namespace (smallstep) so the existing step_ca_* dashboard
+# aggregates both instances; distinguished by the ca_instance:rsa tag (the EC
+# scrape above carries ca_instance:ec). SCEP-only, so provisioner.signed here
+# is all wifi-scep (Windows + non-ADE Mac Wi-Fi certs).
+cat > /etc/datadog-agent/conf.d/openmetrics.d/stepca-rsa.yaml << 'DDSTEPCARSAMETRICSEOF'
+instances:
+  - openmetrics_endpoint: http://127.0.0.1:9091/metrics
+    namespace: smallstep
+    tags:
+      - "service:smallstep-ca"
+      - "ca_instance:rsa"
+    metrics:
+      - step_ca_uptime_seconds: uptime
+      - step_ca_provisioner_signed_total: provisioner.signed
+      - step_ca_provisioner_renewed_total: provisioner.renewed
+      - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
+      - step_ca_provisioner_webhook_authorized_total: provisioner.webhook_authorized
+      - step_ca_provisioner_webhook_enriched_total: provisioner.webhook_enriched
+      - step_ca_kms_signed: kms.signed
+      - step_ca_kms_errors: kms.errors
+DDSTEPCARSAMETRICSEOF
 
 # --- Logs: ship step-ca's journald unit as source=stepca service=smallstep-ca.
 # step-ca logs structured JSON (logger.format=json); the Datadog stepca log
@@ -2673,6 +2700,16 @@ logs:
         # noise); a failing /health still ships. step-ca's JSON field order is
         # stable: "path" precedes "status".
         pattern: '"path":"/health".*"status":200'
+  # RSA CA log file. Same source=stepca so the same Datadog log pipeline
+  # (datadog_logs_custom_pipeline.stepca, filtered on source:stepca) parses it.
+  - type: file
+    path: /var/log/step-ca-rsa/step-ca-rsa.log
+    source: stepca
+    service: smallstep-ca
+    log_processing_rules:
+      - type: exclude_at_match
+        name: exclude_healthy_health_checks
+        pattern: '"path":"/health".*"status":200'
 DDSTEPCALOGSEOF
 
 # dd-agent must be in systemd-journal to read the unit's journal.
@@ -2690,9 +2727,23 @@ instances:
     tags:
       - "service:smallstep-ca"
       - "component:step-ca"
+      - "ca_instance:ec"
+  # RSA CA /health on :8444 (its own chain, so skip TLS verify on loopback).
+  - name: stepca-rsa-health
+    url: https://127.0.0.1:8444/health
+    tls_verify: false
+    timeout: 5
+    tags:
+      - "service:smallstep-ca"
+      - "component:step-ca"
+      - "ca_instance:rsa"
 DDHTTPEOF
 
-# --- Process check: alert if the step-ca process disappears.
+# --- Process check: alert if the step-ca process disappears. exact_match:false
+# is a substring match on the command line, so 'step-ca' already matches BOTH
+# the EC (/usr/bin/step-ca .../step-ca/config/ca.json) and RSA
+# (/usr/bin/step-ca .../step-ca-rsa/config/ca.json) processes — no separate RSA
+# instance needed. The check reports an aggregate process count (both up = 2).
 mkdir -p /etc/datadog-agent/conf.d/process.d
 cat > /etc/datadog-agent/conf.d/process.d/conf.yaml << 'DDPROCEOF'
 instances:
@@ -2711,8 +2762,12 @@ DDPROCEOF
 cat > /usr/local/bin/stepca-dd-metrics.sh << 'STEPCAMETRICSEOF'
 #!/bin/bash
 # Emit step-ca health gauges to the Datadog Agent via DogStatsD (UDP 8125).
+# Covers BOTH CA instances: EC (/etc/step-ca, unit step-ca, ca_instance:ec)
+# and RSA (/etc/step-ca-rsa, unit step-ca-rsa, ca_instance:rsa). Same metric
+# names + service:smallstep-ca on both; the ca_instance/cert tags keep the two
+# instances' gauges from colliding while the existing dashboard's tag-agnostic
+# min/by-host aggregation still works.
 set -uo pipefail
-STEP=/etc/step-ca
 DSD=127.0.0.1
 PORT=8125
 
@@ -2728,17 +2783,30 @@ days_left() { # pem-file -> integer days, or empty
   echo $(( (end - now) / 86400 ))
 }
 
-di=$(days_left "$STEP/certs/intermediate_ca.crt")
-[ -n "$di" ] && emit "smallstep.cert.days_until_expiry:$di|g|#cert:intermediate,service:smallstep-ca"
-dd=$(days_left "$STEP/certs/scep_decrypter.crt")
-[ -n "$dd" ] && emit "smallstep.cert.days_until_expiry:$dd|g|#cert:decrypter,service:smallstep-ca"
+emit_instance() { # step_path unit ca_instance
+  local step="$1" unit="$2" ca="$3" di dd ready since
+  di=$(days_left "$step/certs/intermediate_ca.crt")
+  [ -n "$di" ] && emit "smallstep.cert.days_until_expiry:$di|g|#cert:intermediate,service:smallstep-ca,ca_instance:$ca"
+  dd=$(days_left "$step/certs/scep_decrypter.crt")
+  [ -n "$dd" ] && emit "smallstep.cert.days_until_expiry:$dd|g|#cert:decrypter,service:smallstep-ca,ca_instance:$ca"
 
-ready=1
-since=$(systemctl show step-ca -p ActiveEnterTimestamp --value 2>/dev/null)
-if [ -n "$since" ] && journalctl -u step-ca --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+  # decrypter_ready: only "ready" (1) when the unit is ACTIVE *and* its current
+  # run logged no "does not have decrypter" line. A down/failed unit reports 0 —
+  # otherwise a dead CA would falsely read ready=1 (the degradation line is only
+  # logged by a *running* step-ca, so absence of the line ≠ healthy).
   ready=0
-fi
-emit "smallstep.scep.decrypter_ready:$ready|g|#service:smallstep-ca"
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then
+    ready=1
+    since=$(systemctl show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null)
+    if [ -n "$since" ] && journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+      ready=0
+    fi
+  fi
+  emit "smallstep.scep.decrypter_ready:$ready|g|#service:smallstep-ca,ca_instance:$ca"
+}
+
+emit_instance /etc/step-ca     step-ca     ec
+emit_instance /etc/step-ca-rsa step-ca-rsa rsa
 STEPCAMETRICSEOF
 chmod +x /usr/local/bin/stepca-dd-metrics.sh
 
