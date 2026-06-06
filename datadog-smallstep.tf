@@ -10,6 +10,12 @@
 # service:smallstep-ca) parsed by the pipeline at the bottom of this file.
 #
 # OpenMetrics maps counters to "<name>.count"; gauges keep their name.
+#
+# TWO CA instances feed this dashboard, both tagged service:smallstep-ca with a
+# distinguishing ca_instance tag: the EC CA (ACME + SCEP, :8443/:9090,
+# ca_instance:ec) and the RSA SCEP CA (Windows + non-ADE Mac, :8444/:9091,
+# ca_instance:rsa). Metric names are shared, so widgets aggregate both by
+# default; the $ca_instance template variable isolates one.
 # -----------------------------------------------------------------------------
 
 locals {
@@ -31,6 +37,16 @@ locals {
           google_compute_instance.radius_secondary.name
         ]
         defaults = ["*"]
+      },
+      {
+        # Break the two CA instances apart: EC (ACME + SCEP, :8443/:9090) vs RSA
+        # (SCEP-only, :8444/:9091). Both carry service:smallstep-ca, so the
+        # issuance/KMS/expiry widgets aggregate both by default ($ca_instance=*);
+        # select ec or rsa to isolate one.
+        name             = "ca_instance"
+        prefix           = "ca_instance"
+        available_values = ["ec", "rsa"]
+        defaults         = ["*"]
       }
     ]
     widgets = [
@@ -45,11 +61,20 @@ locals {
           widgets = [
             {
               definition = {
-                title    = "CA Health (/health)"
+                title    = "EC CA Health (/health)"
                 type     = "check_status"
                 check    = "http.can_connect"
                 grouping = "cluster"
                 tags     = ["instance:stepca-health"]
+              }
+            },
+            {
+              definition = {
+                title    = "RSA CA Health (/health)"
+                type     = "check_status"
+                check    = "http.can_connect"
+                grouping = "cluster"
+                tags     = ["instance:stepca-rsa-health"]
               }
             },
             {
@@ -70,7 +95,7 @@ locals {
                 requests = [
                   {
                     queries = [
-                      { data_source = "metrics", name = "a", query = "min:smallstep.scep.decrypter_ready{$host}", aggregator = "last" }
+                      { data_source = "metrics", name = "a", query = "min:smallstep.scep.decrypter_ready{$host,$ca_instance}", aggregator = "last" }
                     ]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
@@ -91,7 +116,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "max:smallstep.uptime{$host}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "max:smallstep.uptime{$host,$ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a / 86400" }]
                   }
@@ -106,7 +131,7 @@ locals {
                 precision = 1
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host}.as_rate()", aggregator = "avg" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance}.as_rate()", aggregator = "avg" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a * 60" }]
                   }
@@ -122,6 +147,9 @@ locals {
       # -----------------------------------------------------------------------
       {
         definition = {
+          # EC (ACME wifi-acme + SCEP wifi-scep) and RSA (SCEP wifi-scep only)
+          # are combined here; filter with $ca_instance or read the
+          # by {ca_instance} breakdown on the signed-by-provisioner widgets.
           title       = "Issuance"
           type        = "group"
           layout_type = "ordered"
@@ -133,7 +161,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "signed" }]
@@ -148,14 +176,14 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.renewed.count{$host} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.renewed.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "cool" }
                     formulas        = [{ formula = "a", alias = "renewed" }]
                   },
                   {
-                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.provisioner.rekeyed.count{$host} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.provisioner.rekeyed.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "warm" }
@@ -171,7 +199,7 @@ locals {
                 requests = [
                   {
                     queries = [
-                      { data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_count()", aggregator = "sum" }
+                      { data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()", aggregator = "sum" }
                     ]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
@@ -199,7 +227,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.webhook_authorized.count{$host} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "authorized" }]
@@ -214,14 +242,14 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.kms.signed.count{$host}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.kms.signed.count{$host,$ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "green" }
                     formulas        = [{ formula = "a", alias = "signed" }]
                   },
                   {
-                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.kms.errors.count{$host}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.kms.errors.count{$host,$ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     style           = { palette = "red" }
@@ -239,6 +267,9 @@ locals {
       # -----------------------------------------------------------------------
       {
         definition = {
+          # Both CA instances emit smallstep.cert.days_until_expiry; EC and RSA
+          # are combined (min across both) unless $ca_instance is set. The trend
+          # widget breaks them out by {cert,ca_instance}.
           title       = "Certificate Expiry"
           type        = "group"
           layout_type = "ordered"
@@ -252,7 +283,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:intermediate,$host}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:intermediate,$host,$ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
                     conditional_formats = [
@@ -273,7 +304,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:decrypter,$host}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:decrypter,$host,$ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
                     conditional_formats = [
@@ -292,7 +323,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{$host} by {cert}" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{$host,$ca_instance} by {cert,ca_instance}" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     formulas        = [{ formula = "a" }]
@@ -373,7 +404,25 @@ resource "datadog_monitor" "stepca_health" {
   }
   notify_no_data    = true
   no_data_timeframe = 10
-  tags              = ["service:smallstep-ca", "managed-by:terraform"]
+  tags              = ["service:smallstep-ca", "ca_instance:ec", "managed-by:terraform"]
+}
+
+# RSA step-ca /health unreachable (the RSA SCEP CA is down on a node). Mirrors
+# stepca_health but keys on the :8444 /health check (instance:stepca-rsa-health).
+resource "datadog_monitor" "stepca_rsa_health" {
+  count   = local.smallstep_datadog_enabled ? 1 : 0
+  name    = "Smallstep step-ca-rsa /health failing"
+  type    = "service check"
+  query   = "\"http.can_connect\".over(\"instance:stepca-rsa-health\").by(\"host\").last(3).count_by_status()"
+  message = "step-ca-rsa /health is failing on {{host.name}} — the RSA SCEP CA (Windows + non-ADE Mac Wi-Fi certs) is unreachable on this node. SCEP issuance may be degraded; check `systemctl status step-ca-rsa`.${local.dd_notify}"
+  monitor_thresholds {
+    critical = 2
+    warning  = 1
+    ok       = 1
+  }
+  notify_no_data    = true
+  no_data_timeframe = 10
+  tags              = ["service:smallstep-ca", "ca_instance:rsa", "managed-by:terraform"]
 }
 
 # step-ca process gone.
