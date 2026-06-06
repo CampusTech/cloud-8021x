@@ -2142,6 +2142,14 @@ def post_auth(p):
         # bare serial the MDM cache is keyed on.
         serial = _serial_from_username(user_name)
         if serial:
+            # Expose the NORMALIZED bare serial to the JSON logger via
+            # reply:Login-LAT-Service (an unused STRING-typed attr, same family
+            # as Login-LAT-Node/-Port we already use). The accept log's "serial"
+            # field reads this instead of the raw User-Name, so it's a clean
+            # serial (FRAGAACPA74412000D) across macOS and Windows instead of
+            # "host/<serial> Campus WiFi". String-typed (not octets like Class)
+            # so linelog renders it as plain text, not hex.
+            reply_attrs.append(("Login-LAT-Service", serial))
             try:
                 dev = _get_cached_device(serial)
                 if dev:
@@ -2202,6 +2210,9 @@ def accounting(p):
         serial = _serial_from_username(serial)
 
         if serial:
+            # Mirror post_auth: surface the normalized bare serial via
+            # reply:Login-LAT-Service for consistent logging on accounting too.
+            reply_attrs.append(("Login-LAT-Service", serial))
             try:
                 dev = _get_cached_device(serial)
                 if dev:
@@ -2279,8 +2290,8 @@ linelog json_log {
     reference = "messages.%%{%%{reply:Packet-Type}:-unknown}"
 
     messages {
-        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
-        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"username\":\"%%{User-Name}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
+        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
+        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
         unknown = "{\"timestamp\":\"%S\",\"event\":\"unknown\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\"}"
     }
 }
@@ -2342,6 +2353,17 @@ if [ "$REWRITE_USERNAME" = "true" ]; then
 fi
 POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 
+# Reject-path enrichment: run the lookup module BEFORE json_log in the
+# Post-Auth-Type REJECT section too, so rejected auths still get device_owner/
+# device_name + the normalized serial (reply:Login-LAT-Service) in the log
+# (useful for "who got rejected"). When no lookup source is configured this is
+# empty and the serial field falls back to the raw User-Name.
+POSTAUTH_REJECT_MODULES=""
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+    POSTAUTH_REJECT_MODULES="radius_lookups
+            "
+fi
+
 # Build accounting section — enrichment + SQL + JSON log
 ACCT_MODULES=""
 if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
@@ -2387,6 +2409,7 @@ server default {
     post-auth {
         $POSTAUTH_MODULES
         Post-Auth-Type REJECT {
+            $POSTAUTH_REJECT_MODULES
             json_log
         }
     }
