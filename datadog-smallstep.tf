@@ -508,12 +508,22 @@ resource "datadog_monitor" "radius_down" {
 }
 
 # Sustained zero accepts during the day often means a broken auth path.
+#
+# This is a LOG monitor, not a metric monitor. FreeRADIUS's own statistics
+# counter freeradius_total_access_accepts stays 0 under EAP-TLS even while auth
+# succeeds — the status server increments total_access_REQUESTS (e.g. 50) but
+# never total_access_accepts/rejects for EAP (confirmed via radclient straight to
+# the status server: Requests=50, Accepts=0, Rejects=0). So the OpenMetrics gauge
+# is useless for "are accepts happening" and a metric monitor on it would
+# false-alarm forever. The radius-auth JSON log is the source of truth (one line
+# per Access-Accept), already shipped to Datadog — alert on the absence of those
+# log events instead.
 resource "datadog_monitor" "radius_no_accepts" {
   count   = local.datadog_enabled ? 1 : 0
   name    = "FreeRADIUS no Access-Accepts"
-  type    = "metric alert"
-  query   = "sum(last_30m):sum:freeradius.total_access_accepts.count{*}.as_count() + sum:freeradius.freeradius_total_access_accepts.count{*}.as_count() <= 0"
-  message = "FreeRADIUS has issued zero Access-Accepts in the last 30 minutes. If this is during business hours it likely indicates a broken auth path (cert trust, RADIUS config). Off-hours this can be normal.${local.dd_notify}"
+  type    = "log alert"
+  query   = "logs(\"service:radius-auth @event:Access-Accept\").index(\"*\").rollup(\"count\").last(\"30m\") <= 0"
+  message = "FreeRADIUS has logged zero Access-Accept events in the last 30 minutes. If this is during business hours it likely indicates a broken auth path (cert trust, RADIUS config). Off-hours this can be normal. (Source: the radius-auth log, NOT the freeradius.total_access_accepts metric — that counter is always 0 under EAP-TLS.)${local.dd_notify}"
   monitor_thresholds {
     critical = 0
   }
