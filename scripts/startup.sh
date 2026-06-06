@@ -823,43 +823,17 @@ echo "=== Installing ACME authorizing webhook ==="
 WEBHOOK_BIN=/usr/local/bin/acme-authz-webhook
 WEBHOOK_VERSION="${webhook_release_version}"
 WEBHOOK_URL="https://github.com/${webhook_repo}/releases/download/webhook-v$${WEBHOOK_VERSION}/acme-authz-webhook-linux-amd64"
-# Decide whether to (re)install by comparing the on-disk binary's sha256 to the
-# PUBLISHED sha256, NOT the version STRING. A version-string check alone is unsafe:
-# a stale binary that happens to report the right `version` (e.g. a hand-built
-# dev binary, or a re-tagged release) slips through and is never replaced. The
-# content hash is the source of truth. Fetch the published sha256 first; if it's
-# available, install only when the on-disk hash differs.
-WEBHOOK_NEED_INSTALL=yes
-if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
-  WEBHOOK_EXPECTED_SHA=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
-  if [ -x "$WEBHOOK_BIN" ] && [ "$(sha256sum "$WEBHOOK_BIN" | awk '{print $1}')" = "$WEBHOOK_EXPECTED_SHA" ]; then
-    WEBHOOK_NEED_INSTALL=no
-  fi
-else
-  # No published sha256 — fall back to the version-string check (best effort).
-  WEBHOOK_EXPECTED_SHA=""
-  if [ -x "$WEBHOOK_BIN" ] && [ "$($WEBHOOK_BIN version 2>/dev/null || true)" = "$${WEBHOOK_VERSION}" ]; then
-    WEBHOOK_NEED_INSTALL=no
-  fi
-fi
-if [ "$WEBHOOK_NEED_INSTALL" = "yes" ]; then
+if [ ! -x "$WEBHOOK_BIN" ] || [ "$($WEBHOOK_BIN version 2>/dev/null || true)" != "$${WEBHOOK_VERSION}" ]; then
   curl -fsSL "$WEBHOOK_URL" -o /tmp/acme-authz-webhook
-  if [ -n "$WEBHOOK_EXPECTED_SHA" ]; then
+  # Verify the published sha256 if present (asset built alongside the binary).
+  if curl -fsSL "$WEBHOOK_URL.sha256" -o /tmp/acme-authz-webhook.sha256 2>/dev/null; then
+    EXPECTED=$(awk '{print $1}' /tmp/acme-authz-webhook.sha256)
     ACTUAL=$(sha256sum /tmp/acme-authz-webhook | awk '{print $1}')
-    [ "$WEBHOOK_EXPECTED_SHA" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
+    [ "$EXPECTED" = "$ACTUAL" ] || { echo "FATAL: webhook binary sha256 mismatch" >&2; exit 1; }
   fi
   install -m 0755 /tmp/acme-authz-webhook "$WEBHOOK_BIN"
-  # The binary changed — make sure a RUNNING unit picks it up (systemd won't
-  # restart a long-lived process just because the on-disk binary was replaced).
-  # Only restart if the unit is already active (on first install it's created +
-  # started later in this script). Warn but don't fail on a restart error, so a
-  # transient restart failure doesn't abort the whole bootstrap — but it's no
-  # longer silently swallowed by `|| true`.
-  if systemctl is-active --quiet acme-authz-webhook 2>/dev/null; then
-    systemctl restart acme-authz-webhook || echo "WARNING: acme-authz-webhook restart failed after binary update; the new binary will take effect on the later enable/start." >&2
-  fi
+  rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 fi
-rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 
 # Dedicated unprivileged user for the webhook.
 id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
@@ -1953,6 +1927,40 @@ def _get_attr(p, attr_name):
     return ""
 
 
+def _serial_from_username(user_name):
+    """Normalize an EAP-TLS User-Name to the bare hardware serial used as the
+    device-cache key.
+
+    The MDM caches (Jamf/Fleet) are keyed on the bare serial (e.g.
+    "FRAGAACPA74412000D"), but the EAP identity that arrives in User-Name is the
+    client cert's Subject CN, which varies by platform:
+      - Windows machine cert: "host/FRAGAACPA74412000D Campus WiFi"
+          (Windows prefixes machine auth with "host/"; the CN carries a
+           " Campus WiFi" suffix from the SCEP SubjectName, and an "OU=Campus
+           WiFi" may follow as ",OU=...").
+      - macOS:                "HXJKL3NH1WG2"  (bare serial, no suffix)
+    Without this normalization the cache lookup misses and device_owner /
+    device_name / device_model come back empty in the accept log.
+
+    Steps: drop a leading "host/" (machine-auth prefix), take the CN portion
+    before any ",OU=/,O=/," RDN, strip a trailing " Campus WiFi" suffix, trim.
+    Idempotent on an already-bare serial.
+    """
+    if not user_name:
+        return ""
+    s = user_name.strip()
+    # Drop the Windows machine-auth "host/" prefix (case-insensitive).
+    if s[:5].lower() == "host/":
+        s = s[5:]
+    # If the CN string includes RDN separators (e.g. "<serial> Campus WiFi,OU=..."),
+    # keep only the CN value before the first comma.
+    s = s.split(",", 1)[0].strip()
+    # Strip the " Campus WiFi" CN suffix our SCEP profiles append.
+    if s.endswith(" Campus WiFi"):
+        s = s[: -len(" Campus WiFi")].strip()
+    return s
+
+
 def post_auth(p):
     """Post-auth: MDM device-owner lookup (from cache) + UniFi AP/site lookup."""
     try:
@@ -1961,8 +1969,10 @@ def post_auth(p):
 
         reply_attrs = []
 
-        # Device-owner lookup — read from local cache (instant, no API call)
-        serial = user_name.strip()
+        # Device-owner lookup — read from local cache (instant, no API call).
+        # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
+        # bare serial the MDM cache is keyed on.
+        serial = _serial_from_username(user_name)
         if serial:
             try:
                 dev = _get_cached_device(serial)
@@ -2011,11 +2021,14 @@ def accounting(p):
 
         reply_attrs = []
 
-        # Extract serial from User-Name — may be "email - serial" if AP
-        # cached the rewritten identity from post-auth, or just the serial
+        # Extract serial from User-Name — may be "email - serial" if the AP
+        # cached the rewritten identity from post-auth, or just the EAP cert CN.
         serial = user_name.strip()
         if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
             serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
+        # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
+        # the post-rewrite serial half) to the bare serial the cache is keyed on.
+        serial = _serial_from_username(serial)
 
         if serial:
             try:
