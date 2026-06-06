@@ -1927,6 +1927,40 @@ def _get_attr(p, attr_name):
     return ""
 
 
+def _serial_from_username(user_name):
+    """Normalize an EAP-TLS User-Name to the bare hardware serial used as the
+    device-cache key.
+
+    The MDM caches (Jamf/Fleet) are keyed on the bare serial (e.g.
+    "FRAGAACPA74412000D"), but the EAP identity that arrives in User-Name is the
+    client cert's Subject CN, which varies by platform:
+      - Windows machine cert: "host/FRAGAACPA74412000D Campus WiFi"
+          (Windows prefixes machine auth with "host/"; the CN carries a
+           " Campus WiFi" suffix from the SCEP SubjectName, and an "OU=Campus
+           WiFi" may follow as ",OU=...").
+      - macOS:                "HXJKL3NH1WG2"  (bare serial, no suffix)
+    Without this normalization the cache lookup misses and device_owner /
+    device_name / device_model come back empty in the accept log.
+
+    Steps: drop a leading "host/" (machine-auth prefix), take the CN portion
+    before any ",OU=/,O=/," RDN, strip a trailing " Campus WiFi" suffix, trim.
+    Idempotent on an already-bare serial.
+    """
+    if not user_name:
+        return ""
+    s = user_name.strip()
+    # Drop the Windows machine-auth "host/" prefix (case-insensitive).
+    if s[:5].lower() == "host/":
+        s = s[5:]
+    # If the CN string includes RDN separators (e.g. "<serial> Campus WiFi,OU=..."),
+    # keep only the CN value before the first comma.
+    s = s.split(",", 1)[0].strip()
+    # Strip the " Campus WiFi" CN suffix our SCEP profiles append.
+    if s.endswith(" Campus WiFi"):
+        s = s[: -len(" Campus WiFi")].strip()
+    return s
+
+
 def post_auth(p):
     """Post-auth: MDM device-owner lookup (from cache) + UniFi AP/site lookup."""
     try:
@@ -1935,8 +1969,10 @@ def post_auth(p):
 
         reply_attrs = []
 
-        # Device-owner lookup — read from local cache (instant, no API call)
-        serial = user_name.strip()
+        # Device-owner lookup — read from local cache (instant, no API call).
+        # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
+        # bare serial the MDM cache is keyed on.
+        serial = _serial_from_username(user_name)
         if serial:
             try:
                 dev = _get_cached_device(serial)
@@ -1985,11 +2021,14 @@ def accounting(p):
 
         reply_attrs = []
 
-        # Extract serial from User-Name — may be "email - serial" if AP
-        # cached the rewritten identity from post-auth, or just the serial
+        # Extract serial from User-Name — may be "email - serial" if the AP
+        # cached the rewritten identity from post-auth, or just the EAP cert CN.
         serial = user_name.strip()
         if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
             serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
+        # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
+        # the post-rewrite serial half) to the bare serial the cache is keyed on.
+        serial = _serial_from_username(serial)
 
         if serial:
             try:
