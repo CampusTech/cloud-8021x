@@ -2582,10 +2582,17 @@ emit_instance() { # step_path unit ca_instance
   dd=$(days_left "$step/certs/scep_decrypter.crt")
   [ -n "$dd" ] && emit "smallstep.cert.days_until_expiry:$dd|g|#cert:decrypter,service:smallstep-ca,ca_instance:$ca"
 
-  ready=1
-  since=$(systemctl show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null)
-  if [ -n "$since" ] && journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
-    ready=0
+  # decrypter_ready: only "ready" (1) when the unit is ACTIVE *and* its current
+  # run logged no "does not have decrypter" line. A down/failed unit reports 0 —
+  # otherwise a dead CA would falsely read ready=1 (the degradation line is only
+  # logged by a *running* step-ca, so absence of the line ≠ healthy).
+  ready=0
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then
+    ready=1
+    since=$(systemctl show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null)
+    if [ -n "$since" ] && journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
+      ready=0
+    fi
   fi
   emit "smallstep.scep.decrypter_ready:$ready|g|#service:smallstep-ca,ca_instance:$ca"
 }
