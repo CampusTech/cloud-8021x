@@ -395,7 +395,7 @@ sudo mysql radius -e "SELECT * FROM radacct ORDER BY radacctid DESC LIMIT 5"
 ### Server Certificate Renewal
 
 When `radius_trust_mode` is `smallstep` or `both`, RADIUS presents a Smallstep-issued
-server cert with a 90-day lifetime. `radius-cert-renew.timer` runs daily on each node
+server cert with a 90-day lifetime. `radius-cert-renew.timer` runs hourly on each node
 and re-mints the leaf once it has under 30 days left, then restarts FreeRADIUS.
 
 ```bash

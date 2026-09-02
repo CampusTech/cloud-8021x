@@ -560,25 +560,30 @@ resource "datadog_monitor" "radius_no_accepts" {
 # notify_no_data is the more important half. The gauge is emitted on every run
 # of the renew script INCLUDING no-ops, so a silent gauge means the timer has
 # stopped firing — which is precisely the failure mode that caused the outage.
-# The script runs daily, so the no-data window has to clear 24h: 48h here.
-# Query window matches (last_2d, not last_1h) or a once-daily gauge reads as
-# no-data continuously.
+#
+# Detection latency is the whole point of this half, so the windows are sized
+# to keep it short. The two settings COMPOUND: the query window keeps returning
+# the last point for its full width after emission stops, and only then does
+# no_data_timeframe start counting. An hourly gauge with last_4h + 720 (12h)
+# surfaces a stalled timer in roughly half a day. (A daily gauge cannot do
+# better than days here, which is why the timer is hourly.) The 4h window still
+# tolerates a few consecutive missed runs before crying no-data.
 resource "datadog_monitor" "radius_server_cert_expiry" {
   count   = local.smallstep_datadog_enabled && var.radius_trust_mode != "okta" ? 1 : 0
   name    = "FreeRADIUS server certificate nearing expiry"
   type    = "metric alert"
-  query   = "min(last_2d):min:radius.server_cert.days_until_expiry{service:freeradius} by {host} < 14"
+  query   = "min(last_4h):min:radius.server_cert.days_until_expiry{service:freeradius} by {host} < 14"
   message = "The RADIUS EAP-TLS server certificate on {{host.name}} is at {{value}} days remaining (warning <25, critical <14). radius-cert-renew.timer should have re-minted it at 30 days — this firing means renewal is broken. An EXPIRED server cert is a total Wi-Fi outage that FreeRADIUS reports only as `eap_tls: (TLS) Alert read:fatal:certificate unknown`, with the daemon still healthy. Fix now: `sudo /usr/local/bin/radius-cert-renew.sh` on the affected node, then check `journalctl -u radius-cert-renew.service`. NO DATA on this monitor is equally serious — it means the renewal timer has stopped emitting entirely.${local.dd_notify}"
   monitor_thresholds {
     critical = 14
     warning  = 25
   }
   notify_no_data    = true
-  no_data_timeframe = 2880
+  no_data_timeframe = 720
 
-  # The gauge lands roughly once a day, so the default require_full_window
-  # (true) would hold evaluation waiting for a densely-populated 2-day window
-  # that never arrives.
+  # The gauge lands once an hour, so the default require_full_window (true)
+  # would hold evaluation waiting for a densely-populated 4-hour window that
+  # a once-hourly emission never fills.
   require_full_window = false
 
   tags = ["service:radius", "managed-by:terraform"]

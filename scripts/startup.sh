@@ -1002,7 +1002,7 @@ if [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both"
   # what happened 2026-09-02: cert minted Jun 4, expired Sep 2 05:43 UTC,
   # instances never rebooted, so the boot-time expiry check never ran.
   #
-  # A daily timer now re-mints whenever the live leaf has under 30 days left,
+  # An hourly timer now re-mints whenever the live leaf has under 30 days left,
   # matching the same 30-day threshold the boot-time cache check uses.
   cat > /usr/local/bin/radius-cert-renew.sh << 'RENEWEOF'
 #!/bin/bash
@@ -1021,7 +1021,8 @@ RENEW_SECS=$(( RENEW_DAYS * 86400 ))
 log() { echo "[radius-cert-renew] $*"; }
 
 # DogStatsD gauge so Datadog can alert if renewal ever stalls, independent of
-# this script succeeding. Emitted on every run, including no-op runs.
+# this script succeeding. Emitted on every run, including no-op runs — the
+# timer's hourly cadence is what makes this dense enough to alert on.
 emit_days_left() {
   local end now days
   end=$(date -d "$(openssl x509 -enddate -noout -in "$CERT_DIR/server-cert.pem" 2>/dev/null | cut -d= -f2)" +%s 2>/dev/null) || return 0
@@ -1108,15 +1109,22 @@ Type=oneshot
 ExecStart=/usr/local/bin/radius-cert-renew.sh
 RENEWSVCEOF
 
-  # Daily, with a randomized delay so the two nodes do not re-mint (and
+  # Hourly, with a randomized delay so the two nodes do not re-mint (and
   # restart FreeRADIUS) at the same instant and drop auth on both at once.
+  #
+  # Hourly rather than daily because a no-op run costs one `openssl checkend`
+  # and the run is what emits radius.server_cert.days_until_expiry. A daily
+  # gauge is too sparse to alert on usefully: the monitor's query window has to
+  # be at least as wide as the emission interval, and a wide window keeps
+  # returning the last point long after emission stops, so a stalled timer
+  # takes days to surface. An hourly gauge behaves like a normal metric.
   cat > /etc/systemd/system/radius-cert-renew.timer << 'RENEWTIMEREOF'
 [Unit]
-Description=Daily RADIUS server-certificate renewal check
+Description=Hourly RADIUS server-certificate renewal check
 
 [Timer]
-OnCalendar=daily
-RandomizedDelaySec=2h
+OnCalendar=hourly
+RandomizedDelaySec=30min
 Persistent=true
 AccuracySec=1min
 
@@ -1126,7 +1134,7 @@ RENEWTIMEREOF
 
   systemctl daemon-reload
   systemctl enable --now radius-cert-renew.timer
-  echo "Enabled radius-cert-renew.timer (daily; re-mints under 30 days remaining)."
+  echo "Enabled radius-cert-renew.timer (hourly; re-mints under 30 days remaining)."
 fi
 %{ endif ~}
 
