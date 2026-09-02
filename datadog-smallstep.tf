@@ -539,6 +539,51 @@ resource "datadog_monitor" "radius_no_accepts" {
   tags           = ["service:radius", "managed-by:terraform"]
 }
 
+# RADIUS server-certificate expiry — the backstop for radius-cert-renew.timer.
+#
+# This is the monitor that would have caught the 2026-09-02 outage. The
+# Smallstep-issued server cert is minted for 90 days and, before the renewal
+# timer existed, only at boot; it expired while both nodes were up and every
+# device started aborting the handshake with "certificate unknown". Nothing
+# alerted, because an expired SERVER cert produces no server-side failure —
+# freeradius stays up and healthy, so radius_down never fires, and the client
+# is the party doing the rejecting.
+#
+# Only meaningful when RADIUS presents a Smallstep-chained cert; under
+# radius_trust_mode = "okta" the legacy self-signed cert is used and
+# radius-cert-renew.sh (which emits this gauge) is never installed.
+#
+# Thresholds sit BELOW the renewal threshold on purpose: radius-cert-renew.sh
+# re-mints at 30 days remaining, so a reading under 25 means renewal itself is
+# broken, not that expiry is merely approaching.
+#
+# notify_no_data is the more important half. The gauge is emitted on every run
+# of the renew script INCLUDING no-ops, so a silent gauge means the timer has
+# stopped firing — which is precisely the failure mode that caused the outage.
+# The script runs daily, so the no-data window has to clear 24h: 48h here.
+# Query window matches (last_2d, not last_1h) or a once-daily gauge reads as
+# no-data continuously.
+resource "datadog_monitor" "radius_server_cert_expiry" {
+  count   = local.smallstep_datadog_enabled && var.radius_trust_mode != "okta" ? 1 : 0
+  name    = "FreeRADIUS server certificate nearing expiry"
+  type    = "metric alert"
+  query   = "min(last_2d):min:radius.server_cert.days_until_expiry{service:freeradius} by {host} < 14"
+  message = "The RADIUS EAP-TLS server certificate on {{host.name}} is at {{value}} days remaining (warning <25, critical <14). radius-cert-renew.timer should have re-minted it at 30 days — this firing means renewal is broken. An EXPIRED server cert is a total Wi-Fi outage that FreeRADIUS reports only as `eap_tls: (TLS) Alert read:fatal:certificate unknown`, with the daemon still healthy. Fix now: `sudo /usr/local/bin/radius-cert-renew.sh` on the affected node, then check `journalctl -u radius-cert-renew.service`. NO DATA on this monitor is equally serious — it means the renewal timer has stopped emitting entirely.${local.dd_notify}"
+  monitor_thresholds {
+    critical = 14
+    warning  = 25
+  }
+  notify_no_data    = true
+  no_data_timeframe = 2880
+
+  # The gauge lands roughly once a day, so the default require_full_window
+  # (true) would hold evaluation waiting for a densely-populated 2-day window
+  # that never arrives.
+  require_full_window = false
+
+  tags = ["service:radius", "managed-by:terraform"]
+}
+
 # -----------------------------------------------------------------------------
 # Log pipeline for step-ca (source:stepca)
 #
