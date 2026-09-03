@@ -392,6 +392,32 @@ eapol_test -c eapol_test.conf -a <radius-ip> -s <shared-secret>
 sudo mysql radius -e "SELECT * FROM radacct ORDER BY radacctid DESC LIMIT 5"
 ```
 
+### Server Certificate Renewal
+
+When `radius_trust_mode` is `smallstep` or `both`, RADIUS presents a Smallstep-issued
+server cert with a 90-day lifetime. `radius-cert-renew.timer` runs hourly on each node
+and re-mints the leaf once it has under 30 days left, then restarts FreeRADIUS.
+
+```bash
+# When does the live cert expire?
+sudo openssl x509 -in /etc/freeradius/3.0/certs/server-cert.pem -noout -dates
+
+# Timer state and last run
+systemctl list-timers radius-cert-renew.timer
+sudo journalctl -u radius-cert-renew.service --no-pager | tail -20
+
+# Force a renewal now (no-op if more than 30 days remain)
+sudo /usr/local/bin/radius-cert-renew.sh
+```
+
+An expired server cert is a **total Wi-Fi outage with no server-side error**: devices
+reject the cert themselves and FreeRADIUS only logs
+`eap_tls: ERROR: (TLS) Alert read:fatal:certificate unknown`. If you see that error en
+masse, check the server cert's expiry first. The renew script emits
+`radius.server_cert.days_until_expiry` (tag `service:freeradius`) via DogStatsD on every
+run, so alert on that gauge as the backstop — if the timer itself stops firing, the gauge
+goes stale rather than silently counting down.
+
 ## File Structure
 
 ```

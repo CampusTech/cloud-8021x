@@ -991,6 +991,150 @@ if [ "${radius_trust_mode}" = "smallstep" ] || [ "${radius_trust_mode}" = "both"
     echo "RADIUS now presents a Smallstep-chained server cert (leaf + intermediate)."
   fi
   rm -f /tmp/ss-server-cert.pem /tmp/ss-server-key.pem
+
+  # -------------------------------------------------------------------------
+  # Automatic server-cert renewal.
+  #
+  # The leaf above is minted for 2160h (90d) and, before this, ONLY at boot.
+  # A box that stays up past 90 days serves an expired cert and every device
+  # aborts the handshake with "certificate unknown" — a total Wi-Fi outage
+  # with no server-side error (the client does the rejecting). That is exactly
+  # what happened 2026-09-02: cert minted Jun 4, expired Sep 2 05:43 UTC,
+  # instances never rebooted, so the boot-time expiry check never ran.
+  #
+  # An hourly timer now re-mints whenever the live leaf has under 30 days left,
+  # matching the same 30-day threshold the boot-time cache check uses.
+  cat > /usr/local/bin/radius-cert-renew.sh << 'RENEWEOF'
+#!/bin/bash
+# Re-mint + install the RADIUS EAP-TLS server cert when it nears expiry.
+# Idempotent: a no-op while the live leaf has more than RENEW_DAYS left.
+set -uo pipefail
+
+STEPPATH=/etc/step-ca
+CERT_DIR=/etc/freeradius/3.0/certs
+PROJECT_ID="__PROJECT_ID__"
+SERVER_CERT_CN="__SERVER_CERT_CN__"
+SIGNING_KEY="__SIGNING_KEY__"
+RENEW_DAYS=30
+RENEW_SECS=$(( RENEW_DAYS * 86400 ))
+
+log() { echo "[radius-cert-renew] $*"; }
+
+# DogStatsD gauge so Datadog can alert if renewal ever stalls, independent of
+# this script succeeding. Emitted on every run, including no-op runs — the
+# timer's hourly cadence is what makes this dense enough to alert on.
+emit_days_left() {
+  local end now days
+  end=$(date -d "$(openssl x509 -enddate -noout -in "$CERT_DIR/server-cert.pem" 2>/dev/null | cut -d= -f2)" +%s 2>/dev/null) || return 0
+  now=$(date +%s)
+  days=$(( (end - now) / 86400 ))
+  printf 'radius.server_cert.days_until_expiry:%s|g|#service:freeradius\n' "$days" \
+    >/dev/udp/127.0.0.1/8125 2>/dev/null || true
+}
+
+emit_days_left
+
+if openssl x509 -in "$CERT_DIR/server-cert.pem" -noout -checkend "$RENEW_SECS" >/dev/null 2>&1; then
+  log "leaf has more than $RENEW_DAYS days left; nothing to do."
+  exit 0
+fi
+
+log "leaf expires within $RENEW_DAYS days — re-minting."
+T=$(mktemp -d) || exit 1
+trap 'rm -rf "$T"' EXIT
+LEAF="$T/leaf.pem"
+KEY="$T/leaf.key"
+
+step certificate create "$SERVER_CERT_CN" "$LEAF" "$KEY" \
+  --ca "$STEPPATH/certs/intermediate_ca.crt" \
+  --ca-key "$SIGNING_KEY" --kms cloudkms: \
+  --san "$SERVER_CERT_CN" \
+  --not-after 2160h --kty RSA --size 2048 \
+  --no-password --insecure --force || { log "ERROR: issuance failed; keeping current cert."; exit 1; }
+
+# Verify the chain AND that the key matches the cert before touching the live
+# files — installing a mismatched pair would break server TLS for every device.
+cat "$STEPPATH/certs/intermediate_ca.crt" "$STEPPATH/certs/root_ca.crt" > "$T/chain.pem"
+openssl verify -CAfile "$T/chain.pem" "$LEAF" >/dev/null 2>&1 \
+  || { log "ERROR: new leaf does not verify against the live CA; keeping current cert."; exit 1; }
+openssl x509 -in "$LEAF" -pubkey -noout > "$T/a.pub" 2>/dev/null
+openssl pkey -in "$KEY" -pubout        > "$T/b.pub" 2>/dev/null
+cmp -s "$T/a.pub" "$T/b.pub" \
+  || { log "ERROR: cert/key mismatch; keeping current cert."; exit 1; }
+
+# Keep the outgoing pair so a bad roll can be reverted by hand.
+cp -a "$CERT_DIR/server-cert.pem" "$CERT_DIR/server-cert.pem.prev" 2>/dev/null || true
+cp -a "$CERT_DIR/server-key.pem"  "$CERT_DIR/server-key.pem.prev"  2>/dev/null || true
+
+# certificate_file MUST be leaf + intermediate so devices can build the chain
+# up to the root their Wi-Fi profile anchors on.
+cat "$LEAF" "$STEPPATH/certs/intermediate_ca.crt" > "$CERT_DIR/server-cert.pem"
+cp "$KEY" "$CERT_DIR/server-key.pem"
+chown freerad:freerad "$CERT_DIR/server-cert.pem" "$CERT_DIR/server-key.pem"
+chmod 644 "$CERT_DIR/server-cert.pem"
+chmod 600 "$CERT_DIR/server-key.pem"
+
+# Validate config before restarting; roll back rather than leave RADIUS down.
+if ! freeradius -XC >/dev/null 2>&1; then
+  log "ERROR: freeradius -XC failed with the new cert; rolling back."
+  cp -a "$CERT_DIR/server-cert.pem.prev" "$CERT_DIR/server-cert.pem" 2>/dev/null || true
+  cp -a "$CERT_DIR/server-key.pem.prev"  "$CERT_DIR/server-key.pem"  2>/dev/null || true
+  exit 1
+fi
+
+systemctl restart freeradius || { log "ERROR: freeradius restart failed."; exit 1; }
+log "installed a fresh leaf and restarted FreeRADIUS."
+
+# Refresh the Secret Manager cache so the next boot restores this pair instead
+# of minting another one. Non-fatal: the live cert is already in place.
+gcloud secrets versions add radius-smallstep-server-cert --data-file="$LEAF" --project="$PROJECT_ID" >/dev/null 2>&1 \
+  || log "WARNING: failed to cache the renewed cert to Secret Manager."
+gcloud secrets versions add radius-smallstep-server-key  --data-file="$KEY"  --project="$PROJECT_ID" >/dev/null 2>&1 \
+  || log "WARNING: failed to cache the renewed key to Secret Manager."
+
+emit_days_left
+RENEWEOF
+
+  sed -i "s|__PROJECT_ID__|$PROJECT_ID|; s|__SERVER_CERT_CN__|$SERVER_CERT_CN|; s|__SIGNING_KEY__|${smallstep_signing_key_uri}|" \
+    /usr/local/bin/radius-cert-renew.sh
+  chmod +x /usr/local/bin/radius-cert-renew.sh
+
+  cat > /etc/systemd/system/radius-cert-renew.service << 'RENEWSVCEOF'
+[Unit]
+Description=Renew the RADIUS EAP-TLS server certificate when it nears expiry
+After=network-online.target step-ca.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/radius-cert-renew.sh
+RENEWSVCEOF
+
+  # Hourly, with a randomized delay so the two nodes do not re-mint (and
+  # restart FreeRADIUS) at the same instant and drop auth on both at once.
+  #
+  # Hourly rather than daily because a no-op run costs one `openssl checkend`
+  # and the run is what emits radius.server_cert.days_until_expiry. A daily
+  # gauge is too sparse to alert on usefully: the monitor's query window has to
+  # be at least as wide as the emission interval, and a wide window keeps
+  # returning the last point long after emission stops, so a stalled timer
+  # takes days to surface. An hourly gauge behaves like a normal metric.
+  cat > /etc/systemd/system/radius-cert-renew.timer << 'RENEWTIMEREOF'
+[Unit]
+Description=Hourly RADIUS server-certificate renewal check
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=30min
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+RENEWTIMEREOF
+
+  systemctl daemon-reload
+  systemctl enable --now radius-cert-renew.timer
+  echo "Enabled radius-cert-renew.timer (hourly; re-mints under 30 days remaining)."
 fi
 %{ endif ~}
 
