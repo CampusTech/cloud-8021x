@@ -574,6 +574,61 @@ cat "/etc/step-ca-rsa/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/root_ca
 # device-attest-01. SCEP lives on the separate RSA CA (instance #2, :8444)
 # because Windows native SCEP + non-ADE Macs need an RSA-signed leaf, which the
 # EC chain can't serve. The former EC SCEP provisioner has been removed.
+
+# ---------------------------------------------------------------------------
+# X509 template for the wifi-acme provisioner: carry the CSR's OU through.
+#
+# WHY THIS EXISTS. Client certs are minted for 2160h and nothing renews them:
+# macOS does not re-order the com.apple.security.acme payload on its own, and
+# Apple's ACME payload has no renewal key at all. Fleet CAN renew, 30 days
+# before expiry, but only if it finds $FLEET_VAR_CERTIFICATE_RENEWAL_ID (a
+# 36-char UUID it substitutes into the profile's Subject OU) in the ISSUED
+# certificate, which it reads back from host vitals via the MDM
+# CertificateList command.
+#
+# step-ca will not put it there by default. In acme/order.go, finalize does
+# `data.SetCommonName(csr.Subject.CommonName)` and nothing else for a non-Wire
+# order, so DefaultAttestedLeafTemplate renders a subject holding only
+# commonName and every other CSR subject RDN is discarded. Confirmed against
+# live certs: existing leaves are `subject= /CN=<serial>`, and Fleet's
+# host-certificates API reports organizational_unit "". Without this template,
+# adding the OU to the MDM profile is a silent no-op.
+#
+# Fleet documents the same requirement in
+# docs/Contributing/guides/smallstep-acme-local-setup.md (step 7, "Preserves
+# the OU from the CSR (critical for tracking)"). Do NOT copy that guide's
+# template verbatim: it emits only "subject", dropping the "sans", "keyUsage"
+# and "extKeyUsage" that DefaultAttestedLeafTemplate supplies. That would
+# strip the attested permanentIdentifier SAN and the clientAuth EKU — i.e.
+# break EAP-TLS. What follows is DefaultAttestedLeafTemplate verbatim, plus
+# organizationalUnit.
+#
+# SECURITY. organizationalUnit is read from .Insecure.CR — un-challenged CSR
+# data chosen by the device. commonName deliberately is NOT: it stays on
+# .Subject.CommonName, the value step-ca itself set from the identifier it
+# actually validated (order.go rejects any CSR whose CN != the order's
+# permanent identifier, which is exactly why the CN is trustworthy and the OU
+# is not). FreeRADIUS authorizes on the chain plus the CN and never the OU, so
+# a device-chosen OU grants nothing today — but it is un-attested data inside
+# an auth credential, so nothing downstream may begin authorizing on OU
+# without revisiting this decision.
+mkdir -p "$STEPPATH/templates/x509"
+cat > "$STEPPATH/templates/x509/wifi-acme.tpl" <<'ACMETPLEOF'
+{
+	"subject": {
+		"commonName": {{ toJson .Subject.CommonName }},
+		"organizationalUnit": {{ toJson .Insecure.CR.Subject.OrganizationalUnit }}
+	},
+	"sans": {{ toJson .SANs }},
+{{- if typeIs "*rsa.PublicKey" .Insecure.CR.PublicKey }}
+	"keyUsage": ["keyEncipherment", "digitalSignature"],
+{{- else }}
+	"keyUsage": ["digitalSignature"],
+{{- end }}
+	"extKeyUsage": ["clientAuth"]
+}
+ACMETPLEOF
+
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -605,6 +660,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
           }
         ],
 %{ endif ~}
+        "options": { "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" } },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
