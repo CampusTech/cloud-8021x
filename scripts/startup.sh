@@ -574,6 +574,61 @@ cat "/etc/step-ca-rsa/certs/intermediate_ca.crt" "/etc/step-ca-rsa/certs/root_ca
 # device-attest-01. SCEP lives on the separate RSA CA (instance #2, :8444)
 # because Windows native SCEP + non-ADE Macs need an RSA-signed leaf, which the
 # EC chain can't serve. The former EC SCEP provisioner has been removed.
+
+# ---------------------------------------------------------------------------
+# X509 template for the wifi-acme provisioner: carry the CSR's OU through.
+#
+# WHY THIS EXISTS. Client certs are minted for 2160h and nothing renews them:
+# macOS does not re-order the com.apple.security.acme payload on its own, and
+# Apple's ACME payload has no renewal key at all. Fleet CAN renew, 30 days
+# before expiry, but only if it finds $FLEET_VAR_CERTIFICATE_RENEWAL_ID (a
+# 36-char UUID it substitutes into the profile's Subject OU) in the ISSUED
+# certificate, which it reads back from host vitals via the MDM
+# CertificateList command.
+#
+# step-ca will not put it there by default. In acme/order.go, finalize does
+# `data.SetCommonName(csr.Subject.CommonName)` and nothing else for a non-Wire
+# order, so DefaultAttestedLeafTemplate renders a subject holding only
+# commonName and every other CSR subject RDN is discarded. Confirmed against
+# live certs: existing leaves are `subject= /CN=<serial>`, and Fleet's
+# host-certificates API reports organizational_unit "". Without this template,
+# adding the OU to the MDM profile is a silent no-op.
+#
+# Fleet documents the same requirement in
+# docs/Contributing/guides/smallstep-acme-local-setup.md (step 7, "Preserves
+# the OU from the CSR (critical for tracking)"). Do NOT copy that guide's
+# template verbatim: it emits only "subject", dropping the "sans", "keyUsage"
+# and "extKeyUsage" that DefaultAttestedLeafTemplate supplies. That would
+# strip the attested permanentIdentifier SAN and the clientAuth EKU — i.e.
+# break EAP-TLS. What follows is DefaultAttestedLeafTemplate verbatim, plus
+# organizationalUnit.
+#
+# SECURITY. organizationalUnit is read from .Insecure.CR — un-challenged CSR
+# data chosen by the device. commonName deliberately is NOT: it stays on
+# .Subject.CommonName, the value step-ca itself set from the identifier it
+# actually validated (order.go rejects any CSR whose CN != the order's
+# permanent identifier, which is exactly why the CN is trustworthy and the OU
+# is not). FreeRADIUS authorizes on the chain plus the CN and never the OU, so
+# a device-chosen OU grants nothing today — but it is un-attested data inside
+# an auth credential, so nothing downstream may begin authorizing on OU
+# without revisiting this decision.
+mkdir -p "$STEPPATH/templates/x509"
+cat > "$STEPPATH/templates/x509/wifi-acme.tpl" <<'ACMETPLEOF'
+{
+	"subject": {
+		"commonName": {{ toJson .Subject.CommonName }},
+		"organizationalUnit": {{ toJson .Insecure.CR.Subject.OrganizationalUnit }}
+	},
+	"sans": {{ toJson .SANs }},
+{{- if typeIs "*rsa.PublicKey" .Insecure.CR.PublicKey }}
+	"keyUsage": ["keyEncipherment", "digitalSignature"],
+{{- else }}
+	"keyUsage": ["digitalSignature"],
+{{- end }}
+	"extKeyUsage": ["clientAuth"]
+}
+ACMETPLEOF
+
 cat > "$STEPPATH/config/ca.json" <<CAJSON
 {
   "root": "$STEPPATH/certs/root_ca.crt",
@@ -605,6 +660,7 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
           }
         ],
 %{ endif ~}
+        "options": { "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" } },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -1136,6 +1192,172 @@ RENEWTIMEREOF
   systemctl enable --now radius-cert-renew.timer
   echo "Enabled radius-cert-renew.timer (hourly; re-mints under 30 days remaining)."
 fi
+
+# ---------------------------------------------------------------------------
+# Client-certificate expiry gauges.
+#
+# The server-cert story above has a mirror image on the device side, and it
+# bit on 2026-09-04: the Smallstep EAP-TLS *client* certs are also minted for
+# 2160h (90d), the fleet was enrolled in one burst in June, and nothing renews
+# them — so they expire in one burst in September. 136 devices were inside a
+# three-day window when this was found, with zero ACME orders reaching the CA
+# in the preceding 48 hours. FreeRADIUS rejects an expired client cert with
+#   eap_tls: (TLS) OpenSSL says error 10 : certificate has expired
+# and, exactly like the server-cert case, no server-side health signal moves:
+# the daemon is up, radius_down stays green, and accepts continue for every
+# device whose cert has not aged out yet.
+#
+# There is no server-side fix for the renewal itself — only the device can
+# re-order — so this is the detection half: enough lead time to force a
+# profile re-push before a wave lands.
+#
+# The auth log is the data source, not the CA database. Every EAP-TLS auth
+# already logs serial + cert_expiration, the file is local, and it needs no
+# DB credentials or step-ca schema assumptions. The tradeoff is that it only
+# sees devices that authenticated recently — which is the population that
+# matters, since a Mac that never authenticates cannot be locked out.
+cat > /usr/local/bin/radius-client-cert-metrics.sh << 'CLIENTCERTEOF'
+#!/bin/bash
+# Emit expiry gauges for Smallstep-issued EAP-TLS client certs, read from the
+# FreeRADIUS auth log.
+#
+#   radius.client_cert.expiring_soon{window:48h}  unexpired certs due <48h
+#   radius.client_cert.expiring_soon{window:14d}  unexpired certs due <14d
+#   radius.client_cert.min_days_until_expiry      sharpest unexpired cert
+#   radius.client_cert.devices_seen               denominator for the above
+set -uo pipefail
+
+LOG=/var/log/freeradius/radius-auth.json
+DSD=127.0.0.1
+PORT=8125
+SCAN_LINES=50000
+ISSUER_MATCH='Wi-Fi Intermediate CA'
+
+emit() { printf '%s\n' "$1" >"/dev/udp/$DSD/$PORT" 2>/dev/null || true; }
+
+# Emit explicit zeros and stop, for the states where there is nothing to
+# measure: no auth log, or no Smallstep-issued cert in the lines scanned.
+#
+# These paths used to just `exit 0` on the theory that emitting 0 would be a
+# false all-clear. That was wrong, and it broke the paired monitor. The
+# monitor sets notify_no_data with a 12h timeframe and its message claims
+# no-data means the timer stopped — so a node that is running fine but has no
+# Smallstep certs to report would page for the wrong reason. That state is
+# reachable: under radius_trust_mode=both, early in a migration, every client
+# cert can still be Okta-issued.
+#
+# Emitting 0 here is also not actually a false all-clear, because the gauges
+# are scoped to Smallstep-issued certs: "zero of them are near expiry" is true
+# when there are none. devices_seen is what disambiguates the two cases —
+# devices_seen:0 says "measured nothing", devices_seen:200 with
+# expiring_soon:0 says "measured 200 and they are all fine".
+#
+# min_days_until_expiry is deliberately NOT emitted: there is no minimum over
+# an empty set, and a fabricated value there would be a real false all-clear.
+emit_zero() {
+  emit "radius.client_cert.devices_seen:0|g|#service:freeradius"
+  emit "radius.client_cert.expiring_soon:0|g|#service:freeradius,window:48h"
+  emit "radius.client_cert.expiring_soon:0|g|#service:freeradius,window:14d"
+  exit 0
+}
+
+[ -s "$LOG" ] || emit_zero
+now=$(date +%s)
+
+# One line per distinct (serial, cert_expiration). cert_expiration is ASN.1
+# UTCTime: YYMMDDHHMMSSZ. Restricted to the Smallstep issuer so Okta-issued
+# certs (still trusted under radius_trust_mode=both) don't pollute the gauges.
+pairs=$(tail -n "$SCAN_LINES" "$LOG" \
+  | grep -F "$ISSUER_MATCH" \
+  | sed -n 's/.*"serial":"\([^"]*\)".*"cert_expiration":"\([0-9]\{12\}\)Z".*/\1 \2/p' \
+  | sort -u)
+[ -n "$pairs" ] || emit_zero
+
+declare -A epoch_of
+declare -A best
+
+# Keep the LATEST cert per serial: a device that renewed mid-window appears
+# with both its old and new cert, and only the new one reflects its real state.
+while read -r serial exp; do
+  [ -n "$serial" ] || continue
+  e=$${epoch_of[$exp]:-}
+  if [ -z "$e" ]; then
+    e=$(date -u -d "20$${exp:0:2}-$${exp:2:2}-$${exp:4:2}T$${exp:6:2}:$${exp:8:2}:$${exp:10:2}Z" +%s 2>/dev/null) || e=""
+    [ -n "$e" ] || continue
+    epoch_of[$exp]=$e
+  fi
+  cur=$${best[$serial]:-0}
+  [ "$e" -gt "$cur" ] && best[$serial]=$e
+done <<< "$pairs"
+
+seen=0
+soon48=0
+soon14=0
+min_days=""
+for serial in "$${!best[@]}"; do
+  e=$${best[$serial]}
+  seen=$((seen + 1))
+  secs=$((e - now))
+  # Already-expired devices belong to the radius_client_cert_expired log
+  # monitor. Counting them here would pin every gauge above zero forever the
+  # first time a decommissioned Mac stopped renewing, and a permanently-firing
+  # monitor is a muted monitor.
+  [ "$secs" -le 0 ] && continue
+  days=$((secs / 86400))
+  { [ -z "$min_days" ] || [ "$days" -lt "$min_days" ]; } && min_days=$days
+  [ "$secs" -lt 172800 ] && soon48=$((soon48 + 1))
+  [ "$secs" -lt 1209600 ] && soon14=$((soon14 + 1))
+done
+
+emit "radius.client_cert.devices_seen:$seen|g|#service:freeradius"
+emit "radius.client_cert.expiring_soon:$soon48|g|#service:freeradius,window:48h"
+emit "radius.client_cert.expiring_soon:$soon14|g|#service:freeradius,window:14d"
+[ -n "$min_days" ] && emit "radius.client_cert.min_days_until_expiry:$min_days|g|#service:freeradius"
+
+# Explicit success. The conditional above is the last command, so when
+# min_days is empty (every observed cert already expired) its exit status is 1
+# and systemd marks the oneshot unit failed even though the other three gauges
+# were emitted fine.
+exit 0
+CLIENTCERTEOF
+
+chmod +x /usr/local/bin/radius-client-cert-metrics.sh
+
+cat > /etc/systemd/system/radius-client-cert-metrics.service << 'CLIENTCERTSVCEOF'
+[Unit]
+Description=Emit EAP-TLS client-certificate expiry gauges to Datadog
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/radius-client-cert-metrics.sh
+CLIENTCERTSVCEOF
+
+# Hourly, for the same reason radius-cert-renew.timer is hourly: the monitor's
+# query window must be at least as wide as the emission interval, and a wide
+# window keeps returning the last point long after emission stops. A daily
+# gauge cannot surface a stalled timer in less than days.
+#
+# No RandomizedDelaySec here — unlike the renew timer this restarts nothing, so
+# there is no reason to stagger the two nodes. Both emit; the monitors take the
+# max across hosts, since a device that authenticates only against the primary
+# appears in that node's log alone.
+cat > /etc/systemd/system/radius-client-cert-metrics.timer << 'CLIENTCERTTIMEREOF'
+[Unit]
+Description=Hourly EAP-TLS client-certificate expiry gauge emission
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+CLIENTCERTTIMEREOF
+
+systemctl daemon-reload
+systemctl enable --now radius-client-cert-metrics.timer
+echo "Enabled radius-client-cert-metrics.timer (hourly client-cert expiry gauges)."
 %{ endif ~}
 
 # ---------------------------------------------------------------------------
@@ -2799,11 +3021,30 @@ instances:
       - "ca_instance:ec"
     metrics:
       - step_ca_uptime_seconds: uptime
-      - step_ca_provisioner_signed_total: provisioner.signed
-      - step_ca_provisioner_renewed_total: provisioner.renewed
-      - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
-      - step_ca_provisioner_webhook_authorized_total: provisioner.webhook_authorized
-      - step_ca_provisioner_webhook_enriched_total: provisioner.webhook_enriched
+      # step-ca names its issuance counters step_ca_x509_*, tagged
+      # {provisioner,success}. There is NO step_ca_provisioner_* family, and no
+      # renewed/rekeyed counter at all in this build, so the five
+      # step_ca_provisioner_* mappings that used to be here matched nothing.
+      # The scrape still reported [OK] — it just shipped 3 samples per run
+      # (uptime + the two kms counters), leaving every smallstep.provisioner.*
+      # metric permanently no-data. That silently blanked the "Renewed +
+      # Rekeyed by Provisioner" dashboard widget, and it is why nothing could
+      # alert on issuance stalling when device cert renewal stopped in
+      # September 2026. Verified against 127.0.0.1:9090/metrics:
+      #   step_ca_x509_signed_total{provisioner="wifi-acme",success="true"} 164
+      #
+      # NOTE THE MISSING _total BELOW — it is not a typo. These are declared
+      # with openmetrics_endpoint (the OpenMetrics V2 check), and since Agent
+      # 7.32 V2 requires Prometheus counters ending in _total to be configured
+      # WITHOUT that suffix; the agent re-appends it when matching and emits
+      # the result as <name>.count. Writing step_ca_x509_signed_total here
+      # matches nothing — the same silent no-data failure this block is fixing.
+      # (This node runs Agent 7.79.2.) The two kms counters below need no
+      # change: their Prometheus names carry no _total to begin with, which is
+      # why they were the only step-ca metrics that ever reported.
+      - step_ca_x509_signed: x509.signed
+      - step_ca_x509_webhook_authorized: x509.webhook_authorized
+      - step_ca_x509_webhook_enriched: x509.webhook_enriched
       - step_ca_kms_signed: kms.signed
       - step_ca_kms_errors: kms.errors
 DDSTEPCAMETRICSEOF
@@ -2811,8 +3052,8 @@ DDSTEPCAMETRICSEOF
 # --- OpenMetrics (RSA CA): scrape the RSA step-ca's native Prometheus endpoint
 # on :9091. SAME namespace (smallstep) so the existing step_ca_* dashboard
 # aggregates both instances; distinguished by the ca_instance:rsa tag (the EC
-# scrape above carries ca_instance:ec). SCEP-only, so provisioner.signed here
-# is all wifi-scep (Windows + non-ADE Mac Wi-Fi certs).
+# scrape above carries ca_instance:ec). SCEP-only, so x509.signed here is all
+# wifi-scep (Windows + non-ADE Mac Wi-Fi certs).
 cat > /etc/datadog-agent/conf.d/openmetrics.d/stepca-rsa.yaml << 'DDSTEPCARSAMETRICSEOF'
 instances:
   - openmetrics_endpoint: http://127.0.0.1:9091/metrics
@@ -2822,11 +3063,12 @@ instances:
       - "ca_instance:rsa"
     metrics:
       - step_ca_uptime_seconds: uptime
-      - step_ca_provisioner_signed_total: provisioner.signed
-      - step_ca_provisioner_renewed_total: provisioner.renewed
-      - step_ca_provisioner_rekeyed_total: provisioner.rekeyed
-      - step_ca_provisioner_webhook_authorized_total: provisioner.webhook_authorized
-      - step_ca_provisioner_webhook_enriched_total: provisioner.webhook_enriched
+      # Same step_ca_x509_* correction as the EC scrape above, including the
+      # deliberately-omitted _total suffix (see the note there). Verified:
+      #   step_ca_x509_signed_total{provisioner="wifi-scep",success="true"} 31
+      - step_ca_x509_signed: x509.signed
+      - step_ca_x509_webhook_authorized: x509.webhook_authorized
+      - step_ca_x509_webhook_enriched: x509.webhook_enriched
       - step_ca_kms_signed: kms.signed
       - step_ca_kms_errors: kms.errors
 DDSTEPCARSAMETRICSEOF

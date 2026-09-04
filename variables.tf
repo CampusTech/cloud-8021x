@@ -222,6 +222,12 @@ variable "radius_trust_mode" {
   }
 }
 
+variable "enable_acme_issuance_monitor" {
+  description = "Alert when step-ca signs zero wifi-acme certificates in 24h — the earliest signal that device certificate renewal has stopped. OFF by default because there is no device-side renewal mechanism yet (macOS does not re-order the com.apple.security.acme payload on its own), so issuance is near-zero and the monitor would sit permanently red. Turn on once ACME issuance is steady."
+  type        = bool
+  default     = false
+}
+
 variable "smallstep_ca_dns_name" {
   description = "Public DNS name clients use to reach the step-ca ACME/SCEP endpoint (e.g. ca.example.com). Must resolve to the GCLB IP and match the managed TLS cert. Only used when enable_smallstep_ca=true."
   type        = string

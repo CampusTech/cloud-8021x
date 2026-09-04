@@ -347,7 +347,8 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | `@device_name` | `@device_name` | String | Top Devices |
 | `@device_owner` | `@device_owner` | String | Top Device Owners |
 | `@device_model` | `@device_model` | String | Device Model Distribution |
-| `@reject_reason` | `@reject_reason` | String | Reject Reasons |
+| `@reject_reason` | `@reject_reason` | String | Reject Reasons, expired client certificate monitor |
+| `@serial` | `@serial` | String | Expired client certificate monitor (device cardinality) |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |
 | `@session_time` | `@session_time` | Measure (seconds) | Avg Session Duration |
 | `@input_bytes` | `@input_bytes` | Measure (bytes) | Bandwidth widgets |
@@ -417,6 +418,78 @@ masse, check the server cert's expiry first. The renew script emits
 `radius.server_cert.days_until_expiry` (tag `service:freeradius`) via DogStatsD on every
 run, so alert on that gauge as the backstop — if the timer itself stops firing, the gauge
 goes stale rather than silently counting down.
+
+### Client Certificate Expiry
+
+Device (client) certs have the same 90-day lifetime as the server cert, but **nothing on
+this side renews them** — only the device can re-order from the CA, and macOS does not
+re-order the `com.apple.security.acme` payload on its own. A cert is issued once when the
+Wi-Fi profile installs and expires 90 days later. Because the fleet enrolled in one burst
+(June 2026), the certs expire in one burst too: on 2026-09-04 there were 136 devices
+inside a three-day expiry window, with zero ACME orders reaching the CA in the previous
+48 hours.
+
+An expired **client** cert is a per-device lockout, and like the server-cert case nothing
+server-side goes red — `radius_down` and `radius_no_accepts` both stay green, because
+every device whose cert has not aged out yet still authenticates normally. The only
+signal is on the affected device's own auth attempt:
+
+```
+eap_tls: (TLS) OpenSSL says error 10 : certificate has expired
+```
+
+Three signals cover it, in order of lead time:
+
+| Signal | Lead time | Meaning |
+|---|---|---|
+| `smallstep.x509.signed.count{provisioner:wifi-acme}` flat for 24h | weeks | renewal has stopped; every cert is now counting down |
+| `radius.client_cert.expiring_soon{window:48h}` > 0 | 2 days | certs about to expire, nobody locked out yet |
+| `@reject_reason:"*certificate has expired*"` in `service:radius-auth` | none | devices have lost Wi-Fi right now |
+
+`radius-client-cert-metrics.timer` emits the gauges hourly on each node, read from the
+local auth log (not the CA database — no credentials or schema coupling). It only sees
+devices that authenticated recently, which is the population that can be locked out.
+
+```bash
+# Gauge state and last run
+systemctl list-timers radius-client-cert-metrics.timer
+sudo journalctl -u radius-client-cert-metrics.service --no-pager | tail -20
+
+# Emit now
+sudo /usr/local/bin/radius-client-cert-metrics.sh
+
+# Who is already locked out
+sudo grep -F 'certificate has expired' /var/log/freeradius/radius-auth.json \
+  | python3 -c 'import sys,json;print(sorted({json.loads(l)["serial"] for l in sys.stdin}))'
+```
+
+**The fix for an affected device is a profile re-push, not anything on these nodes.**
+Re-installing the Campus Wi-Fi ACME profile from `fleet-gitops` makes the device place a
+fresh ACME order.
+
+Before assuming the CA is rejecting orders, rule it out — compare the two counters for the
+ACME provisioner specifically, on the EC CA's metrics endpoint:
+
+```bash
+curl -s http://127.0.0.1:9090/metrics | grep -E \
+  '^step_ca_x509_(signed|webhook_authorized)_total\{provisioner="wifi-acme",success="true"\}'
+```
+
+Both label sets must match (`provisioner="wifi-acme",success="true"`) or the comparison is
+meaningless — an unlabeled total folds in other provisioners and the `success="false"`
+series, which can make a broken gate look healthy. Equal values mean the webhook allowed
+every order it saw, so a shortfall is orders never arriving, not orders being denied. A
+`webhook_authorized` total that *trails* `signed`, or any `success="false"` series, is the
+opposite conclusion: issuance is being refused, and the webhook's own log
+(`journalctl -u acme-authz-webhook`) says why. When this was diagnosed both read exactly
+164 — no denials, no orders.
+
+Once a real device-side renewal mechanism exists, set `enable_acme_issuance_monitor = true`
+to turn on the 24h issuance alert, and consider dropping the `wifi-acme` provisioner's
+`defaultTLSCertDuration` well below 2160h. Long certs are why this went unnoticed for
+three months: the renewal path only runs once a quarter, so a break in it stays invisible
+until a whole cohort ages out at once. Do **not** shorten it before renewal works — that
+converts a 90-day fuse into a one-week one.
 
 ## File Structure
 

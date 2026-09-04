@@ -131,7 +131,7 @@ locals {
                 precision = 1
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance}.as_rate()", aggregator = "avg" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance}.as_rate()", aggregator = "avg" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a * 60" }]
                   }
@@ -161,7 +161,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "signed" }]
@@ -171,23 +171,23 @@ locals {
             },
             {
               definition = {
-                title       = "Renewed + Rekeyed by Provisioner"
+                # Was "Renewed + Rekeyed by Provisioner", built on
+                # smallstep.provisioner.renewed / .rekeyed. Neither metric
+                # exists — step-ca has no renewed/rekeyed counter in this
+                # build — so the widget was blank from the day it shipped. The
+                # signal the x509 counters DO carry is the success label: a
+                # rising success:false series is issuance failing at the CA,
+                # which the signed-rate widget above cannot show.
+                title       = "Issuance Outcome by Provisioner"
                 type        = "timeseries"
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.renewed.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,success}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "cool" }
-                    formulas        = [{ formula = "a", alias = "renewed" }]
-                  },
-                  {
-                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.provisioner.rekeyed.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
-                    response_format = "timeseries"
-                    display_type    = "line"
-                    style           = { palette = "warm" }
-                    formulas        = [{ formula = "b", alias = "rekeyed" }]
+                    formulas        = [{ formula = "a" }]
                   }
                 ]
               }
@@ -199,7 +199,7 @@ locals {
                 requests = [
                   {
                     queries = [
-                      { data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()", aggregator = "sum" }
+                      { data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()", aggregator = "sum" }
                     ]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
@@ -227,7 +227,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.provisioner.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "authorized" }]
@@ -587,6 +587,113 @@ resource "datadog_monitor" "radius_server_cert_expiry" {
   require_full_window = false
 
   tags = ["service:radius", "managed-by:terraform"]
+}
+
+# -----------------------------------------------------------------------------
+# Client-certificate expiry — the device-side mirror of the monitor above.
+#
+# On 2026-09-04 a Mac lost Wi-Fi because its Smallstep EAP-TLS client cert had
+# expired that morning. Client certs are minted for 2160h (90d) like the server
+# cert, the fleet enrolled in one burst in June, and nothing renews them — so
+# 136 devices sat inside a three-day expiry window with zero ACME orders
+# reaching the CA in the previous 48 hours. FreeRADIUS reports it only as
+#   eap_tls: (TLS) OpenSSL says error 10 : certificate has expired
+# on the affected device's auth attempt. Nothing else moves: the daemon is
+# healthy, radius_down stays green, radius_no_accepts stays green (every device
+# whose cert has not aged out yet still authenticates fine), and the CA is up.
+#
+# TWO monitors, because they answer different questions with different lead
+# times, and folding them together produces a monitor that never clears:
+#
+#   radius_client_cert_expiring  certs still valid but due within 48h — the
+#                                warning shot, fires before anyone is locked
+#                                out, actionable by forcing a profile re-push
+#   radius_client_cert_expired   devices already rejected for an expired cert —
+#                                someone has lost Wi-Fi right now
+#
+# The gauge deliberately excludes already-expired certs (see
+# radius-client-cert-metrics.sh), so one decommissioned Mac that stops renewing
+# can't pin the "expiring" monitor above zero forever. Being permanently red is
+# how a monitor gets muted and stops being a monitor.
+resource "datadog_monitor" "radius_client_cert_expiring" {
+  count = local.smallstep_datadog_enabled && var.radius_trust_mode != "okta" ? 1 : 0
+  name  = "EAP-TLS client certificates nearing expiry"
+  type  = "metric alert"
+
+  # max across hosts, not sum: both RADIUS nodes emit, and a device that
+  # authenticates against only one of them appears in that node's log alone.
+  # Summing would double-count every device that has hit both.
+  query   = "max(last_4h):max:radius.client_cert.expiring_soon{service:freeradius,window:48h} > 10"
+  message = "{{value}} device certificate(s) issued by the Smallstep Wi-Fi CA expire within 48 hours (warning >0, critical >10). Nothing renews these automatically — an expired client cert is a per-device Wi-Fi lockout that FreeRADIUS reports only as `eap_tls: (TLS) OpenSSL says error 10 : certificate has expired`. Force a re-issue by re-pushing the Campus Wi-Fi ACME profile to the affected hosts from fleet-gitops; check `radius.client_cert.min_days_until_expiry` and the 14d window for the shape of the wave. NO DATA means radius-client-cert-metrics.timer has stopped emitting.${local.dd_notify}"
+
+  monitor_thresholds {
+    critical = 10
+    warning  = 0
+  }
+
+  notify_no_data    = true
+  no_data_timeframe = 720
+
+  # Hourly gauge: the default require_full_window would wait forever for a
+  # densely-populated 4h window. Same reasoning as radius_server_cert_expiry.
+  require_full_window = false
+
+  tags = ["service:radius", "managed-by:terraform"]
+}
+
+resource "datadog_monitor" "radius_client_cert_expired" {
+  count = local.datadog_enabled ? 1 : 0
+  name  = "EAP-TLS client certificate expired (device locked out)"
+  type  = "log alert"
+
+  # cardinality over @serial, not count: a locked-out Mac retries continuously
+  # (one device produced 445 rejects over two days), so a raw count measures
+  # retry rate, not how many people are affected.
+  #
+  # Aggregating over an attribute requires @serial to be a declared log facet,
+  # and the Datadog provider cannot create facets — see the required-facets
+  # table in README.md. On a fresh deployment, declare it before trusting this
+  # monitor.
+  query   = "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"cardinality\", \"@serial\").last(\"1h\") > 5"
+  message = "{{value}} device(s) were rejected by RADIUS in the last hour for presenting an EXPIRED client certificate — they have no Wi-Fi (warning >0, critical >5). Identify them with `@reject_reason:\"*certificate has expired*\"` grouped by `@serial`, then re-push the Campus Wi-Fi ACME profile from fleet-gitops to force a fresh cert. If this fires in numbers, cross-check `radius_client_cert_expiring` — a wave means the renewal path is broken fleet-wide, not that one device drifted.${local.dd_notify}"
+
+  monitor_thresholds {
+    critical = 5
+    warning  = 0
+  }
+
+  notify_no_data = false
+  tags           = ["service:radius", "managed-by:terraform"]
+}
+
+# ACME issuance stalled — the earliest possible warning, weeks ahead of any
+# expiry monitor. If devices are renewing, wifi-acme signs certs continuously;
+# a flat 24h means the renewal path has stopped and every cert in the fleet is
+# now on a countdown.
+#
+# GATED OFF BY DEFAULT, and deliberately so: there is no device-side renewal
+# mechanism yet (macOS does not re-order the com.apple.security.acme payload on
+# its own), so issuance IS near-zero today and this monitor would fire
+# immediately and stay red. Shipping it pre-wired means the day renewal starts
+# working it is one tfvars line away, instead of being rediscovered after the
+# next wave. Flip enable_acme_issuance_monitor once issuance is steady.
+resource "datadog_monitor" "stepca_no_issuance" {
+  count = local.smallstep_datadog_enabled && var.enable_acme_issuance_monitor ? 1 : 0
+  name  = "Smallstep CA issuing no ACME certificates"
+  type  = "metric alert"
+
+  query   = "sum(last_24h):sum:smallstep.x509.signed.count{provisioner:wifi-acme}.as_count() <= 0"
+  message = "step-ca has signed zero wifi-acme certificates in 24 hours. With device renewal working this metric is never flat — a zero means devices have stopped ordering, and every EAP-TLS client cert in the fleet is now counting down to a lockout wave with no replacement coming. Check the ACME directory is reachable (`curl https://${var.smallstep_ca_dns_name}/acme/${var.smallstep_acme_provisioner_name}/directory`), then the authorizing webhook (`journalctl -u acme-authz-webhook`) for deny decisions.${local.dd_notify}"
+
+  monitor_thresholds {
+    critical = 0
+  }
+
+  notify_no_data      = true
+  no_data_timeframe   = 1440
+  require_full_window = false
+
+  tags = ["service:smallstep-ca", "managed-by:terraform"]
 }
 
 # -----------------------------------------------------------------------------
