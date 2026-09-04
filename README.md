@@ -347,7 +347,8 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | `@device_name` | `@device_name` | String | Top Devices |
 | `@device_owner` | `@device_owner` | String | Top Device Owners |
 | `@device_model` | `@device_model` | String | Device Model Distribution |
-| `@reject_reason` | `@reject_reason` | String | Reject Reasons |
+| `@reject_reason` | `@reject_reason` | String | Reject Reasons, expired client certificate monitor |
+| `@serial` | `@serial` | String | Expired client certificate monitor (device cardinality) |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |
 | `@session_time` | `@session_time` | Measure (seconds) | Avg Session Duration |
 | `@input_bytes` | `@input_bytes` | Measure (bytes) | Bandwidth widgets |

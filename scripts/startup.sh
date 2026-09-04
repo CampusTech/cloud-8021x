@@ -1231,6 +1231,12 @@ emit "radius.client_cert.devices_seen:$seen|g|#service:freeradius"
 emit "radius.client_cert.expiring_soon:$soon48|g|#service:freeradius,window:48h"
 emit "radius.client_cert.expiring_soon:$soon14|g|#service:freeradius,window:14d"
 [ -n "$min_days" ] && emit "radius.client_cert.min_days_until_expiry:$min_days|g|#service:freeradius"
+
+# Explicit success. The conditional above is the last command, so when
+# min_days is empty (every observed cert already expired) its exit status is 1
+# and systemd marks the oneshot unit failed even though the other three gauges
+# were emitted fine.
+exit 0
 CLIENTCERTEOF
 
 chmod +x /usr/local/bin/radius-client-cert-metrics.sh
@@ -2944,9 +2950,19 @@ instances:
       # alert on issuance stalling when device cert renewal stopped in
       # September 2026. Verified against 127.0.0.1:9090/metrics:
       #   step_ca_x509_signed_total{provisioner="wifi-acme",success="true"} 164
-      - step_ca_x509_signed_total: x509.signed
-      - step_ca_x509_webhook_authorized_total: x509.webhook_authorized
-      - step_ca_x509_webhook_enriched_total: x509.webhook_enriched
+      #
+      # NOTE THE MISSING _total BELOW — it is not a typo. These are declared
+      # with openmetrics_endpoint (the OpenMetrics V2 check), and since Agent
+      # 7.32 V2 requires Prometheus counters ending in _total to be configured
+      # WITHOUT that suffix; the agent re-appends it when matching and emits
+      # the result as <name>.count. Writing step_ca_x509_signed_total here
+      # matches nothing — the same silent no-data failure this block is fixing.
+      # (This node runs Agent 7.79.2.) The two kms counters below need no
+      # change: their Prometheus names carry no _total to begin with, which is
+      # why they were the only step-ca metrics that ever reported.
+      - step_ca_x509_signed: x509.signed
+      - step_ca_x509_webhook_authorized: x509.webhook_authorized
+      - step_ca_x509_webhook_enriched: x509.webhook_enriched
       - step_ca_kms_signed: kms.signed
       - step_ca_kms_errors: kms.errors
 DDSTEPCAMETRICSEOF
@@ -2965,11 +2981,12 @@ instances:
       - "ca_instance:rsa"
     metrics:
       - step_ca_uptime_seconds: uptime
-      # Same step_ca_x509_* correction as the EC scrape above. Verified:
+      # Same step_ca_x509_* correction as the EC scrape above, including the
+      # deliberately-omitted _total suffix (see the note there). Verified:
       #   step_ca_x509_signed_total{provisioner="wifi-scep",success="true"} 31
-      - step_ca_x509_signed_total: x509.signed
-      - step_ca_x509_webhook_authorized_total: x509.webhook_authorized
-      - step_ca_x509_webhook_enriched_total: x509.webhook_enriched
+      - step_ca_x509_signed: x509.signed
+      - step_ca_x509_webhook_authorized: x509.webhook_authorized
+      - step_ca_x509_webhook_enriched: x509.webhook_enriched
       - step_ca_kms_signed: kms.signed
       - step_ca_kms_errors: kms.errors
 DDSTEPCARSAMETRICSEOF
