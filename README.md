@@ -465,10 +465,24 @@ sudo grep -F 'certificate has expired' /var/log/freeradius/radius-auth.json \
 
 **The fix for an affected device is a profile re-push, not anything on these nodes.**
 Re-installing the Campus Wi-Fi ACME profile from `fleet-gitops` makes the device place a
-fresh ACME order. The CA-side gate is *not* the culprit when this happens: the authorizing
-webhook has allowed every order it has seen
-(`step_ca_x509_webhook_authorized_total{success="true"}` equals
-`step_ca_x509_signed_total`) — the orders simply never arrive.
+fresh ACME order.
+
+Before assuming the CA is rejecting orders, rule it out — compare the two counters for the
+ACME provisioner specifically, on the EC CA's metrics endpoint:
+
+```bash
+curl -s http://127.0.0.1:9090/metrics | grep -E \
+  '^step_ca_x509_(signed|webhook_authorized)_total\{provisioner="wifi-acme",success="true"\}'
+```
+
+Both label sets must match (`provisioner="wifi-acme",success="true"`) or the comparison is
+meaningless — an unlabeled total folds in other provisioners and the `success="false"`
+series, which can make a broken gate look healthy. Equal values mean the webhook allowed
+every order it saw, so a shortfall is orders never arriving, not orders being denied. A
+`webhook_authorized` total that *trails* `signed`, or any `success="false"` series, is the
+opposite conclusion: issuance is being refused, and the webhook's own log
+(`journalctl -u acme-authz-webhook`) says why. When this was diagnosed both read exactly
+164 — no denials, no orders.
 
 Once a real device-side renewal mechanism exists, set `enable_acme_issuance_monitor = true`
 to turn on the 24h issuance alert, and consider dropping the `wifi-acme` provisioner's

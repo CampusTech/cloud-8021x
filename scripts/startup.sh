@@ -1179,7 +1179,33 @@ ISSUER_MATCH='Wi-Fi Intermediate CA'
 
 emit() { printf '%s\n' "$1" >"/dev/udp/$DSD/$PORT" 2>/dev/null || true; }
 
-[ -s "$LOG" ] || exit 0
+# Emit explicit zeros and stop, for the states where there is nothing to
+# measure: no auth log, or no Smallstep-issued cert in the lines scanned.
+#
+# These paths used to just `exit 0` on the theory that emitting 0 would be a
+# false all-clear. That was wrong, and it broke the paired monitor. The
+# monitor sets notify_no_data with a 12h timeframe and its message claims
+# no-data means the timer stopped — so a node that is running fine but has no
+# Smallstep certs to report would page for the wrong reason. That state is
+# reachable: under radius_trust_mode=both, early in a migration, every client
+# cert can still be Okta-issued.
+#
+# Emitting 0 here is also not actually a false all-clear, because the gauges
+# are scoped to Smallstep-issued certs: "zero of them are near expiry" is true
+# when there are none. devices_seen is what disambiguates the two cases —
+# devices_seen:0 says "measured nothing", devices_seen:200 with
+# expiring_soon:0 says "measured 200 and they are all fine".
+#
+# min_days_until_expiry is deliberately NOT emitted: there is no minimum over
+# an empty set, and a fabricated value there would be a real false all-clear.
+emit_zero() {
+  emit "radius.client_cert.devices_seen:0|g|#service:freeradius"
+  emit "radius.client_cert.expiring_soon:0|g|#service:freeradius,window:48h"
+  emit "radius.client_cert.expiring_soon:0|g|#service:freeradius,window:14d"
+  exit 0
+}
+
+[ -s "$LOG" ] || emit_zero
 now=$(date +%s)
 
 # One line per distinct (serial, cert_expiration). cert_expiration is ASN.1
@@ -1189,7 +1215,7 @@ pairs=$(tail -n "$SCAN_LINES" "$LOG" \
   | grep -F "$ISSUER_MATCH" \
   | sed -n 's/.*"serial":"\([^"]*\)".*"cert_expiration":"\([0-9]\{12\}\)Z".*/\1 \2/p' \
   | sort -u)
-[ -n "$pairs" ] || exit 0
+[ -n "$pairs" ] || emit_zero
 
 declare -A epoch_of
 declare -A best
