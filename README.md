@@ -418,6 +418,64 @@ masse, check the server cert's expiry first. The renew script emits
 run, so alert on that gauge as the backstop — if the timer itself stops firing, the gauge
 goes stale rather than silently counting down.
 
+### Client Certificate Expiry
+
+Device (client) certs have the same 90-day lifetime as the server cert, but **nothing on
+this side renews them** — only the device can re-order from the CA, and macOS does not
+re-order the `com.apple.security.acme` payload on its own. A cert is issued once when the
+Wi-Fi profile installs and expires 90 days later. Because the fleet enrolled in one burst
+(June 2026), the certs expire in one burst too: on 2026-09-04 there were 136 devices
+inside a three-day expiry window, with zero ACME orders reaching the CA in the previous
+48 hours.
+
+An expired **client** cert is a per-device lockout, and like the server-cert case nothing
+server-side goes red — `radius_down` and `radius_no_accepts` both stay green, because
+every device whose cert has not aged out yet still authenticates normally. The only
+signal is on the affected device's own auth attempt:
+
+```
+eap_tls: (TLS) OpenSSL says error 10 : certificate has expired
+```
+
+Three signals cover it, in order of lead time:
+
+| Signal | Lead time | Meaning |
+|---|---|---|
+| `smallstep.x509.signed.count{provisioner:wifi-acme}` flat for 24h | weeks | renewal has stopped; every cert is now counting down |
+| `radius.client_cert.expiring_soon{window:48h}` > 0 | 2 days | certs about to expire, nobody locked out yet |
+| `@reject_reason:"*certificate has expired*"` in `service:radius-auth` | none | devices have lost Wi-Fi right now |
+
+`radius-client-cert-metrics.timer` emits the gauges hourly on each node, read from the
+local auth log (not the CA database — no credentials or schema coupling). It only sees
+devices that authenticated recently, which is the population that can be locked out.
+
+```bash
+# Gauge state and last run
+systemctl list-timers radius-client-cert-metrics.timer
+sudo journalctl -u radius-client-cert-metrics.service --no-pager | tail -20
+
+# Emit now
+sudo /usr/local/bin/radius-client-cert-metrics.sh
+
+# Who is already locked out
+sudo grep -F 'certificate has expired' /var/log/freeradius/radius-auth.json \
+  | python3 -c 'import sys,json;print(sorted({json.loads(l)["serial"] for l in sys.stdin}))'
+```
+
+**The fix for an affected device is a profile re-push, not anything on these nodes.**
+Re-installing the Campus Wi-Fi ACME profile from `fleet-gitops` makes the device place a
+fresh ACME order. The CA-side gate is *not* the culprit when this happens: the authorizing
+webhook has allowed every order it has seen
+(`step_ca_x509_webhook_authorized_total{success="true"}` equals
+`step_ca_x509_signed_total`) — the orders simply never arrive.
+
+Once a real device-side renewal mechanism exists, set `enable_acme_issuance_monitor = true`
+to turn on the 24h issuance alert, and consider dropping the `wifi-acme` provisioner's
+`defaultTLSCertDuration` well below 2160h. Long certs are why this went unnoticed for
+three months: the renewal path only runs once a quarter, so a break in it stays invisible
+until a whole cohort ages out at once. Do **not** shorten it before renewal works — that
+converts a 90-day fuse into a one-week one.
+
 ## File Structure
 
 ```

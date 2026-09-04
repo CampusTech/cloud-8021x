@@ -12,6 +12,17 @@
       ],
       "name": "host",
       "prefix": "host"
+    },
+    {
+      "available_values": [
+        "ec",
+        "rsa"
+      ],
+      "defaults": [
+        "*"
+      ],
+      "name": "ca_instance",
+      "prefix": "ca_instance"
     }
   ],
   "title": "Smallstep step-ca (Wi-Fi CA)",
@@ -29,7 +40,18 @@
               "tags": [
                 "instance:stepca-health"
               ],
-              "title": "CA Health (/health)",
+              "title": "EC CA Health (/health)",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "check": "http.can_connect",
+              "grouping": "cluster",
+              "tags": [
+                "instance:stepca-rsa-health"
+              ],
+              "title": "RSA CA Health (/health)",
               "type": "check_status"
             }
           },
@@ -72,7 +94,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.scep.decrypter_ready{$host}"
+                      "query": "min:smallstep.scep.decrypter_ready{$host,$ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -99,7 +121,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "max:smallstep.uptime{$host}"
+                      "query": "max:smallstep.uptime{$host,$ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -125,7 +147,7 @@
                       "aggregator": "avg",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.provisioner.signed.count{$host}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "scalar"
@@ -159,7 +181,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -177,7 +199,6 @@
                   "display_type": "line",
                   "formulas": [
                     {
-                      "alias": "renewed",
                       "formula": "a"
                     }
                   ],
@@ -185,37 +206,17 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.provisioner.renewed.count{$host} by {provisioner}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,success}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
                   "style": {
                     "palette": "cool"
                   }
-                },
-                {
-                  "display_type": "line",
-                  "formulas": [
-                    {
-                      "alias": "rekeyed",
-                      "formula": "b"
-                    }
-                  ],
-                  "queries": [
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:smallstep.provisioner.rekeyed.count{$host} by {provisioner}.as_rate()"
-                    }
-                  ],
-                  "response_format": "timeseries",
-                  "style": {
-                    "palette": "warm"
-                  }
                 }
               ],
               "show_legend": true,
-              "title": "Renewed + Rekeyed by Provisioner",
+              "title": "Issuance Outcome by Provisioner",
               "type": "timeseries"
             }
           },
@@ -233,7 +234,7 @@
                       "aggregator": "sum",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.provisioner.signed.count{$host} by {provisioner}.as_count()"
+                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()"
                     }
                   ],
                   "response_format": "scalar"
@@ -267,7 +268,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.provisioner.webhook_authorized.count{$host} by {provisioner}.as_rate()"
+                      "query": "sum:smallstep.x509.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -293,7 +294,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.kms.signed.count{$host}.as_rate()"
+                      "query": "sum:smallstep.kms.signed.count{$host,$ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -313,7 +314,7 @@
                     {
                       "data_source": "metrics",
                       "name": "b",
-                      "query": "sum:smallstep.kms.errors.count{$host}.as_rate()"
+                      "query": "sum:smallstep.kms.errors.count{$host,$ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -370,7 +371,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{cert:intermediate,$host}"
+                      "query": "min:smallstep.cert.days_until_expiry{cert:intermediate,$host,$ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -414,7 +415,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{cert:decrypter,$host}"
+                      "query": "min:smallstep.cert.days_until_expiry{cert:decrypter,$host,$ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -438,7 +439,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{$host} by {cert}"
+                      "query": "min:smallstep.cert.days_until_expiry{$host,$ca_instance} by {cert,ca_instance}"
                     }
                   ],
                   "response_format": "timeseries"
