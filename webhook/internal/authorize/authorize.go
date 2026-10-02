@@ -1,4 +1,4 @@
-// Package authorize holds the allow rule: a device serial is authorized iff
+// Package authorize holds the allow rule: a device identity is authorized iff
 // it resolves to an enrolled Fleet host (and, when an allow-label is
 // configured, that host carries the label). Every uncertain case denies.
 package authorize
@@ -12,7 +12,7 @@ import (
 
 // Lookup is the slice of the Fleet client this package needs.
 type Lookup interface {
-	LookupHostBySerial(ctx context.Context, serial string) (*fleet.Host, error)
+	LookupHostByIdentity(ctx context.Context, identity string) (*fleet.Host, error)
 }
 
 type Authorizer struct {
@@ -25,21 +25,21 @@ func New(lookup Lookup, allowLabel string) *Authorizer {
 }
 
 // Decide returns true only when issuance should be allowed. Fail-closed.
-func (a *Authorizer) Decide(ctx context.Context, serial string) bool {
-	if serial == "" {
-		logrus.WithField("reason", "empty serial").Info("deny")
+func (a *Authorizer) Decide(ctx context.Context, identity string) bool {
+	if identity == "" {
+		logrus.WithField("reason", "empty identity").Info("deny")
 		return false
 	}
-	host, err := a.lookup.LookupHostBySerial(ctx, serial)
+	host, err := a.lookup.LookupHostByIdentity(ctx, identity)
 	if err != nil {
-		// Don't log the raw serial — it's a long-lived device identifier. A short
+		// Don't log the raw identity — it's a long-lived device identifier. A short
 		// suffix is enough to correlate during debugging without retaining the
 		// full ID in centralized logs.
-		logrus.WithError(err).WithField("serial_suffix", serialSuffix(serial)).Warn("deny: fleet lookup failed (fail-closed)")
+		logrus.WithError(err).WithField("identity_suffix", identitySuffix(identity)).Warn("deny: fleet lookup failed (fail-closed)")
 		return false
 	}
 	if host == nil || !host.Enrolled {
-		logrus.WithField("serial_suffix", serialSuffix(serial)).Info("deny: serial not an enrolled Fleet host")
+		logrus.WithField("identity_suffix", identitySuffix(identity)).Info("deny: identity not an enrolled Fleet host")
 		return false
 	}
 	if a.allowLabel != "" && !host.HasLabel(a.allowLabel) {
@@ -50,11 +50,11 @@ func (a *Authorizer) Decide(ctx context.Context, serial string) bool {
 	return true
 }
 
-// serialSuffix returns a short, non-identifying tail of the serial for log
+// identitySuffix returns a short, non-identifying tail of the identity for log
 // correlation (avoids retaining the full long-lived device identifier).
-func serialSuffix(serial string) string {
-	if len(serial) <= 4 {
+func identitySuffix(identity string) string {
+	if len(identity) <= 4 {
 		return "****"
 	}
-	return "***" + serial[len(serial)-4:]
+	return "***" + identity[len(identity)-4:]
 }

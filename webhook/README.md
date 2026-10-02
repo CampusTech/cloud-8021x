@@ -50,3 +50,17 @@ WEBHOOK_SIGNING_SECRET=... FLEET_API_BASE_URL=https://fleet.example FLEET_API_TO
 
 Container image: `docker build -t acme-authz-webhook .` (see `Dockerfile`).
 Deployed on Cloud Run via the repo's `webhook.tf` (gated by `enable_acme_webhook`).
+
+## SCEP and serial-free BYOD (v1.2.0)
+
+`POST /scep-challenge` verifies the step-ca HMAC and configured `SCEP_CHALLENGE`,
+then resolves the CSR CN as an enrolled device identity. Exact hardware-serial
+and UUID/enrollment-ID matches are accepted; mutable hostname matches are denied.
+The existing Windows ` Campus WiFi` suffix remains supported.
+
+ACME `/authorize` continues to require an attested permanent identifier. It does
+not fall back to the CSR CN when Apple User Enrollment omits device identifiers.
+
+The shared SCEP challenge proves possession of the challenge, not ownership of
+the named device. See the [issuance trust boundary](../docs/dynamic-vlans.md#issuance-trust-boundary)
+before using this path for isolation between BYOD and privileged VLANs.

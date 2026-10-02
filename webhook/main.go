@@ -22,7 +22,7 @@ var version = "dev"
 func main() {
 	root := &cobra.Command{
 		Use:   "acme-authz-webhook",
-		Short: "step-ca AUTHORIZING webhook that allows ACME/SCEP issuance only for Fleet-enrolled device serials (fail-closed).",
+		Short: "step-ca AUTHORIZING webhook that allows ACME/SCEP issuance only for Fleet-enrolled device identities (fail-closed).",
 	}
 	root.AddCommand(serveCmd())
 	root.AddCommand(versionCmd())
@@ -52,8 +52,8 @@ func serveCmd() *cobra.Command {
 			}
 			fc := fleet.New(cfg.FleetBaseURL, cfg.FleetToken, cfg.FleetTimeout)
 			authz := authorize.New(fc, cfg.AllowLabel)
-			h := server.New(cfg.SigningSecret, cfg.SCEPChallenge, server.DeciderFunc(func(serial string) bool {
-				return authz.Decide(context.Background(), serial)
+			h := server.New(cfg.SigningSecret, cfg.SCEPChallenge, server.DeciderFunc(func(identity string) bool {
+				return authz.Decide(context.Background(), identity)
 			}))
 			// Bind to loopback only — step-ca calls it over localhost on the
 			// same VM. Defense-in-depth in case host firewall rules ever drift.

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestLookupHostBySerial_Found(t *testing.T) {
+func TestLookupHostByIdentity_Found(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -23,7 +23,7 @@ func TestLookupHostBySerial_Found(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "test-token", 5*time.Second)
-	h, err := c.LookupHostBySerial(context.Background(), "SERIAL123")
+	h, err := c.LookupHostByIdentity(context.Background(), "SERIAL123")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -38,13 +38,13 @@ func TestLookupHostBySerial_Found(t *testing.T) {
 	}
 }
 
-func TestLookupHostBySerial_NotEnrolled(t *testing.T) {
+func TestLookupHostByIdentity_NotEnrolled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"windows","labels":[{"name":"All Hosts"}],"mdm":{"enrollment_status":"Off"}}}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "test-token", 5*time.Second)
-	h, err := c.LookupHostBySerial(context.Background(), "SERIAL123")
+	h, err := c.LookupHostByIdentity(context.Background(), "SERIAL123")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -56,13 +56,13 @@ func TestLookupHostBySerial_NotEnrolled(t *testing.T) {
 	}
 }
 
-func TestLookupHostBySerial_PendingNotEnrolled(t *testing.T) {
+func TestLookupHostByIdentity_PendingNotEnrolled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"host":{"id":733,"hardware_serial":"SERIAL123","platform":"windows","labels":[{"name":"All Hosts"}],"mdm":{"enrollment_status":"Pending"}}}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "test-token", 5*time.Second)
-	h, err := c.LookupHostBySerial(context.Background(), "SERIAL123")
+	h, err := c.LookupHostByIdentity(context.Background(), "SERIAL123")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -74,13 +74,13 @@ func TestLookupHostBySerial_PendingNotEnrolled(t *testing.T) {
 	}
 }
 
-func TestLookupHostBySerial_NotFound(t *testing.T) {
+func TestLookupHostByIdentity_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "test-token", 5*time.Second)
-	h, err := c.LookupHostBySerial(context.Background(), "NOPE")
+	h, err := c.LookupHostByIdentity(context.Background(), "NOPE")
 	if err != nil {
 		t.Fatalf("not-found should be a clean (nil host, nil err) signal, got err: %v", err)
 	}
@@ -89,14 +89,44 @@ func TestLookupHostBySerial_NotFound(t *testing.T) {
 	}
 }
 
-func TestLookupHostBySerial_ServerError(t *testing.T) {
+func TestLookupHostByIdentity_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 	c := New(srv.URL, "test-token", 5*time.Second)
-	_, err := c.LookupHostBySerial(context.Background(), "X")
+	_, err := c.LookupHostByIdentity(context.Background(), "X")
 	if err == nil {
 		t.Fatal("5xx must be an error so the caller fails closed")
+	}
+}
+
+func TestLookupHostByIdentity_BYODAndExactMatch(t *testing.T) {
+	const enrollment = "01234567-89ab-cdef-0123-456789abcdef"
+	for _, tc := range []struct {
+		name, identity, response string
+		want                     bool
+	}{
+		{"byod enrollment", enrollment, `{"host":{"id":42,"uuid":"` + enrollment + `","hardware_serial":"","mdm":{"enrollment_status":"On (personal)"}}}`, true},
+		{"uuid case", "01234567-89AB-CDEF-0123-456789ABCDEF", `{"host":{"id":42,"uuid":"` + enrollment + `","mdm":{"enrollment_status":"On (personal)"}}}`, true},
+		{"hostname collision", "chosen-name", `{"host":{"id":42,"hostname":"chosen-name","uuid":"different","hardware_serial":"SERIAL","mdm":{"enrollment_status":"On (manual)"}}}`, false},
+		{"wrong host", enrollment, `{"host":{"id":42,"uuid":"different","hardware_serial":"SERIAL","mdm":{"enrollment_status":"On (manual)"}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/latest/fleet/hosts/identifier/"+tc.identity {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer srv.Close()
+			host, err := New(srv.URL, "token", time.Second).LookupHostByIdentity(context.Background(), tc.identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (host != nil) != tc.want {
+				t.Fatalf("got host %v, want found=%v", host, tc.want)
+			}
+		})
 	}
 }

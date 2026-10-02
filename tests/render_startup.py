@@ -1,0 +1,43 @@
+"""Render the actual Terraform template with public test fixtures; no cloud/state access."""
+import base64
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def render(enabled=True):
+    block = (ROOT / 'compute.tf').read_text().split('startup_script = templatefile', 1)[1].split('\n  })', 1)[0]
+    values = {key: 'test' for key in re.findall(r'^    (\w+)\s*=', block, re.M)}
+    for key in values:
+        if key.startswith('has_') or key in ('smallstep_enabled', 'acme_webhook_enabled',
+                'rewrite_username', 'tls_session_cache', 'vlan_policy_enabled'):
+            values[key] = key == 'tls_session_cache'
+    values.update(vlan_policy_enabled=enabled, radius_trust_mode='okta', tls_max_version='1.2',
+                  tls_session_cache_lifetime=24, radius_clients_json='{}',
+                  rewrite_username_separator=' - ', acme_webhook_url='')
+    for name in ('device_policy', 'inventory_policy', 'radius_vlan'):
+        values[name + '_module_b64'] = base64.b64encode((ROOT / 'scripts' / (name + '.py')).read_bytes()).decode()
+    policy = {'group_vlans': {'staff': 100, 'byod': 200}, 'fallback_vlan': None,
+              'cache_max_age': 3600, 'cache_file': '/etc/freeradius/3.0/device-policy-cache.json'}
+    values['vlan_policy_config_b64'] = base64.b64encode(json.dumps(policy if enabled else None).encode()).decode()
+    expression = 'templatefile(' + json.dumps(str(ROOT / 'scripts/startup.sh')) + ', ' + json.dumps(values) + ')'
+    with tempfile.TemporaryDirectory() as directory:
+        result = subprocess.run(['terraform', '-chdir=' + directory, 'console'],
+                                input=expression, capture_output=True, text=True, check=True)
+    # terraform console emits multiline strings as <<EOT heredocs.
+    output = result.stdout.strip()
+    if output.startswith('<<'):
+        lines = output.splitlines()
+        output = '\n'.join(lines[1:-1]) + '\n'
+    else:
+        output = json.loads(output)
+    subprocess.run(['bash', '-n'], input=output, text=True, check=True)
+    return output
+
+
+if __name__ == '__main__':
+    print(render(), end='')

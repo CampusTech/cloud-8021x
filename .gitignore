@@ -11,3 +11,5 @@ out/
 tfplan
 *.cert
 .claude/
+
+__pycache__/

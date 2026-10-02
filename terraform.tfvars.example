@@ -110,3 +110,16 @@ EOT
 # DNS name for the RSA SCEP step-ca instance (Windows + non-ADE Macs). Point an
 # A record at the `smallstep_rsa_lb_ip` output. Required when enable_smallstep_ca=true.
 # smallstep_ca_rsa_dns_name = "ca-rsa.example.com"
+
+# Dynamic VLAN assignment (UniFi and other RFC 3580 RADIUS clients).
+# Keys are adapter-defined groups: Fleet fleet/team IDs or Jamf computer site IDs.
+# Enable one inventory lookup above, or provide your own normalized cache_file.
+# radius_vlan_policy = {
+#   group_vlans = {
+#     "fleet:1" = 100 # Staff fleet
+#     "fleet:2" = 200 # BYOD fleet
+#     # "jamf:site:3" = 100
+#   }
+#   # fallback_vlan = 999 # Known enrolled devices with no mapped group only.
+#   cache_max_age = 3600 # Reject if no complete inventory refresh for an hour.
+# }

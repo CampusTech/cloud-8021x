@@ -295,6 +295,16 @@ The cache is built on boot and refreshed every 30 minutes via cron. Cache misses
 
 3. `terraform apply` — creates 3 new secrets in Secret Manager and updates the startup script
 
+### Dynamic VLAN assignment (Optional)
+
+Map inventory groups to VLAN IDs with `radius_vlan_policy`. Fleet fleets/teams,
+Jamf computer sites, and custom MDM inventory snapshots share the same RADIUS
+policy. Serial-free BYOD iOS/iPadOS certificates can use an enrollment ID.
+UniFi receives `Tunnel-Type = 13`, `Tunnel-Medium-Type = 6`, and the VLAN ID in
+`Tunnel-Private-Group-Id`.
+
+See [configuration, UniFi setup, BYOD profiles, and issuance trust requirements](docs/dynamic-vlans.md).
+
 ### UniFi AP/Site Lookup (Optional)
 
 If you provide UniFi API credentials, FreeRADIUS will resolve the access point and site name for each authentication and accounting event. A cache script queries the UniFi API every 5 minutes and builds a local MAC-to-AP lookup table. The Python module matches the client's BSSID (from `Called-Station-Id`) to the AP's base MAC using fuzzy matching (last-byte offset 0-7). This adds to both auth and accounting JSON logs:
@@ -516,5 +526,4 @@ For a detailed technical walkthrough of the startup script, authentication flow,
 
 ## Future Work
 
-- **Dynamic VLAN assignment**: Query Okta Devices API to map device → user → group → VLAN
 - **Multi-region**: Deploy additional RADIUS nodes closer to west coast / new offices

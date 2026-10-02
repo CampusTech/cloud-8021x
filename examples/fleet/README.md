@@ -9,6 +9,7 @@ before use. See [`../README.md`](../README.md) for the token map.
 | File | Platform | Purpose |
 |------|----------|---------|
 | `wifi-acme.mobileconfig` | macOS / iOS | EAP-TLS identity via direct ACME |
+| `wifi-ios-byod.mobileconfig` | iOS / iPadOS User Enrollment | SCEP with enrollment ID; no serial required |
 | `wifi-scep.xml` | Windows | EAP-TLS identity via SCEP (Fleet SCEP proxy) |
 
 For the root CA trust and the WlanXml 802.1X profile on Windows, reuse
@@ -51,3 +52,12 @@ literal appears more than **once** in the file — including inside comments.
 That is why this README and the profile comments write those variable names
 **without** the leading `$` (e.g. `FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME`).
 The single live occurrence of each is in its `<Data>` node.
+
+## BYOD iOS/iPadOS
+
+Use `wifi-ios-byod.mobileconfig` for User Enrollment, where Fleet exposes the
+enrollment ID through `$FLEET_VAR_HOST_UUID`. The CSR CN contains this identity;
+`$FLEET_VAR_CERTIFICATE_RENEWAL_ID` in the OU enables certificate renewal.
+See [dynamic VLAN setup and SCEP issuance trust requirements](../../docs/dynamic-vlans.md)
+for token replacement, webhook release requirements, and the shared-challenge
+limitation when using certificates for VLAN isolation.

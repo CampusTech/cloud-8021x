@@ -329,11 +329,46 @@ variable "webhook_allow_label" {
 variable "webhook_release_version" {
   description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = "1.1.0"
+  default     = "1.2.0"
 }
 
 variable "webhook_port" {
   description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls http://127.0.0.1:<port>/authorize)."
   type        = number
   default     = 9444
+}
+
+# Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
+# not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
+variable "radius_vlan_policy" {
+  description = "Dynamic VLAN authorization. Null disables it. Enabled policies reject unknown/unenrolled devices, expired inventory, and conflicting groups. fallback_vlan applies only to known enrolled devices with no mapped group."
+  type = object({
+    group_vlans   = map(number)
+    fallback_vlan = optional(number)
+    cache_max_age = optional(number, 3600)
+    cache_file    = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
+  })
+  default = null
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for vlan in concat(values(var.radius_vlan_policy.group_vlans), var.radius_vlan_policy.fallback_vlan == null ? [] : [var.radius_vlan_policy.fallback_vlan]) :
+      vlan != null && try(vlan >= 1 && vlan <= 4094 && floor(vlan) == vlan, false)
+    ])
+    error_message = "VLAN IDs must be integers from 1 through 4094."
+  }
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.cache_max_age >= 60 && floor(var.radius_vlan_policy.cache_max_age) == var.radius_vlan_policy.cache_max_age
+    error_message = "cache_max_age must be an integer of at least 60 seconds."
+  }
+  validation {
+    condition = var.radius_vlan_policy == null ? true : (
+      var.radius_vlan_policy.cache_file != "/etc/freeradius/3.0/device-policy-cache.json" || var.radius_vlan_policy.cache_max_age >= 600
+    )
+    error_message = "The built-in inventory cache refreshes every five minutes; cache_max_age must be at least 600 seconds."
+  }
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : startswith(var.radius_vlan_policy.cache_file, "/")
+    error_message = "cache_file must be an absolute path to a trusted inventory snapshot."
+  }
 }

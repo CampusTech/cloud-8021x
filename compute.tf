@@ -121,21 +121,26 @@ resource "google_secret_manager_secret_iam_member" "cert_secrets_write" {
 
 locals {
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
-    project_id                 = google_project.this.project_id
-    server_cert_cn             = var.server_cert_cn
-    server_cert_org            = var.server_cert_org
-    has_root_ca                = var.okta_root_ca_cert_pem != ""
-    has_jamf_lookup            = var.jamf_url != ""
-    has_fleet_lookup           = var.enable_fleet_lookup
-    has_unifi_lookup           = var.unifi_api_key != ""
-    has_meraki_lookup          = var.meraki_api_key != ""
-    meraki_org_id              = var.meraki_org_id
-    rewrite_username           = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
-    rewrite_username_separator = var.rewrite_username_separator
-    tls_session_cache          = var.tls_session_cache
-    tls_session_cache_lifetime = var.tls_session_cache_lifetime
-    tls_max_version            = var.tls_max_version
-    datadog_site               = var.datadog_site
+    project_id                  = google_project.this.project_id
+    server_cert_cn              = var.server_cert_cn
+    server_cert_org             = var.server_cert_org
+    has_root_ca                 = var.okta_root_ca_cert_pem != ""
+    has_jamf_lookup             = var.jamf_url != ""
+    has_fleet_lookup            = var.enable_fleet_lookup
+    has_unifi_lookup            = var.unifi_api_key != ""
+    has_meraki_lookup           = var.meraki_api_key != ""
+    meraki_org_id               = var.meraki_org_id
+    rewrite_username            = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
+    rewrite_username_separator  = var.rewrite_username_separator
+    tls_session_cache           = var.tls_session_cache
+    tls_session_cache_lifetime  = var.tls_session_cache_lifetime
+    tls_max_version             = var.tls_max_version
+    vlan_policy_enabled         = var.radius_vlan_policy != null
+    vlan_policy_config_b64      = base64encode(jsonencode(var.radius_vlan_policy))
+    device_policy_module_b64    = filebase64("${path.module}/scripts/device_policy.py")
+    inventory_policy_module_b64 = filebase64("${path.module}/scripts/inventory_policy.py")
+    radius_vlan_module_b64      = filebase64("${path.module}/scripts/radius_vlan.py")
+    datadog_site                = var.datadog_site
     radius_clients_json = jsonencode({
       for k, v in var.radius_clients : k => {
         cidrs       = v.cidrs

@@ -26,6 +26,11 @@ REWRITE_USERNAME_SEPARATOR="${rewrite_username_separator}"
 TLS_SESSION_CACHE="${tls_session_cache}"
 TLS_SESSION_CACHE_LIFETIME="${tls_session_cache_lifetime}"
 TLS_MAX_VERSION="${tls_max_version}"
+VLAN_POLICY_ENABLED="${vlan_policy_enabled}"
+DEVICE_CACHE_SCHEDULE="*/30"
+if [ "$VLAN_POLICY_ENABLED" = "true" ]; then
+    DEVICE_CACHE_SCHEDULE="*/5"
+fi
 RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
 
@@ -88,6 +93,16 @@ apt-get install -y freeradius freeradius-utils freeradius-mysql freeradius-pytho
 systemctl stop freeradius 2>/dev/null || true
 
 RADDB="/etc/freeradius/3.0"
+
+# Shared identity/policy code is installed from repository files so it can be
+# tested without executing this bootstrap. Base64 avoids shell/template quoting.
+mkdir -p "$RADDB/mods-config/python3"
+printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/device_policy.py"
+printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
+printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
+printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan}.py "$RADDB/vlan-policy.json"
+
 CERT_DIR="$RADDB/certs"
 
 # ---------------------------------------------------------------------------
@@ -1404,6 +1419,11 @@ eap {
 
     tls {
         tls = tls-common
+%{ if vlan_policy_enabled ~}
+        # Check policy before eap builds EAP-Success / MPPE keys, including
+        # resumed sessions. This hook sees the verified certificate attributes.
+        virtual_server = check-device-vlan
+%{ endif ~}
     }
 }
 EAPEOF
@@ -1651,10 +1671,13 @@ TOKEN=$(get_token) || exit 0
 # Paginate through all inventory
 python3 << PYEOF
 import json, urllib.request, sys
+sys.path.insert(0, "/etc/freeradius/3.0/mods-config/python3")
+from inventory_policy import jamf_device, publish
 
 token = "$TOKEN"
 url = "$JAMF_URL"
 cache = {}
+policy_devices = []
 page = 0
 page_size = 100
 import time
@@ -1674,12 +1697,15 @@ while True:
         resp = urllib.request.urlopen(req, timeout=30)
     except Exception as e:
         print(f"API error on page {page}: {e}", file=sys.stderr)
-        break
+        sys.exit(1)
     data = json.loads(resp.read())
-    results = data.get("results", [])
+    results = data["results"]
+    if not isinstance(results, list):
+        raise ValueError("Jamf inventory response has no results list")
     if not results:
         break
     for device in results:
+        policy_devices.append(jamf_device(device))
         serial = (device.get("hardware") or {}).get("serialNumber") or ""
         if not serial:
             continue
@@ -1689,7 +1715,7 @@ while True:
             "device_model": (device.get("hardware") or {}).get("model") or "",
             "ts": now,
         }
-    total_count = data.get("totalCount", 0)
+    total_count = data["totalCount"]
     if (page + 1) * page_size >= total_count:
         break
     page += 1
@@ -1698,6 +1724,7 @@ with open("$${CACHE_FILE}.tmp", "w") as f:
     json.dump(cache, f)
 import os
 os.replace("$${CACHE_FILE}.tmp", "$CACHE_FILE")
+publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
 print(f"Jamf cache: {len(cache)} devices")
 PYEOF
 JAMFCACHEEOF
@@ -1707,7 +1734,7 @@ JAMFCACHEEOF
     /usr/local/bin/jamf-device-cache.sh || true
 
     # Set up cron to refresh cache every 30 minutes
-    echo "*/30 * * * * root /usr/local/bin/jamf-device-cache.sh" > /etc/cron.d/jamf-device-cache
+    echo "$DEVICE_CACHE_SCHEDULE * * * * root /usr/local/bin/jamf-device-cache.sh" > /etc/cron.d/jamf-device-cache
     chmod 644 /etc/cron.d/jamf-device-cache
 
     # Deploy single-device fetch script (for cache misses)
@@ -1834,6 +1861,8 @@ CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
 
 python3 << 'PYEOF'
 import json, urllib.request, urllib.error, sys, time, os
+sys.path.insert(0, "/etc/freeradius/3.0/mods-config/python3")
+from inventory_policy import fleet_device, publish
 
 with open("/run/fleet-credentials.json") as f:
     cred = json.load(f)
@@ -1843,6 +1872,7 @@ if not base or not token:
     sys.exit(0)
 
 cache = {}
+policy_devices = []
 page = 0
 page_size = 100
 now = int(time.time())
@@ -1862,13 +1892,17 @@ while True:
         resp = urllib.request.urlopen(req, timeout=30)
     except Exception as e:
         print(f"Fleet API error on page {page}: {e}", file=sys.stderr)
-        break
+        sys.exit(1)
     data = json.loads(resp.read())
-    hosts = data.get("hosts") or []
+    hosts = data["hosts"]
+    if not isinstance(hosts, list):
+        raise ValueError("Fleet inventory response has no hosts list")
     if not hosts:
         break
     for h in hosts:
-        serial = (h.get("hardware_serial") or "").strip()
+        device = fleet_device(h)
+        policy_devices.append(device)
+        serial = (h.get("hardware_serial") or h.get("uuid") or "").strip()
         if not serial:
             continue
         dm = h.get("device_mapping") or []
@@ -1879,6 +1913,8 @@ while True:
             "device_model": h.get("hardware_model") or "",
             "ts": now,
         }
+        for alias in device["identities"]:
+            cache[alias] = cache[serial]
     # Fleet returns fewer than page_size on the last page.
     if len(hosts) < page_size:
         break
@@ -1889,6 +1925,7 @@ tmp_file = cache_file + ".tmp"
 with open(tmp_file, "w") as f:
     json.dump(cache, f)
 os.replace(tmp_file, cache_file)  # atomic publish
+publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
 print(f"Fleet cache: {len(cache)} devices")
 PYEOF
 FLEETCACHEEOF
@@ -1898,7 +1935,7 @@ FLEETCACHEEOF
     /usr/local/bin/fleet-device-cache.sh || true
 
     # Refresh cache every 30 minutes.
-    echo "*/30 * * * * root /usr/local/bin/fleet-device-cache.sh" > /etc/cron.d/fleet-device-cache
+    echo "$DEVICE_CACHE_SCHEDULE * * * * root /usr/local/bin/fleet-device-cache.sh" > /etc/cron.d/fleet-device-cache
     chmod 644 /etc/cron.d/fleet-device-cache
 
     # Deploy single-device fetch script (for cache misses).
@@ -2528,7 +2565,7 @@ def post_auth(p):
         # Device-owner lookup — read from local cache (instant, no API call).
         # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
         # bare serial the MDM cache is keyed on.
-        serial = _serial_from_username(user_name)
+        serial = _serial_from_username(_get_attr(p, "TLS-Client-Cert-Common-Name") or user_name)
         if serial:
             # Expose the NORMALIZED bare serial to the JSON logger via
             # reply:Login-LAT-Service (an unused STRING-typed attr, same family
@@ -2678,8 +2715,8 @@ linelog json_log {
     reference = "messages.%%{%%{reply:Packet-Type}:-unknown}"
 
     messages {
-        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
-        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
+        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
+        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
         unknown = "{\"timestamp\":\"%S\",\"event\":\"unknown\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\"}"
     }
 }
@@ -2738,6 +2775,39 @@ if [ "$REWRITE_USERNAME" = "true" ]; then
             }
         }
         "
+fi
+if [ "$VLAN_POLICY_ENABLED" = "true" ]; then
+    cat > "$RADDB/mods-available/radius_vlan" << 'VLANMODULEEOF'
+python3 radius_vlan {
+    python_path = /etc/freeradius/3.0/mods-config/python3
+    module = radius_vlan
+    pass_all_vps_dict = yes
+    mod_authorize = $${.module}
+    func_authorize = authorize
+}
+VLANMODULEEOF
+    ln -sf "$RADDB/mods-available/radius_vlan" "$RADDB/mods-enabled/radius_vlan"
+    cat > "$RADDB/sites-available/check-device-vlan" << 'VLANSITEEOF'
+server check-device-vlan {
+    authorize {
+        radius_vlan {
+            reject = 1
+            fail = 1
+        }
+        if (updated) {
+            update control {
+                Auth-Type := Accept
+            }
+        }
+        else {
+            reject
+        }
+    }
+}
+VLANSITEEOF
+    ln -sf "$RADDB/sites-available/check-device-vlan" "$RADDB/sites-enabled/check-device-vlan"
+else
+    rm -f "$RADDB/mods-enabled/radius_vlan" "$RADDB/sites-enabled/check-device-vlan"
 fi
 POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 
@@ -2799,6 +2869,11 @@ server default {
         Post-Auth-Type REJECT {
             $POSTAUTH_REJECT_MODULES
             json_log
+            # A policy rejection can follow successful TLS authentication.
+            # Remove accept-only keys/attributes and replace EAP-Success.
+            attr_filter.access_reject
+            eap
+            remove_reply_message_if_eap
         }
     }
 }

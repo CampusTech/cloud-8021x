@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/CampusTech/cloud-8021x/webhook/internal/authorize"
+	"github.com/CampusTech/cloud-8021x/webhook/internal/fleet"
 )
 
 func sigOf(secret, body string) string {
@@ -138,5 +143,54 @@ func TestSCEPChallengeHandler_NoChallengeConfigured(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&rs)
 	if rs.Allow {
 		t.Fatal("empty configured challenge must deny (fail-closed)")
+	}
+}
+
+// Exercise the complete SCEP handler -> authorizer -> Fleet HTTP adapter path.
+func TestSCEP_BYODEnrollmentIdentity(t *testing.T) {
+	const id = "01234567-89ab-cdef-0123-456789abcdef"
+	fleetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/latest/fleet/hosts/identifier/"+id {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"host":{"id":42,"uuid":"` + id + `","hardware_serial":"","mdm":{"enrollment_status":"On (personal)"}}}`))
+	}))
+	defer fleetServer.Close()
+	a := authorize.New(fleet.New(fleetServer.URL, "token", time.Second), "")
+	h := New("secret", "challenge", DeciderFunc(func(identity string) bool {
+		return a.Decide(context.Background(), identity)
+	}))
+	for _, tc := range []struct {
+		identity, challenge string
+		want                bool
+	}{
+		{id, "challenge", true}, {id, "wrong", false}, {"unknown", "challenge", false},
+	} {
+		body := `{"scepChallenge":"` + tc.challenge + `","x509CertificateRequest":{"subject":{"commonName":"` + tc.identity + `"}}}`
+		req := httptest.NewRequest(http.MethodPost, "/scep-challenge", strings.NewReader(body))
+		req.Header.Set("X-Smallstep-Signature", sigOf("secret", body))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var result ResponseShape
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Allow != tc.want {
+			t.Fatalf("identity=%s challenge=%s: allow=%v", tc.identity, tc.challenge, result.Allow)
+		}
+	}
+	// An anonymous ACME attestation cannot be replaced with an unverified CSR CN.
+	body := `{"attestationData":{},"x509CertificateRequest":{"subject":{"commonName":"` + id + `"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(body))
+	req.Header.Set("X-Smallstep-Signature", sigOf("secret", body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	var result ResponseShape
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Allow {
+		t.Fatal("ACME without an attested identifier must deny")
 	}
 }

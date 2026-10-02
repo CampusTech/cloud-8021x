@@ -97,7 +97,7 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
 }
 
 // scepChallengeHandler serves step-ca's SCEP SCEPCHALLENGE webhook. It enforces
-// BOTH the static shared challenge value AND that the serial in the CSR Subject
+// BOTH the static shared challenge value AND that the identity in the CSR Subject
 // CommonName is a Fleet-enrolled host. Fail-closed at every step.
 func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -136,15 +136,15 @@ func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		deny(w)
 		return
 	}
-	serial := strings.TrimSpace(req.X509CertificateRequest.Subject.CommonName)
-	serial = strings.TrimSuffix(serial, " Campus WiFi")
-	serial = strings.TrimSpace(serial)
-	if serial == "" {
-		logrus.Warn("deny: empty serial in CSR common name")
+	identity := strings.TrimSpace(req.X509CertificateRequest.Subject.CommonName)
+	identity = strings.TrimSuffix(identity, " Campus WiFi")
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		logrus.Warn("deny: empty identity in CSR common name")
 		deny(w)
 		return
 	}
-	if h.decider.Allow(serial) {
+	if h.decider.Allow(identity) {
 		allow(w)
 		return
 	}
