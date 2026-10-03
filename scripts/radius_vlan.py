@@ -27,7 +27,13 @@ def authorize(request):
             identity = names[0]
         with open(config['cache_file']) as stream:
             inventory = json.load(stream)
-        vlan = select_vlan(identity, inventory, config, time.time())
+        location = None
+        if config.get('locations'):
+            locations = [value for key, value in request.get('request', ()) if key == 'Tmp-String-1']
+            if len(locations) != 1:
+                raise ValueError('missing or ambiguous trusted RADIUS location')
+            location = locations[0]
+        vlan = select_vlan(identity, inventory, config, time.time(), location)
         # Numeric enum values match UniFi's required RADIUS attributes. The VLAN
         # ID itself is a string, per RFC 3580 section 3.31. No tunnel tag is used.
         return radiusd.RLM_MODULE_UPDATED, {'reply': (

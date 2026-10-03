@@ -18,14 +18,24 @@ def certificate_readiness(hosts, devices, observations, config, now):
         row['certificate_reason'] = row['reason']
         if row['reason'] != 'ready':
             continue
-        try:
-            vlans = {select_vlan(fp, inventory, {**config, 'certificate_inventory': True}, now)
-                     for fp in observations[row['uuid']]['fingerprints']}
-            if len(vlans) != 1:
-                raise ValueError('ambiguous VLAN')
-            row['vlan'] = next(iter(vlans))
-        except (ValueError, KeyError, TypeError):
-            row['reason'] = 'no_vlan_assignment'
+        locations = config.get('locations') or {}
+        if locations:
+            row['locations'] = {}
+        for location in locations or [None]:
+            result = {'reason': 'ready'}
+            try:
+                vlans = {select_vlan(fp, inventory, {**config, 'certificate_inventory': True}, now, location)
+                         for fp in observations[row['uuid']]['fingerprints']}
+                if len(vlans) != 1:
+                    raise ValueError('ambiguous VLAN')
+                result['vlan'] = next(iter(vlans))
+            except (ValueError, KeyError, TypeError):
+                result['reason'] = 'no_vlan_assignment'
+                row['reason'] = 'no_vlan_assignment'
+            if locations:
+                row['locations'][location] = result
+            else:
+                row.update(result)
     report['ready_count'] = sum(row['reason'] == 'ready' for row in report['hosts'])
     report['ready'] = bool(report['hosts']) and report['ready_count'] == report['total']
     return report

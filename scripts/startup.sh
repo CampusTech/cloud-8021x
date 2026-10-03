@@ -2940,6 +2940,12 @@ VLANMODULEEOF
     cat > "$RADDB/sites-available/check-device-vlan" << 'VLANSITEEOF'
 server check-device-vlan {
     authorize {
+        # Authenticated RADIUS client's configured shortname, never a packet's
+        # NAS-Identifier/NAS-IP-Address or the device's EAP identity.
+        update request {
+            Tmp-String-1 !* ANY
+            Tmp-String-1 := &outer.control:Tmp-String-1
+        }
 %{ if certificate_inventory_enabled ~}
         # This internal attribute is overwritten from server-owned state. It is
         # never taken from a NAS packet or any client-chosen certificate field.
@@ -3005,6 +3011,9 @@ server default {
 
     authorize {
         filter_username
+        update control {
+            Tmp-String-1 := "%%{client:shortname}"
+        }
 %{ if certificate_inventory_enabled ~}
         if (!&session-state:Tmp-String-0) {
             update session-state {

@@ -29,6 +29,11 @@ def configure():
     start = source.index('echo "=== Configuring JSON auth logging')
     parts.append(source[start:source.index('# 12. Configure status', start)])
     subprocess.run(['bash'], input='\n'.join(parts), text=True, check=True)
+    # Distinct authenticated clients simulate offices behind distinct NAT IPs.
+    with (RADDB / 'clients.conf').open('a') as stream:
+        for suffix, office in [(2, 'nyc'), (3, 'atl'), (4, 'unknown-office')]:
+            stream.write(f'\nclient office{suffix} {{\n ipaddr = 127.0.0.{suffix}\n'
+                         f' secret = testing123\n shortname = {office}\n}}\n')
     # Accounting's SQL database is unrelated to EAP auth; this fixture has no DB.
     site = RADDB / 'sites-available/default'
     site.write_text(site.read_text().replace('        sql\n', '        noop\n'))
@@ -100,7 +105,8 @@ def vlan_attributes(packet):
     return attrs
 
 
-def authenticate(name, certificate='personal-enrollment-id', expected=(200,), after_accept=None):
+def authenticate(name, certificate='personal-enrollment-id', expected=(200,), after_accept=None,
+                 source_ip='127.0.0.1', nas_identifier=None):
     """UDP relay records actual server replies and updates inventory BEFORE reauth."""
     config = f'''network={{
     ssid="test"
@@ -118,7 +124,7 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
     stop = threading.Event()
     replies, errors = [], []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as relay:
-        relay.bind(('127.0.0.1', 18120))
+        relay.bind((source_ip, 18120))
         relay.settimeout(0.1)
 
         def forward():
@@ -145,7 +151,8 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
         worker.start()
         try:
             result = subprocess.run(['eapol_test', '-c', '/tmp/eap.conf', '-p', '18120',
-                                     '-a', '127.0.0.1', '-s', 'testing123',
+                                     '-a', source_ip, '-s', 'testing123',
+                                     *(['-N32:s:' + nas_identifier] if nas_identifier else []),
                                      '-r', str(len(expected)-1), '-t', '15'], capture_output=True, text=True, timeout=25)
         finally:
             stop.set()
@@ -208,6 +215,16 @@ def main():
                 assert not list(Path('/run/radius-certificate-bindings').iterdir()), 'Handshake files leaked'
             CACHE.write_text('{')
             authenticate('corrupt-cache', expected=(None,))
+            inventory()
+            policy_file = RADDB / 'vlan-policy.json'
+            policy = json.loads(policy_file.read_text())
+            policy['locations'] = {'nyc': {'group_vlans': {'byod': 210}},
+                                   'atl': {'group_vlans': {'byod': 220}}}
+            policy_file.write_text(json.dumps(policy))
+            authenticate('nyc-location', source_ip='127.0.0.2', expected=(210,))
+            authenticate('atl-location-spoofed-nas', source_ip='127.0.0.3', nas_identifier='nyc', expected=(220,))
+            authenticate('atl-location-reauth', source_ip='127.0.0.3', expected=(220, 220))
+            authenticate('unknown-location', source_ip='127.0.0.4', nas_identifier='nyc', expected=(None,))
         finally:
             server.terminate()
             server.wait(timeout=10)

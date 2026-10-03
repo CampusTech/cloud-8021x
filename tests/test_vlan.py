@@ -58,6 +58,38 @@ class VLANTests(unittest.TestCase):
     def test_existing_windows_certificate(self):
         self.assert_vlan(100, self.request('STAFFSERIAL Campus WiFi'))
 
+    def test_same_fleet_uses_authenticated_office_mapping(self):
+        self.policy['locations'] = {
+            'nyc': {'group_vlans': {'byod': 200}},
+            'atl': {'group_vlans': {'byod': 220}},
+        }
+        self.config.write_text(json.dumps(self.policy))
+        for location, vlan in [('nyc', 200), ('atl', 220)]:
+            request = self.request(resumed=True)
+            request['request'] += (('Tmp-String-1', location), ('NAS-Identifier', 'nyc'))
+            self.assert_vlan(vlan, request)
+
+    def test_location_mode_rejects_unknown_missing_or_duplicate_context(self):
+        self.policy['locations'] = {'nyc': {'group_vlans': {'byod': 210}}}
+        self.policy['fallback_vlan'] = 999
+        self.config.write_text(json.dumps(self.policy))
+        for attrs in ((), (('Tmp-String-1', 'unknown'),),
+                      (('NAS-Identifier', 'nyc'),),
+                      (('Tmp-String-1', 'nyc'), ('Tmp-String-1', 'nyc'))):
+            request = self.request()
+            request['request'] += attrs
+            self.assertEqual(self.module.authorize(request), 0)
+
+    def test_location_rules_do_not_inherit_global_vlans(self):
+        self.policy['locations'] = {'nyc': {'group_vlans': {}, 'fallback_vlan': 230}}
+        self.config.write_text(json.dumps(self.policy))
+        request = self.request()
+        request['request'] += (('Tmp-String-1', 'nyc'),)
+        self.assert_vlan(230, request)
+        self.policy['locations']['nyc'].pop('fallback_vlan')
+        self.config.write_text(json.dumps(self.policy))
+        self.assertEqual(self.module.authorize(request), 0)
+
     def test_untrusted_username_cannot_replace_missing_certificate(self):
         self.assertEqual(self.module.authorize(self.request(None)), 0)
 

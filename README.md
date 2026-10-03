@@ -301,6 +301,8 @@ Map inventory groups to VLAN IDs with `radius_vlan_policy`. Fleet fleets/teams,
 Jamf computer sites, and custom MDM inventory snapshots share the same RADIUS
 policy. Serial-free BYOD iOS/iPadOS uses one Fleet-managed SCEP profile and
 authorizes exact certificate fingerprints from authenticated MDM inventory.
+Optional location mappings let the same fleet use different VLAN IDs in each
+office, selected by its authenticated RADIUS client configuration.
 UniFi receives `Tunnel-Type = 13`, `Tunnel-Medium-Type = 6`, and the VLAN ID in
 `Tunnel-Private-Group-Id`.
 

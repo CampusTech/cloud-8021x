@@ -29,6 +29,51 @@ The existing Jamf computer inventory adapter maps sites as `jamf:site:<id>`;
 it does not fetch Jamf mobile-device inventory or smart-group membership.
 Enable one existing inventory integration or supply a custom snapshot as below.
 
+### Different VLAN IDs at each location
+
+Use `locations` when the same fleet needs different VLAN IDs in different
+offices. Location names must exactly match the office keys in `radius_clients`.
+For example, the Secure fleet (`fleet:1`) can use VLAN 100 in NYC and VLAN 110
+in ATL:
+
+```hcl
+radius_clients = {
+  nyc = { cidrs = ["198.51.100.10/32"] }
+  atl = { cidrs = ["203.0.113.20/32"] }
+}
+
+radius_vlan_policy = {
+  certificate_inventory = true
+  locations = {
+    nyc = {
+      group_vlans = { "fleet:1" = 100, "fleet:2" = 200 }
+    }
+    atl = {
+      group_vlans = { "fleet:1" = 110, "fleet:2" = 220 }
+    }
+  }
+}
+```
+
+The addresses above are documentation examples; use each site's actual RADIUS
+egress IP/CIDR. Each office already has its own shared secret. FreeRADIUS uses
+the matched, authenticated client's configured `shortname` as the location.
+`NAS-Identifier`, `NAS-IP-Address`, SSID, and device-supplied names cannot override
+it. Offices behind the same RADIUS proxy/egress need distinct trusted client
+paths before they can use separate location policies.
+
+Each location supplies a complete mapping and may specify its own
+`fallback_vlan` for known enrolled devices without a mapped group. When
+`locations` is nonempty, top-level `group_vlans`/`fallback_vlan` are not inherited;
+unknown locations and missing mappings are rejected. With `locations` omitted
+or empty, the original global mapping continues to work.
+
+No certificate or profile changes are needed when a device moves between offices.
+The current office's mapping is evaluated on authentication, including legacy
+TLS resumption. The certificate readiness report includes each host's VLAN and
+readiness per configured location; overall readiness requires all locations to
+have a valid assignment.
+
 VLAN IDs must be integers from 1 to 4094. The built-in cache requires a lifetime
 of at least 600 seconds; custom cache paths allow 60 seconds or more. A null policy (the default) disables
 VLAN authorization and preserves the existing EAP-TLS behavior. An enabled

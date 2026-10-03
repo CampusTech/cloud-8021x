@@ -356,16 +356,36 @@ variable "enable_fleet_certificate_inventory" {
 # Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
 # not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
 variable "radius_vlan_policy" {
-  description = "Dynamic VLAN authorization. Null disables it. Enabled policies reject unknown/unenrolled devices, expired inventory, and conflicting groups. fallback_vlan applies only to known enrolled devices with no mapped group."
+  description = "Dynamic VLAN authorization. Null disables it. locations keys match radius_clients office names; each location has its own complete group/fallback mapping. Empty locations uses the global mapping. Unknown locations fail closed."
   type = object({
-    group_vlans           = map(number)
+    group_vlans           = optional(map(number), {})
     fallback_vlan         = optional(number)
     cache_max_age         = optional(number, 3600)
     cache_file            = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
     certificate_inventory = optional(bool, false)
     certificate_max_age   = optional(number, 86400)
+    locations = optional(map(object({
+      group_vlans   = map(number)
+      fallback_vlan = optional(number)
+    })), {})
   })
   default = null
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for location, policy in var.radius_vlan_policy.locations :
+      length(location) > 0 && location == trimspace(location) && alltrue([
+        for vlan in concat(values(policy.group_vlans), policy.fallback_vlan == null ? [] : [policy.fallback_vlan]) :
+        vlan != null && try(vlan >= 1 && vlan <= 4094 && floor(vlan) == vlan, false)
+      ])
+    ])
+    error_message = "Location names must be nonempty with no surrounding whitespace, and location VLAN IDs must be integers from 1 through 4094."
+  }
+
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : length(setsubtract(toset(keys(var.radius_vlan_policy.locations)), toset(keys(var.radius_clients)))) == 0
+    error_message = "Every VLAN location must match an office key in radius_clients."
+  }
 
   validation {
     condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.certificate_max_age >= 600 && floor(var.radius_vlan_policy.certificate_max_age) == var.radius_vlan_policy.certificate_max_age

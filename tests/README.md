@@ -45,6 +45,8 @@ It rejects another CA-signed certificate copying a known staff CN, unknown,
 ambiguous and stale certificate observations, and a missing fingerprint hook.
 It verifies full handshakes on reauthentication (resumption is disabled in this
 mode), current group/enrollment changes, and removal of private handoff files.
+Both modes also exercise the same device from NYC and ATL clients with different
+VLAN IDs, reauthentication, a spoofed NAS-Identifier, and an unknown location.
 Accounting's SQL invocation is replaced by `noop` in the fixture; VLAN policy,
 EAP certificate authorization, post-auth and reject configuration come from the rendered startup script.
 This test does not simulate SCEP issuance or physical UniFi VLAN/trunk/DHCP setup.

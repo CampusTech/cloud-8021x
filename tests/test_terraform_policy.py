@@ -13,7 +13,7 @@ class TerraformPolicyTests(unittest.TestCase):
         declaration = 'variable "radius_vlan_policy"' + source.split('variable "radius_vlan_policy"', 1)[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'main.tf').write_text(declaration + '\noutput "policy" { value = var.radius_vlan_policy }\n')
+            (root / 'main.tf').write_text('variable "radius_clients" { default = { nyc = {}, atl = {} } }\n' + declaration + '\noutput "policy" { value = var.radius_vlan_policy }\n')
             for value, valid in [
                 (None, True),
                 ({'group_vlans': {'staff': 100}}, True),
@@ -30,6 +30,12 @@ class TerraformPolicyTests(unittest.TestCase):
                 ({'group_vlans': {}, 'certificate_inventory': True, 'certificate_max_age': 86400}, True),
                 ({'group_vlans': {}, 'certificate_inventory': True, 'certificate_max_age': 0}, False),
                 ({'group_vlans': {}, 'certificate_max_age': 30.5}, False),
+                ({'locations': {'nyc': {'group_vlans': {'staff': 100}}, 'atl': {'group_vlans': {'staff': 120}}}}, True),
+                ({'locations': {'nyc': {'group_vlans': {'staff': 4095}}}}, False),
+                ({'locations': {'nyc': {'group_vlans': {}, 'fallback_vlan': 0}}}, False),
+                ({'locations': {'': {'group_vlans': {'staff': 100}}}}, False),
+                ({'locations': {' nyc ': {'group_vlans': {'staff': 100}}}}, False),
+                ({'locations': {'typo-office': {'group_vlans': {'staff': 100}}}}, False),
             ]:
                 with self.subTest(value=value):
                     (root / 'terraform.tfvars.json').write_text(json.dumps({'radius_vlan_policy': value}))

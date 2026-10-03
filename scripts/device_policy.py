@@ -108,7 +108,7 @@ def valid_vlan(value):
     return type(value) is int and 1 <= value <= 4094
 
 
-def select_vlan(identity, inventory, config, now):
+def select_vlan(identity, inventory, config, now, location=None):
     """Select from verified SHA256 in certificate mode, otherwise a legacy cert CN."""
     certificate_mode = config.get('certificate_inventory', False)
     if type(certificate_mode) is not bool:
@@ -134,13 +134,24 @@ def select_vlan(identity, inventory, config, now):
     groups = device['groups']
     if not isinstance(groups, list) or any(not isinstance(g, str) for g in groups):
         raise ValueError('invalid device groups')
-    rules = config['group_vlans']
+    locations = config.get('locations', {})
+    if not isinstance(locations, dict):
+        raise ValueError('invalid location rules')
+    if locations:
+        if not isinstance(location, str) or not location or location not in locations:
+            raise ValueError('unknown or missing RADIUS location')
+        policy = locations[location]
+        if not isinstance(policy, dict):
+            raise ValueError('invalid location policy')
+    else:
+        policy = config
+    rules = policy['group_vlans']
     if not isinstance(rules, dict) or any(not valid_vlan(v) for v in rules.values()):
         raise ValueError('invalid VLAN rules')
     vlans = {rules[g] for g in groups if g in rules}
     if len(vlans) > 1:
         raise ValueError('conflicting VLAN rules')
-    vlan = next(iter(vlans)) if vlans else config.get('fallback_vlan')
+    vlan = next(iter(vlans)) if vlans else policy.get('fallback_vlan')
     if not valid_vlan(vlan):
         raise ValueError('device has no VLAN assignment')
     return vlan

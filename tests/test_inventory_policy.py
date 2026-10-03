@@ -28,6 +28,16 @@ class InventoryTests(unittest.TestCase):
         report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
         self.assertTrue(report['ready'])
         self.assertEqual(report['hosts'][0]['vlan'], 200)
+        config['locations'] = {'nyc': {'group_vlans': {'fleet:4': 210}},
+                               'atl': {'group_vlans': {'fleet:4': 220}}}
+        report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
+        self.assertTrue(report['ready'])
+        self.assertEqual(report['hosts'][0]['locations'], {
+            'nyc': {'reason': 'ready', 'vlan': 210}, 'atl': {'reason': 'ready', 'vlan': 220}})
+        config['locations']['atl']['group_vlans'] = {}
+        report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
+        self.assertFalse(report['ready'])
+        self.assertEqual(report['hosts'][0]['locations']['atl']['reason'], 'no_vlan_assignment')
 
     def test_fleet_byod_without_serial(self):
         device = inventory_policy.fleet_device({'id': 7, 'hardware_serial': '',
