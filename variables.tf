@@ -344,7 +344,7 @@ variable "webhook_port" {
 }
 
 variable "enable_fleet_certificate_inventory" {
-  description = "Collect Apple managed certificate fingerprints through Fleet MDM commands. Requires a Fleet API account allowed to run CertificateList. Can be enabled before enforcing fingerprint authorization."
+  description = "Collect Apple managed identities through Fleet MDM and Windows machine identities through Fleet scripts. Requires permission to run CertificateList and scripts, with fleetd scripts enabled on Windows. Can be staged before fingerprint enforcement."
   type        = bool
   default     = false
   validation {

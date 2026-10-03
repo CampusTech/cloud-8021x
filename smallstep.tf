@@ -722,7 +722,7 @@ resource "google_compute_url_map" "smallstep_rsa" {
       name            = "scep-broker"
       default_service = google_compute_backend_service.smallstep_rsa[0].id
       path_rule {
-        paths   = ["/fleet/scep-challenge"]
+        paths   = ["/fleet/scep-challenge", "/fleet/ndes-challenge"]
         service = google_compute_backend_service.scep_broker[0].id
       }
     }

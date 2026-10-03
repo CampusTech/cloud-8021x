@@ -142,15 +142,17 @@ and [deployment guide](scep-identity-binding.md). Fleet's native Smallstep
 integration obtains a fresh dynamic challenge for delivery and renewal. No Fleet
 patch or individually generated profiles are required.
 
-Enable `enable_fleet_certificate_inventory` to collect managed Apple identity
-certificates, and `radius_vlan_policy.certificate_inventory` to authorize only
-exact fingerprints. The collector maps authenticated MDM results to the enrolled
+Enable `enable_fleet_certificate_inventory` to collect managed Apple identities
+and Windows machine certificates, and `radius_vlan_policy.certificate_inventory` to authorize only
+exact fingerprints. The collector maps authenticated MDM or Fleet script results to the enrolled
 host; the current fleet selects its VLAN. CSR CNs and renewal OUs cannot authorize
 a device. Unknown, ambiguous, and stale fingerprints fail closed.
 
 This mode applies to all clients on these RADIUS servers. The built-in collector
-supports macOS, iOS, and iPadOS only; assess existing Windows or other MDM clients
-before enabling enforcement. The coverage report on each VM distinguishes trusted
+supports macOS, iOS, iPadOS, and Windows machine certificates. Windows also
+requires fleetd with scripts enabled and a Device-scoped certificate plus
+machine-auth Wi-Fi profile; user-store certificates are excluded. Other MDMs
+need their own trusted adapter before enabling enforcement. The coverage report on each VM distinguishes trusted
 certificate observations from valid VLAN mappings. Initial enrollment and renewal
 require connectivity until MDM reports the new certificate. See the guide for
 staging, freshness limits, and Friday-to-Tuesday rollout checks.

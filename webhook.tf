@@ -65,7 +65,12 @@ output "fleet_scep_challenge_url" {
   value       = local.scep_inventory_enabled ? "https://${var.smallstep_ca_rsa_dns_name}/fleet/scep-challenge" : ""
 }
 
-# Only the authenticated challenge route is public. CA authorization remains on
+output "fleet_ndes_admin_url" {
+  description = "Fleet Windows NDES admin_url. Authenticate as fleet using the scep-broker-token secret."
+  value       = local.scep_inventory_enabled ? "https://${var.smallstep_ca_rsa_dns_name}/fleet/ndes-challenge" : ""
+}
+
+# Only the authenticated challenge routes are public. CA authorization remains on
 # a separate loopback listener requiring mutual TLS. GFE-to-broker traffic also
 # uses TLS; the firewall prevents clients bypassing the HTTPS load balancer.
 resource "google_compute_firewall" "scep_broker" {

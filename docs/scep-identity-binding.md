@@ -1,32 +1,46 @@
 # Fleet-managed SCEP with certificate inventory authorization
 
-For Apple BYOD devices, use one reusable Fleet profile and its native Smallstep
-integration. cloud-8021x does not need a Fleet patch or a manually minted profile
-for each device. Each device still generates its own private key and receives
+Use reusable Fleet profiles: native Smallstep integration for Apple BYOD and
+the NDES-compatible integration for Windows machine certificates. cloud-8021x
+does not need a Fleet patch or a manually minted profile for each device. Each device still generates its own private key and receives
 its own certificate. Fleet delivers fresh challenges and manages renewal.
 
 ## Authorization boundary
 
 In certificate inventory mode, RADIUS authorizes the exact SHA-256 fingerprint
-of the presented leaf certificate. Fleet's authenticated MDM `CertificateList`
-response binds that certificate to an enrolled host; the host's current fleet
-selects the VLAN. The CSR Common Name, renewal OU, outer EAP username, and MAC
+of the presented leaf certificate. Authenticated Fleet MDM results (Apple) or
+Fleet script results (Windows) bind it to an enrolled host; the host's current
+fleet selects the VLAN. The CSR Common Name, renewal OU, outer EAP username, and MAC
 address cannot select a device or VLAN. There is no Common Name fallback.
 
-The collector requests managed identity certificates (`ManagedOnly=true`,
-`IsIdentity=true`), verifies their client-auth chain and dates against the RADIUS
-client trust bundle, and hashes their DER bytes. It checks the command, response
-host, enrollment generation, and original result time before publishing them.
-The certificate inventory API's subject/issuer/serial fields are insufficient;
-the collector uses raw MDM command results instead.
+On Apple, the collector requests managed identity certificates
+(`ManagedOnly=true`, `IsIdentity=true`). On Windows, a read-only Fleet script runs
+as SYSTEM and reads `LocalMachine\My` certificates with `HasPrivateKey=true`.
+It exports only public DER, never private keys. The collector verifies the
+client-auth chain and dates against the RADIUS client trust bundle, then hashes
+DER. It checks the command, response host, enrollment generation, and original
+result time before publishing them.
+The certificate inventory API's subject/issuer/serial fields are insufficient.
+Windows script results must match the requested script, execution, host, and
+Fleet host enrollment timestamp (`last_enrolled_at`); current MDM enrollment is
+required separately. This timestamp tracks osquery enrollment; an Orbit-only
+script-agent credential reset does not change it. Apple uses its MDM enrollment generation. Freshness uses
+script request creation time conservatively;
+rereading a result never extends its lifetime. This trusts the enrolled Fleet agent
+running as SYSTEM, not hardware attestation. User-store and public-only
+certificates are excluded. Windows inventories over 9,000 output characters fail
+closed before Fleet can truncate the response; inspect the script result when
+coverage is missing on a host with many machine certificates.
 
 Unknown, ambiguous, unenrolled, or stale certificates fail closed. RADIUS still
 verifies the certificate chain and proof of private-key possession. A device
 claiming another device's UUID in its CSR cannot inherit that device's VLAN.
-This relies on authenticated MDM enrollment, not hardware attestation.
+This relies on authenticated MDM/Fleet agent enrollment, not hardware attestation.
 
 The dynamic challenge broker accepts Fleet's HTTP Basic credentials over HTTPS
-and returns a random, signed, 15-minute challenge scoped to the SCEP provisioner.
+and returns a random, signed challenge scoped to the SCEP provisioner. Apple
+Smallstep challenges last 15 minutes. Windows NDES challenges use a separate
+token version valid for 60 minutes, covering Fleet's 57-minute NDES cache.
 Challenges allow retries until expiration; they are **not single-use**. They
 permit issuance but do not assert a device identity or authorize network access.
 The SCEP template issues clientAuth certificates without requested SANs and
@@ -35,7 +49,8 @@ Legacy CN authorization explicitly rejects that reserved identity. Keep
 this CA dedicated to this Wi-Fi use: other services must not authorize these
 certificates using their untrusted subjects.
 
-The public broker exposes only `/fleet/scep-challenge`. step-ca's authorization
+The public challenge routes are `/fleet/scep-challenge` (Apple) and
+`/fleet/ndes-challenge` (Windows). step-ca's authorization
 endpoint remains on loopback with mutual TLS. The load balancer also uses HTTPS
 to the broker, and the VM firewall allows that port only from Google's load
 balancer ranges. The broker credential (`scep-broker-token`) is separate from the
@@ -57,7 +72,8 @@ fleet_api_base_url                 = "https://fleet.example.com"
 ```
 
 The `fleet-api-token` service account needs permission to read hosts and command
-results and run `CertificateList`. Fleet's observer role cannot issue commands;
+results, run `CertificateList`, and run/read Windows scripts. Windows needs
+fleetd with scripts enabled. Fleet's observer role cannot issue commands;
 a maintainer scoped to the managed fleets (or a global maintainer) supports both
 operations. Store the token directly in Secret Manager, not Terraform variables.
 
@@ -81,15 +97,19 @@ radius_vlan_policy = {
 
 Fingerprint mode applies to **every client using these RADIUS servers**, including
 existing ACME certificates. The built-in collector supports Apple macOS, iOS,
-and iPadOS; it does not yet collect Windows or Jamf certificates. Do not enable
-it on a mixed deployment until every required client has a supported binding or
-a separate authentication path. Do not solve missing bindings with a CN fallback.
+and iPadOS, plus Windows machine certificates through Fleet scripts. It does not
+collect Windows user-store or Jamf certificates. Do not enable it until every
+required client has a supported binding or separate authentication path. Do not
+solve missing bindings with a CN fallback.
 
 TLS session resumption is disabled in this mode so every authentication obtains
 the actual certificate fingerprint. Fleet membership refreshes every five
-minutes; certificate queries run hourly and results are polled during each
-refresh. Certificate freshness uses the MDM response time, never the time an old
-response is reread. Offline hosts have a bounded number of pending commands.
+minutes; certificate commands/scripts run hourly and results are polled during
+each refresh. Apple freshness uses the MDM response time; Windows uses the script
+request creation time, never the time an old response is reread. Offline hosts have a bounded number of pending commands or scripts. A Windows
+POST timeout can leave a reservation without an execution ID; it remains counted
+to avoid unbounded retries. Investigate unresolved reservations before resetting
+collector state.
 Both VMs keep their own private collection state and must have coverage.
 
 The broker is enabled only with fingerprint enforcement and the built-in Fleet
@@ -125,13 +145,36 @@ challenge for each delivery. The requested host UUID is not an authorization inp
 reserved CN at issuance; the renewal ID in the OU lets Fleet track renewal. Private keys are nonextractable,
 and Wi-Fi server trust is restricted to the configured name and root.
 
+## Windows enrollment and migration
+
+Configure Fleet's Microsoft NDES integration with the same RSA SCEP URL and
+Basic credentials above, using Terraform output `fleet_ndes_admin_url` as its
+Admin URL. No NDES server or Fleet patch is required: cloud-8021x serves the
+compatible challenge response. Fleet's single NDES integration is also used by
+Okta, so check existing profiles before replacing it.
+
+Deliver [the Windows SCEP profile](../examples/fleet/wifi-scep.xml),
+[the machine Wi-Fi profile](../examples/fleet/wifi-8021x.xml), and the
+[server root trust profile](../examples/scep/root-ca.xml). See the
+[template instructions](../examples/fleet/README.md#windows) for substitutions.
+Fleet keeps the renewal ID in the subject OU and supplies a fresh challenge.
+
+The Windows collector requires **machine certificates** and scripts running as
+SYSTEM. Migrate any existing User-scoped SCEP and user-auth Wi-Fi profiles to
+Device scope and machine authentication together. Collect existing machine
+certificates before enforcement where possible. A real Windows pilot must check
+certificate installation, Fleet script completion, both VMs' coverage, initial
+EAP-TLS, correct NYC VLAN and DHCP, pre-login authentication, and renewal. Local
+protocol tests do not substitute for that Windows pilot.
+
 ## Friday-to-Tuesday rollout checks
 
 1. Enable collection and check coverage on both RADIUS VMs. Existing managed
    certificates can be used if they already chain to the configured client trust
    bundle; a mass reissue is not inherently required for fingerprint binding.
 2. Enable fingerprint enforcement, register the broker in Fleet, and pilot the
-   reusable profile on a real User Enrollment iPhone and a managed Mac. Verify
+   reusable profiles on a real User Enrollment iPhone, managed Mac, and Windows
+   machine (including machine-certificate migration). Verify
    installation, initial EAP-TLS, VLAN, DHCP, and profile replacement/renewal.
 3. Deliver the profile through Fleet. Devices need internet through home Wi-Fi,
    cellular, or an onboarding network until their new certificate is observed.
@@ -179,9 +222,9 @@ are not required for this Fleet-managed workflow. With fingerprint enforcement
 disabled, the webhook continues to reject neutral challenges and requires the
 older identity-bound token plus current enrollment.
 
-[Fleet PR #54717](https://github.com/fleetdm/fleet/pull/54717) adds trusted device
-context to dynamic challenge requests. It can simplify a future issuance-bound
-integration, but it is not required for this implementation.
+[Fleet PR #54717](https://github.com/fleetdm/fleet/pull/54717) proposed device
+context in dynamic challenge requests. It was closed because authenticated
+certificate inventory removes that dependency.
 
 References: [Fleet built-in variables](https://fleetdm.com/guides/fleet-variables),
 [Fleet certificate inventory](https://fleetdm.com/guides/view-certificates-in-host-vitals),

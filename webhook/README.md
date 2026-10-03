@@ -110,20 +110,24 @@ See [SCEP identity binding and migration](../docs/scep-identity-binding.md).
 
 ## Native Fleet dynamic SCEP with certificate inventory
 
-For one reusable Apple profile and Fleet-managed renewal, use the optional
+For reusable Apple and Windows profiles with Fleet-managed renewal, use the optional
 broker instead of the per-device CLI. Set `SCEP_CERTIFICATE_INVENTORY=true` and
 configure `SCEP_BROKER_USERNAME`, `SCEP_BROKER_TOKEN` (32+ bytes),
 `SCEP_BROKER_SCEP_URL`, and `SCEP_BROKER_PROVISIONER`. The public HTTPS broker
 listens on `SCEP_BROKER_PORT` (9081) using the configured webhook TLS certificate.
 `POST /fleet/scep-challenge` implements Fleet's native HTTP Basic authentication
 and raw-string response protocol. The SCEP URL must match exactly, including
-trailing slash behavior. CA authorization remains a separate loopback mTLS
-listener.
+trailing slash behavior. `GET /fleet/ndes-challenge` implements the Windows
+NDES integration with the same Basic credentials and Fleet-compatible HTML.
+No Microsoft NDES server is required. CA authorization remains a separate
+loopback mTLS listener.
 
 Neutral v2 challenges are provisioner-scoped, random, and expire after 15 minutes;
-they permit retries, not device identity claims. Never enable this mode with CN
+Windows v3 challenges last 60 minutes to cover Fleet's 57-minute NDES cache and
+use standard base64 for Windows PrintableString compatibility. Both permit
+retries without asserting a device identity. Never enable this mode with CN
 network authorization: enforce exact certificate fingerprints from authenticated
-MDM inventory. Terraform wires and validates these prerequisites. Existing v1
+MDM or Fleet agent inventory. Terraform wires and validates these prerequisites. Existing v1
 identity-bound tokens continue to work in their separate legacy mode.
 
 See [deployment, shared profile, and rollout checks](../docs/scep-identity-binding.md).

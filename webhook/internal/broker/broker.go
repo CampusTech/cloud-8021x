@@ -1,4 +1,4 @@
-// Package broker implements Fleet's native Smallstep dynamic challenge protocol.
+// Package broker implements Fleet's native Smallstep and NDES challenge protocols.
 // This public HTTPS listener is separate from step-ca's loopback mTLS webhook.
 package broker
 
@@ -19,7 +19,7 @@ import (
 
 type Options struct {
 	Username    string
-	Token       string // Fleet Smallstep password, not a bearer header
+	Token       string // Fleet Smallstep/NDES password, not a bearer header
 	SigningKey  string
 	SCEPURL     string
 	Provisioner string
@@ -59,16 +59,38 @@ func New(o Options) (http.Handler, error) {
 	}
 	expectedUser := sha256.Sum256([]byte(o.Username))
 	expectedToken := sha256.Sum256([]byte(o.Token))
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("POST /fleet/scep-challenge", func(w http.ResponseWriter, r *http.Request) {
+	authenticate := func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Cache-Control", "no-store")
 		username, password, ok := r.BasicAuth()
 		actualUser := sha256.Sum256([]byte(username))
 		actualToken := sha256.Sum256([]byte(password))
 		matches := subtle.ConstantTimeCompare(actualUser[:], expectedUser[:]) & subtle.ConstantTimeCompare(actualToken[:], expectedToken[:])
 		if !ok || matches != 1 {
+			// Fleet's NTLM negotiator retries Basic only when advertised here.
+			w.Header().Set("WWW-Authenticate", `Basic realm="fleet-scep"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /fleet/ndes-challenge", func(w http.ResponseWriter, r *http.Request) {
+		if !authenticate(w, r) {
+			return
+		}
+		token, err := challenge.IssueNDESInventory([]byte(o.SigningKey), o.Provisioner, time.Now())
+		if err != nil {
+			http.Error(w, "challenge unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Fleet captures non-whitespace after this exact phrase. The space
+		// before </B> keeps markup out of the challenge. Tokens use base64.
+		_, _ = io.WriteString(w, "<!doctype html><html><body>The enrollment challenge password is: <B> "+token+" </B></body></html>")
+	})
+	mux.HandleFunc("POST /fleet/scep-challenge", func(w http.ResponseWriter, r *http.Request) {
+		if !authenticate(w, r) {
 			return
 		}
 		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

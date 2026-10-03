@@ -264,6 +264,15 @@ func testActualStepCASCEP(t *testing.T, binary, fixturePath string, certificateI
 		t.Fatalf("native Fleet broker failed: %d", brokerResponse.Code)
 	}
 	inventoryToken := brokerResponse.Body.String()
+	ndesRequest := httptest.NewRequest("GET", "/fleet/ndes-challenge", nil)
+	ndesRequest.SetBasicAuth("fleet", signingKey)
+	ndesResponse := httptest.NewRecorder()
+	brokerHandler.ServeHTTP(ndesResponse, ndesRequest)
+	ndesParts := strings.Split(ndesResponse.Body.String(), "<B> ")
+	if ndesResponse.Code != 200 || len(ndesParts) != 2 {
+		t.Fatalf("Fleet NDES broker failed: %d", ndesResponse.Code)
+	}
+	ndesToken := strings.Fields(ndesParts[1])[0]
 	clientKey := key(t)
 	self := certificate(t, byod, clientKey, nil, nil, false)
 	var issued *x509.Certificate
@@ -282,11 +291,14 @@ func testActualStepCASCEP(t *testing.T, binary, fixturePath string, certificateI
 		{"renewal staff impersonation", staff, token, scep.RenewalReq, true, false, false},
 		{"unenrolled device", byod, token, scep.PKCSReq, false, false, false},
 		{"inventory challenge rejected when mode disabled", staff, inventoryToken, scep.PKCSReq, false, false, false},
+		{"NDES challenge rejected when mode disabled", staff, ndesToken, scep.PKCSReq, false, false, false},
 		{"inventory neutral issuance ignores claimed staff CN and enrollment", staff, inventoryToken, scep.PKCSReq, false, true, true},
 		{"inventory challenge retry with different claimed CN", "attacker-selected", inventoryToken, scep.PKCSReq, false, true, true},
 		{"inventory renewal preserves neutral subject", staff, inventoryToken, scep.RenewalReq, true, true, true},
 		{"inventory renewal without challenge", staff, "", scep.RenewalReq, true, false, true},
 		{"inventory shared signing key rejected", staff, signingKey, scep.PKCSReq, false, false, true},
+		{"Windows NDES neutral issuance", staff, ndesToken, scep.PKCSReq, false, true, true},
+		{"Windows NDES renewal", staff, ndesToken, scep.RenewalReq, true, true, true},
 	} {
 		if tc.inventory != certificateInventory {
 			continue

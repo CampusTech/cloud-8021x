@@ -1,9 +1,9 @@
-"""Collect managed Apple identity certificates using authenticated Fleet MDM results.
+"""Collect device identities using authenticated Fleet MDM and script results.
 
 A refresh does bounded work without waiting for a device. State is private and
 must survive refreshes: deleting it discards the outstanding-command budget.
-Only MDM's response UUID links certificates to hosts; certificate subjects and
-serial numbers are never used as identity. HTTPS and Fleet API authorization
+Authenticated MDM response UUIDs or Fleet script host IDs link certificates to
+hosts; certificate subjects and serial numbers are never used as identity. HTTPS and Fleet API authorization
 are required; RADIUS must independently validate the presented TLS chain.
 """
 import base64
@@ -25,6 +25,8 @@ import urllib.request
 import uuid
 
 APPLE_PLATFORMS = frozenset(('darwin', 'macos', 'ios', 'ipados'))
+SUPPORTED_PLATFORMS = APPLE_PLATFORMS | {'windows'}
+WINDOWS_SCRIPT = Path(__file__).with_name('windows_certificates.ps1')
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 
@@ -101,8 +103,10 @@ def _observation(row, command, host_uuid, enrolled_at, now, max_age, ca_file):
             or row.get('request_type') != 'CertificateList'
             or row.get('status') != 'Acknowledged'):
         raise ValueError('result does not match requested command')
+    # Fleet persists some timestamps at second precision. Clocks must still be
+    # synchronized; only the reservation lower bound is rounded, never freshness.
     observed_at = _timestamp(row.get('updated_at'))
-    if not max(command['created_at'], enrolled_at, now - max_age) <= observed_at <= now:
+    if not max(math.floor(command['created_at']), enrolled_at, now - max_age) <= observed_at <= now:
         raise ValueError('result timestamp outside command/enrollment/freshness window')
     payload = plistlib.loads(base64.b64decode(row['result'], validate=True))
     if (not isinstance(payload, dict) or payload.get('CommandUUID') != command['uuid']
@@ -134,12 +138,70 @@ def _observation(row, command, host_uuid, enrolled_at, now, max_age, ca_file):
     return observation
 
 
+def _windows_script(nonce):
+    # This nonce binds result content to the exact reserved request, even across
+    # concurrent refreshes or execution-ID mixups. It is not an identity claim.
+    return WINDOWS_SCRIPT.read_text() + '\n# Collection nonce: ' + nonce + '\n'
+
+
+def _windows_observation(row, command, host_id, enrolled_at, now, max_age, ca_file):
+    if (row.get('host_id') != host_id
+            or row.get('execution_id') != command.get('execution_id')
+            or row.get('script_contents') != _windows_script(command['uuid'])
+            or type(row.get('exit_code')) is not int or row['exit_code'] != 0):
+        raise ValueError('script result does not match reserved request')
+    # Fleet created_at is request creation, not completion time. Conservatively
+    # age the observation from this earlier timestamp; polling never refreshes it.
+    # Floor only the local reservation bound for Fleet's second-precision DB.
+    # Fleet and collector clocks must be synchronized.
+    observed_at = _timestamp(row.get('created_at'))
+    if not max(math.floor(command['created_at']), enrolled_at, now - max_age) <= observed_at <= now:
+        raise ValueError('script result outside enrollment/freshness window')
+    output = row.get('output')
+    if not isinstance(output, str) or len(output) > 9002:
+        raise ValueError('invalid or oversized Windows certificate inventory')
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate inventory field')
+            result[key] = value
+        return result
+    payload = json.loads(output, object_pairs_hook=unique_object)
+    if (not isinstance(payload, dict) or set(payload) != {'version', 'certificates'}
+            or type(payload['version']) is not int or payload['version'] != 1
+            or not isinstance(payload['certificates'], list)):
+        raise ValueError('invalid Windows certificate inventory schema')
+    fingerprints = set()
+    expires_at = {}
+    for encoded in payload['certificates']:
+        if not isinstance(encoded, str):
+            raise ValueError('invalid certificate encoding')
+        der = base64.b64decode(encoded, validate=True)
+        if not der:
+            raise ValueError('empty certificate')
+        expiry = _trusted(der, ca_file) if ca_file else None
+        # Windows requires trust validation even for a diagnostic observation.
+        # HasPrivateKey was tested in the exact SYSTEM script whose content the
+        # authenticated Fleet API returned, never in untrusted caller metadata.
+        if expiry is not None and expiry > now:
+            fingerprint = hashlib.sha256(der).hexdigest()
+            if fingerprint in fingerprints:
+                raise ValueError('duplicate certificate')
+            fingerprints.add(fingerprint)
+            expires_at[fingerprint] = expiry
+    return {'fingerprints': sorted(fingerprints), 'observed_at': observed_at,
+            'trust_verified': ca_file is not None, 'expires_at': expires_at}
+
+
 def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=86400,
             pending_ttl=3600, batch_size=100, max_batches=1, request=None, ca_file=None):
     """Return UUID -> fingerprints/observed_at after one nonblocking collection pass.
 
     ``request(method,path,body=None)`` is the injectable authenticated API boundary.
-    Fetches each eligible host detail to bind state to last_mdm_enrolled_at. A
+    Fetches host detail to bind Apple state to last_mdm_enrolled_at and Windows
+    script state to host last_enrolled_at (Fleet exposes no Windows MDM
+    enrollment timestamp). Current MDM enrollment is required for both. A
     pending command gets at most one concurrent retry after pending_ttl; unresolved
     retries remain tracked so offline hosts cannot accumulate an unbounded queue.
     One process must own state_path (the bulk-cache caller already uses flock).
@@ -170,19 +232,28 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
     for host in hosts:
         uid = host.get('uuid')
         if (not isinstance(uid, str) or not uid or counts[uid] != 1
-                or host.get('platform') not in APPLE_PLATFORMS or not _enrolled(host)):
+                or host.get('platform') not in SUPPORTED_PLATFORMS or not _enrolled(host)):
             continue
         detail = request('GET', '/api/v1/fleet/hosts/' + str(int(host['id']))).get('host')
         if (not isinstance(detail, dict) or detail.get('id') != host['id']
                 or detail.get('uuid') != uid or not _enrolled(detail)):
             continue
+        if host['platform'] == 'windows' and detail.get('scripts_enabled') is not True:
+            continue
+        # Fleet only exposes last_mdm_enrolled_at for Apple. Script transport
+        # is authenticated by fleetd, so Windows uses host enrollment instead.
+        # This is the osquery enrollment timestamp, not an Orbit-only key reset.
+        enrollment_field = ('last_enrolled_at' if host['platform'] == 'windows'
+                            else 'last_mdm_enrolled_at')
         try:
-            enrolled_at = _timestamp(detail.get('last_mdm_enrolled_at'))
+            enrolled_at = _timestamp(detail.get(enrollment_field))
         except (ValueError, TypeError):
             continue
-        if enrolled_at > now:
+        if enrolled_at <= 0 or enrolled_at > now:
             continue
         binding = [host['id'], enrolled_at, detail.get('last_enrolled_at')]
+        if host['platform'] == 'windows':
+            binding.append(hashlib.sha256(WINDOWS_SCRIPT.read_bytes()).hexdigest())
         cached = state['hosts'].get(uid, {})
         if cached.get('binding') != binding:
             cached = {'binding': binding, 'last_attempt': 0}
@@ -193,6 +264,36 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
         command['hosts'] = {uid: binding for uid, binding in command['hosts'].items()
                             if uid in current and binding == current[uid]['binding']}
         if not command['hosts']:
+            continue
+        if command.get('transport') == 'windows_script':
+            # A POST timeout may have queued a script without returning its ID.
+            # Keep that reservation indefinitely; never turn uncertainty into
+            # an unbounded offline queue. Operators can reconcile Fleet manually.
+            if not command.get('execution_id'):
+                pending.append(command)
+                continue
+            uid = next(iter(command['hosts']))
+            try:
+                row = request('GET', '/api/v1/fleet/scripts/results/' +
+                              urllib.parse.quote(command['execution_id'], safe=''))
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                error.close()
+                # Authenticated Fleet confirms this known execution is absent.
+                # Unlike an unknown-ID reservation, its slot can be reclaimed.
+                continue
+            if row.get('exit_code') is None:
+                pending.append(command)
+                continue
+            try:
+                observation = _windows_observation(row, command, current[uid]['binding'][0],
+                    current[uid]['binding'][1], now, max_age, ca_file)
+                previous = current[uid].get('observation', {})
+                if observation['observed_at'] >= previous.get('observed_at', 0):
+                    current[uid]['observation'] = observation
+            except (ValueError, TypeError, KeyError):
+                pass
             continue
         try:
             response = request('GET', '/api/v1/fleet/commands/results?' + urllib.parse.urlencode(
@@ -242,6 +343,29 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
             break
         platform = current[due[0]]['platform']
         batch = [uid for uid in due if current[uid]['platform'] == platform][:batch_size]
+        if platform == 'windows':
+            for uid in batch:
+                submitted_uuid = str(uuid.uuid4())
+                if any(c['uuid'] == submitted_uuid for c in state['commands']):
+                    raise ValueError('duplicate locally generated command UUID')
+                command = {'uuid': submitted_uuid, 'created_at': now,
+                           'transport': 'windows_script',
+                           'hosts': {uid: current[uid]['binding']}}
+                state['commands'].append(command)
+                current[uid]['last_attempt'] = now
+                due.remove(uid)
+                _save(state_path, state)
+                result = request('POST', '/api/v1/fleet/scripts/run',
+                                 {'host_id': current[uid]['binding'][0],
+                                  'script_contents': _windows_script(submitted_uuid)})
+                execution_id = result.get('execution_id')
+                if (result.get('host_id') != current[uid]['binding'][0]
+                        or not isinstance(execution_id, str) or not execution_id
+                        or any(c.get('execution_id') == execution_id for c in state['commands'])):
+                    raise ValueError('Fleet returned invalid script execution identity')
+                command['execution_id'] = execution_id
+                _save(state_path, state)
+            continue
         submitted_uuid = str(uuid.uuid4())
         payload = base64.b64encode(plistlib.dumps(
             {'CommandUUID': submitted_uuid,
@@ -286,10 +410,12 @@ def readiness(hosts, observations, now=None, max_age=86400):
         observation = observations.get(uid)
         if not uid or counts[uid] != 1:
             reason = 'ambiguous_host_identity'
-        elif host.get('platform') not in APPLE_PLATFORMS:
+        elif host.get('platform') not in SUPPORTED_PLATFORMS:
             reason = 'unsupported_platform'
         elif not _enrolled(host):
             reason = 'not_enrolled'
+        elif host.get('platform') == 'windows' and host.get('scripts_enabled') is not True:
+            reason = 'fleet_scripts_unavailable'
         elif not observation:
             reason = 'no_certificate_observation'
         elif not 0 <= now - observation['observed_at'] <= max_age:

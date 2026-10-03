@@ -61,3 +61,15 @@ and pass `--container <name>`; that mode leaves it available afterward. Logs are
 the mutual-TLS webhook using the rendered CA configuration. See
 [`scep/README.md`](scep/README.md). The normal Python suite also tests the private
 per-device profile generator using a locally built webhook CLI.
+
+## Windows certificate inventory
+
+The Python suite covers authenticated Fleet script results, exact DER hashing,
+CA/expiry checks, host re-enrollment, missing scripts, duplicate or malformed
+responses, second-precision request timestamps, absent results, and bounded
+pending scripts after an uncertain POST. Profile tests check Device-scoped SCEP,
+NDES variables, machine authentication, and server name/root validation.
+
+These are API fixtures, not execution on Windows. Pilot the PowerShell collector,
+Fleet profile installation, pre-login Wi-Fi, NYC VLAN/DHCP, and renewal on a real
+Windows device before enabling fingerprint enforcement.

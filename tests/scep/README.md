@@ -29,7 +29,9 @@ Coverage includes:
 - Rejection after unenrollment despite a still-valid challenge.
 - Certificate verification, removal of unapproved SANs, clientAuth-only EKU,
   and preservation of the renewal OU.
-- Stock Fleet's Basic-authenticated raw challenge protocol and neutral v2 tokens.
+- Stock Fleet's Basic-authenticated Smallstep raw challenge protocol and neutral v2 tokens.
+- Windows NDES HTML challenges and neutral v3 tokens: issuance, renewal, and
+  rejection when fingerprint mode is disabled.
 - Separate rendered inventory-mode CA, reserved issued CN despite arbitrary CSR
   names, retry and renewal, and mode-disabled rejection of neutral tokens.
 

@@ -110,9 +110,11 @@ printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/pyth
 printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
 printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
+printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan}.py "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
+chmod 644 "$RADDB/mods-config/python3/windows_certificates.ps1"
 
 CERT_DIR="$RADDB/certs"
 

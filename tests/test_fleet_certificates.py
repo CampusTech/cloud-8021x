@@ -89,6 +89,12 @@ class CollectorTests(unittest.TestCase):
         self.now += 86401
         self.assertEqual(self.refresh(), {})
 
+    def test_second_precision_server_timestamp_accepts_fractional_client_clock(self):
+        self.now += 0.125
+        self.refresh()
+        self.results['cmd-1'] = [self.row(updated_at='2023-11-14T22:13:20Z')]
+        self.assertIn('host-A', self.refresh())
+
     def test_empty_success_replaces_old_identity(self):
         self.refresh()
         self.results['cmd-1'] = [self.row()]
@@ -256,7 +262,7 @@ class CollectorTests(unittest.TestCase):
         self.assertFalse(report['ready'])
         self.assertEqual(report['ready_count'], 1)
         self.assertEqual({r['uuid']: r['reason'] for r in report['hosts']},
-                         {'host-A': 'ready', 'windows': 'unsupported_platform',
+                         {'host-A': 'ready', 'windows': 'fleet_scripts_unavailable',
                           'missing': 'no_certificate_observation'})
 
 
