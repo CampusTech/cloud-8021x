@@ -138,9 +138,10 @@ EOT
 # enable_fleet_lookup                = true
 # enable_fleet_certificate_inventory = true
 # fleet_api_base_url                 = "https://fleet.example.com"
+# scep_broker_requests_per_minute    = 1000 # Per Fleet outbound IP; excess gets HTTP 429, no timed ban.
 # radius_vlan_policy = {
 #   certificate_inventory = true
-#   certificate_max_age   = 86400
+#   certificate_max_age   = 86400 # Minimum 7200 seconds: two hourly collection cycles.
 #   cache_max_age         = 3600
 #   locations = {
 #     nyc = { group_vlans = { "fleet:1" = 100, "fleet:2" = 200 } }

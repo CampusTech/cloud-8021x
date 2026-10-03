@@ -7,6 +7,13 @@ invokes OpenSSL and Go for certificate fixtures and the profile-generator CLI:
 python3 -m unittest discover -s tests -v
 ```
 
+With Terraform installed, the suite also evaluates startup metadata selection
+at the 262,144-byte boundary (including multibyte UTF-8 and the full-feature
+rendered script), certificate-age validation, and the broker's separate rate
+limit. Fleet bulk-refresh tests inject collection failures and verify that
+enrichment and legacy policy continue updating while enforced snapshots keep
+their original age. Null-policy collection staging is covered as well.
+
 The webhook's Go tests include the complete SCEP handler → authorizer → Fleet
 HTTP adapter flow for an enrolled iOS device without a serial:
 

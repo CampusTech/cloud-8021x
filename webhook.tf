@@ -96,6 +96,47 @@ resource "google_compute_health_check" "scep_broker" {
   }
 }
 
+# Fleet requests challenges for many devices behind the same outbound IP. Keep
+# its burst budget separate from device-to-CA traffic, and throttle excess
+# requests without banning the shared Fleet IP for subsequent minutes.
+resource "google_compute_security_policy" "scep_broker" {
+  count   = local.scep_inventory_enabled ? 1 : 0
+  project = google_project.this.project_id
+  name    = "scep-broker-armor"
+
+  rule {
+    action   = "throttle"
+    priority = 1000
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+      rate_limit_threshold {
+        count        = var.scep_broker_requests_per_minute
+        interval_sec = 60
+      }
+    }
+  }
+
+  rule {
+    action   = "allow"
+    priority = 2147483647
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+    description = "default allow"
+  }
+}
+
 resource "google_compute_backend_service" "scep_broker" {
   count                 = local.scep_inventory_enabled ? 1 : 0
   project               = google_project.this.project_id
@@ -105,7 +146,7 @@ resource "google_compute_backend_service" "scep_broker" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
   timeout_sec           = 15
   health_checks         = [google_compute_health_check.scep_broker[0].id]
-  security_policy       = google_compute_security_policy.smallstep[0].id
+  security_policy       = google_compute_security_policy.scep_broker[0].id
   backend {
     group = google_compute_instance_group.smallstep_primary[0].id
   }

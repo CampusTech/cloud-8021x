@@ -143,8 +143,11 @@ In Fleet's certificate enrollment integrations, add a **Smallstep** CA named
 
 Use the native Smallstep integration, not the static custom SCEP integration.
 Fleet tests the authenticated challenge endpoint when saving the configuration.
-The shared Cloud Armor policy limits requests per source IP; large bursts may
-receive HTTP 429 and need Fleet delivery retries.
+The broker has a dedicated Cloud Armor per-IP throttle, configured with
+`scep_broker_requests_per_minute` (default `1000`). Size it for enrollment and
+renewal bursts from Fleet's shared outbound IP. Excess requests receive HTTP
+429 and may need Fleet delivery retries; the broker does not impose a timed
+IP ban. The separate CA backend rate limit remains unchanged.
 Keep the credential out of Git and command output.
 
 Customize [the reusable profile](../examples/fleet/wifi-ios-byod.mobileconfig)

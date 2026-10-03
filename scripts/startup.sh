@@ -2199,33 +2199,63 @@ while True:
         break
     page += 1
 
-from pathlib import Path
-if Path("/var/lib/cloud-8021x/collect-certificates").is_file() and Path("/var/lib/cloud-8021x/collect-certificates").read_text().strip() == "true":
-    from fleet_certificates import refresh
-    from inventory_policy import certificate_readiness
-    with open("/etc/freeradius/3.0/vlan-policy.json") as stream:
-        vlan_config = json.load(stream) or {}
-    cert_max_age = vlan_config.get("certificate_max_age", 86400)
-    ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
-    observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
-                           now=now, max_age=cert_max_age, ca_file=ca_file)
-    for host, device in zip(all_hosts, policy_devices):
-        observed = observations.get(host.get("uuid"), {})
-        device["certificate_fingerprints"] = observed.get("fingerprints", [])
-        device["certificates_observed_at"] = observed.get("observed_at", 0)
-    report = certificate_readiness(all_hosts, policy_devices, observations, vlan_config, now)
-    report_path = "/var/lib/cloud-8021x/certificate-readiness.json"
-    with open(report_path + ".tmp", "w") as stream:
-        os.fchmod(stream.fileno(), 0o600)
-        json.dump(report, stream)
-    os.replace(report_path + ".tmp", report_path)
-
+# Enrichment depends only on the complete host list, not certificate collection.
 cache_file = "/etc/freeradius/3.0/fleet-device-cache.json"
 tmp_file = cache_file + ".tmp"
 with open(tmp_file, "w") as f:
     json.dump(cache, f)
 os.replace(tmp_file, cache_file)  # atomic publish
-publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
+
+from pathlib import Path
+policy_ready = False
+try:
+    marker = Path("/var/lib/cloud-8021x/fingerprint-enforced").is_file()
+    collect_path = Path("/var/lib/cloud-8021x/collect-certificates")
+    collect = collect_path.is_file() and collect_path.read_text().strip() == "true"
+    policy_ready = not marker
+    if collect:
+        # An unreadable/invalid config cannot establish that legacy publication
+        # is safe. Preserve the prior authorization snapshot in that case.
+        policy_ready = False
+        with open("/etc/freeradius/3.0/vlan-policy.json") as stream:
+            vlan_config = json.load(stream)
+        # Terraform renders null while collecting certificates before policy
+        # enforcement. Other non-object values still indicate invalid config.
+        if vlan_config is None:
+            vlan_config = {}
+        if not isinstance(vlan_config, dict) or not isinstance(vlan_config.get("certificate_inventory", False), bool):
+            raise ValueError("invalid certificate inventory configuration")
+        policy_ready = not (marker or vlan_config.get("certificate_inventory", False))
+        from fleet_certificates import refresh
+        cert_max_age = vlan_config.get("certificate_max_age", 86400)
+        ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
+        observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+                               now=now, max_age=cert_max_age, ca_file=ca_file)
+        # Build separately so a malformed observation cannot publish a partial
+        # certificate snapshot when the legacy policy is still in use.
+        certificate_devices = [dict(device) for device in policy_devices]
+        for host, device in zip(all_hosts, certificate_devices):
+            observed = observations.get(host.get("uuid"), {})
+            device["certificate_fingerprints"] = observed.get("fingerprints", [])
+            device["certificates_observed_at"] = observed.get("observed_at", 0)
+        policy_devices = certificate_devices
+        policy_ready = True
+        try:
+            from inventory_policy import certificate_readiness
+            report = certificate_readiness(all_hosts, policy_devices, observations, vlan_config, now)
+            report_path = "/var/lib/cloud-8021x/certificate-readiness.json"
+            with open(report_path + ".tmp", "w") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                json.dump(report, stream)
+            os.replace(report_path + ".tmp", report_path)
+        except Exception as error:
+            print(f"Fleet certificate readiness report failed ({type(error).__name__})", file=sys.stderr)
+except Exception as error:
+    # Do not log exception text: upstream errors can contain credentials or
+    # command payloads. Failed fingerprint snapshots retain their original age.
+    print(f"Fleet certificate collection failed ({type(error).__name__})", file=sys.stderr)
+if policy_ready:
+    publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
 print(f"Fleet cache: {len(cache)} devices")
 PYEOF
 FLEETCACHEEOF

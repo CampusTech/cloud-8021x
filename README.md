@@ -133,6 +133,7 @@ The `out/` directory includes secrets; keep it private and out of Git.
 | GCE Instances (x2) | Primary + secondary in different zones, Debian 12, `e2-medium`, FreeRADIUS + MariaDB |
 | Service Account | Minimal permissions (Secret Manager read/write) |
 | Secret Manager | Per-office secrets, CA/server material, integration credentials, and optional challenge/accounting signing keys |
+| Private Cloud Storage bucket | Content-addressed startup script; used automatically when the rendered script exceeds GCE's 256 KiB metadata limit |
 | Optional Smallstep services | EC/RSA HTTPS load balancers, Cloud Armor, KMS HSM keys, and Cloud SQL Postgres |
 
 ## Secrets in Secret Manager
@@ -190,6 +191,7 @@ See [terraform.tfvars.example](terraform.tfvars.example) for common settings and
 | `rewrite_username_separator` | No | Separator between email and serial in rewritten User-Name (default: ` - `) |
 | `tls_session_cache` | No | Enable faster re-auth (default: `true`); fingerprint enforcement always disables resumption |
 | `enable_fleet_certificate_inventory` | No | Collect exact managed Apple and Windows machine certificate fingerprints; requires Fleet lookup and command/script permissions |
+| `scep_broker_requests_per_minute` | No | Challenge broker requests per source IP per minute (default: `1000`); excess requests receive HTTP 429 without a timed ban |
 | `radius_vlan_policy` | No | Global or per-location group mappings, site opt-out, and optional exact certificate enforcement |
 | `tls_session_cache_lifetime` | No | TLS session cache lifetime in hours (default: `24`) |
 | `tls_max_version` | No | Max TLS version: `1.2` (default, disk cache works) or `1.3` (in-memory only) |
@@ -574,6 +576,7 @@ workflow is proven; a shorter duration also shortens the recovery window.
 ├── variables.tf             # Input variables
 ├── network.tf               # VPC, subnet, firewall, static IP
 ├── compute.tf               # Service account, IAM, GCE instance
+├── startup-transport.tf     # Private storage fallback for large startup scripts
 ├── outputs.tf               # IP, SSH command, RADIUS config
 ├── datadog.tf               # Optional Datadog dashboard (requires datadog_app_key)
 ├── datadog-smallstep.tf     # Smallstep CA dashboard + monitors + log pipeline

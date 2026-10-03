@@ -33,6 +33,7 @@ This repo deploys primary and secondary FreeRADIUS servers on Google Cloud (GCE)
 - `variables.tf` — All input variables with defaults
 - `network.tf` — VPC, subnet, static IP, firewall rules
 - `compute.tf` — Service account, IAM bindings, GCE instance definition
+- `startup-transport.tf` — Rendered byte count, metadata selection, private startup-script storage
 - `outputs.tf` — Deployment outputs (IP, SSH command, RADIUS config)
 - `datadog.tf` — Optional Datadog FreeRADIUS dashboard (Terraform-managed, requires `datadog_app_key`)
 - `datadog-smallstep.tf` — Smallstep CA dashboard + monitors + log pipeline (requires `enable_smallstep_ca` + `datadog_app_key`)

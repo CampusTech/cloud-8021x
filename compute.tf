@@ -214,9 +214,7 @@ resource "google_compute_instance" "radius" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    startup-script = local.startup_script
-  }
+  metadata = local.startup_metadata
 
   shielded_instance_config {
     enable_secure_boot          = true
@@ -226,6 +224,7 @@ resource "google_compute_instance" "radius" {
 
   depends_on = [
     google_project_service.apis["compute.googleapis.com"],
+    google_storage_bucket_iam_member.startup_script_reader,
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
@@ -303,9 +302,7 @@ resource "google_compute_instance" "radius_secondary" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    startup-script = local.startup_script
-  }
+  metadata = local.startup_metadata
 
   shielded_instance_config {
     enable_secure_boot          = true
@@ -315,6 +312,7 @@ resource "google_compute_instance" "radius_secondary" {
 
   depends_on = [
     google_project_service.apis["compute.googleapis.com"],
+    google_storage_bucket_iam_member.startup_script_reader,
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,

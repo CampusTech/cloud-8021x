@@ -297,7 +297,18 @@ not overwrite a custom snapshot.
 
 For fingerprint mode use version 2 and a `certificates` map instead of subject
 identities. Set `certificate_inventory = true`; `certificate_max_age` limits
-how long a certificate observation remains usable, separately from `cache_max_age`:
+how long a certificate observation remains usable, separately from `cache_max_age`.
+Its default is 86,400 seconds and Terraform requires an integer of at least
+7,200 seconds, allowing two hourly collection cycles.
+
+If certificate collection fails after a complete Fleet host refresh, device/owner
+log enrichment still updates. Before fingerprint enforcement, the legacy policy
+snapshot also updates without certificate observations. Once fingerprints are
+enforced, the previous authorization snapshot retains its original timestamp
+and expires normally; a failed collection never makes it appear fresh. A failed
+host-list refresh preserves both previous snapshots.
+
+Example fingerprint snapshot:
 
 ```json
 {

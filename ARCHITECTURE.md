@@ -91,7 +91,9 @@ Key processes:
 
 ## Startup Script Walkthrough
 
-`scripts/startup.sh` is an idempotent bootstrap script that runs as root via GCE metadata `startup-script`. It is rendered through Terraform's `templatefile()` with variables injected at apply time.
+`scripts/startup.sh` is an idempotent bootstrap script that runs as root through the GCE startup-script runner. Terraform renders it with `templatefile()` and measures the complete UTF-8 byte count, including embedded modules and configuration. Values up to 262,144 bytes use inline `startup-script` metadata; larger scripts use `startup-script-url` pointing to a private Cloud Storage object. Both VMs use the same selection.
+
+The bucket blocks public access and grants the VM service account read-only object access. Script objects have content-hashed names, so a changed script updates the metadata URL. Terraform always manages the bucket and object because the final script size can be unknown during the first plan. Inspect `terraform output startup_script_size_bytes` and `terraform output startup_script_transport` after applying.
 
 ### Execution order
 
@@ -126,11 +128,10 @@ a full run, stop FreeRADIUS first (do one node at a time after verifying failove
 
 ```bash
 sudo systemctl stop freeradius
-sudo bash -c 'curl -s -H "Metadata-Flavor: Google" \
-  "http://metadata.google.internal/computeMetadata/v1/instance/attributes/startup-script" | bash'
+sudo google_metadata_script_runner startup
 ```
 
-A `gcloud compute instances reset` also works (full VM reboot).
+The runner supports both inline metadata and Cloud Storage URLs. A `gcloud compute instances reset` also works (full VM reboot).
 
 ## Certificate Architecture
 
@@ -389,8 +390,7 @@ The startup script uses `templatefile()` which has its own interpolation syntax 
 terraform apply
 # Then on each VM:
 sudo systemctl stop freeradius
-sudo bash -c 'curl -s -H "Metadata-Flavor: Google" \
-  "http://metadata.google.internal/computeMetadata/v1/instance/attributes/startup-script" | bash'
+sudo google_metadata_script_runner startup
 ```
 
 ### Check FreeRADIUS config without restarting

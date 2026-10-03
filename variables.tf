@@ -380,6 +380,17 @@ variable "enable_fleet_certificate_inventory" {
   }
 }
 
+variable "scep_broker_requests_per_minute" {
+  description = "Cloud Armor challenge requests per minute per source IP. Fleet shares its outbound IP across device enrollments, so size this for rollout and renewal bursts. Excess requests receive HTTP 429 without a timed ban; broker authentication remains required."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.scep_broker_requests_per_minute >= 1 && floor(var.scep_broker_requests_per_minute) == var.scep_broker_requests_per_minute
+    error_message = "scep_broker_requests_per_minute must be a positive integer."
+  }
+}
+
 # Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
 # not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
 variable "radius_vlan_policy" {
@@ -424,8 +435,8 @@ variable "radius_vlan_policy" {
   }
 
   validation {
-    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.certificate_max_age >= 600 && floor(var.radius_vlan_policy.certificate_max_age) == var.radius_vlan_policy.certificate_max_age
-    error_message = "certificate_max_age must be an integer of at least 600 seconds."
+    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.certificate_max_age >= 7200 && floor(var.radius_vlan_policy.certificate_max_age) == var.radius_vlan_policy.certificate_max_age
+    error_message = "certificate_max_age must be an integer of at least 7200 seconds to allow two hourly certificate collection cycles."
   }
 
   validation {
