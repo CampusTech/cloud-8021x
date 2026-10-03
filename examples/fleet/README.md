@@ -9,7 +9,7 @@ before use. See [`../README.md`](../README.md) for the token map.
 | File | Platform | Purpose |
 |------|----------|---------|
 | `wifi-acme.mobileconfig` | macOS / iOS | EAP-TLS identity via direct ACME |
-| `wifi-ios-byod.mobileconfig` | iOS / iPadOS User Enrollment | SCEP with enrollment ID; no serial required |
+| `wifi-ios-byod.mobileconfig` | iOS / iPadOS User Enrollment | External custom-SCEP CA template only; not the self-hosted v2 issuer |
 | `wifi-scep.xml` | Windows | EAP-TLS identity via SCEP (Fleet SCEP proxy) |
 
 For the root CA trust and the WlanXml 802.1X profile on Windows, reuse
@@ -53,11 +53,17 @@ That is why this README and the profile comments write those variable names
 **without** the leading `$` (e.g. `FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME`).
 The single live occurrence of each is in its `<Data>` node.
 
-## BYOD iOS/iPadOS
+## Self-hosted SCEP v2 and BYOD iOS/iPadOS
 
-Use `wifi-ios-byod.mobileconfig` for User Enrollment, where Fleet exposes the
-enrollment ID through `$FLEET_VAR_HOST_UUID`. The CSR CN contains this identity;
-`$FLEET_VAR_CERTIFICATE_RENEWAL_ID` in the OU enables certificate renewal.
-See [dynamic VLAN setup and SCEP issuance trust requirements](../../docs/dynamic-vlans.md)
-for token replacement, webhook release requirements, and the shared-challenge
-limitation when using certificates for VLAN isolation.
+The self-hosted CA no longer accepts Fleet's static custom-SCEP challenge.
+Use the [per-device generator and Fleet delivery instructions](../../docs/scep-identity-binding.md#generate-and-deliver-an-ios-profile).
+It signs a challenge for the host UUID/enrollment ID and generates a private
+InstallProfile request for that host only. Generate and deliver a fresh profile
+before certificate expiry; this direct-command workflow does not use Fleet's
+native certificate auto-renewal.
+
+The custom-SCEP templates in this directory remain examples for external CAs
+whose issuance integration provides device identity binding. Do not register
+the self-hosted signing key as a Fleet shared SCEP challenge. Native dynamic
+challenge support requires Fleet to include authenticated device context in
+its challenge request.

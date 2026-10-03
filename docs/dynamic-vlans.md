@@ -93,53 +93,38 @@ Apple User Enrollment omits hardware serial and UDID from attestation. The
 existing ACME authorization path still requires an attested identifier; do not
 replace it with a self-asserted CSR identity. Use SCEP for these BYOD devices.
 
-- Generic MDM template: [`wifi-ios-byod.mobileconfig`](../examples/scep/wifi-ios-byod.mobileconfig).
-- Fleet template: [`wifi-ios-byod.mobileconfig`](../examples/fleet/wifi-ios-byod.mobileconfig).
+Use the [per-device profile generator](scep-identity-binding.md#generate-and-deliver-an-ios-profile)
+for the self-hosted CA. Supply the device's Fleet host UUID/enrollment ID from
+trusted inventory. The generator binds the challenge and CSR CN to that value
+and can produce a Fleet InstallProfile request targeting exactly that host.
+RADIUS treats the value as an opaque identifier; the inventory adapter maps it
+to the host's fleet. Re-enrollment may change it and requires a new profile.
 
-The Fleet template uses `$FLEET_VAR_HOST_UUID`, which resolves to the enrollment
-ID for user-enrolled iOS/iPadOS devices. RADIUS treats that value as an opaque
-identifier; it contains no Fleet-specific certificate naming convention. The
-Fleet inventory adapter associates it with the host's fleet. Re-enrollment can
-change this identifier and requires a newly issued certificate/profile.
+The generator supports unsupervised iOS/iPadOS, keeps private Wi-Fi addresses,
+and configures explicit trust for the **RADIUS server root and name**. That root
+need not be the SCEP client-issuing CA. The RADIUS trust bundle must trust the
+client issuer. The [generic mobileconfig](../examples/scep/wifi-ios-byod.mobileconfig)
+is also available for trusted MDM integrations that supply their own per-device
+bound challenge.
 
-For Fleet, register the existing RSA step-ca SCEP provisioner as a custom SCEP
-proxy named `CANAME`, then replace `CANAME` in the template with that registration
-name. The URL and challenge tokens must each occur only once. The OU renewal
-identifier is separate from the device identity; it is not a policy group.
-
-Replace `SSID`, `RADIUS_SERVER_CN`, and `RADIUS_CA_CERT_BASE64_DER` with the SSID,
-expected RADIUS server certificate name, and base64 DER of the **RADIUS server's
-trusted root CA**. This root need not be the SCEP client-issuing CA. Generic MDM
-users also replace `DEVICE_IDENTIFIER`, `CERTIFICATE_RENEWAL_ID`, `SCEP_PROXY_URL`,
-`SCEP_CA_NAME`, and `SCEP_CHALLENGE` using their MDM's enrollment workflow.
-
-The profiles do not require supervision or disable private Wi-Fi addresses.
-The RADIUS trust bundle must trust the SCEP issuer. The self-hosted SCEP webhook
-requires release **1.2.0** for UUID/enrollment-ID lookup; merge/release that binary
-before applying the new default `webhook_release_version`. No release or
-infrastructure deployment occurs merely by pushing this branch.
+The self-hosted flow requires webhook **2.0.0**, which must be released before
+applying the Terraform version pin. Fleet's static custom-SCEP profile templates
+are not compatible with this protected issuer. Native dynamic SCEP support is
+planned once Fleet can send device identity in its challenge request; for now,
+use the per-device generator and deliver a fresh profile for renewal.
 
 ### Issuance trust boundary
 
-VLAN isolation depends on the CA binding the certificate identity to the actual
-enrolled device. An enrollment ID is an identifier, **not proof of ownership**.
-The existing step-ca SCEP gate checks the shared upstream challenge and whether
-the requested CN exactly matches an enrolled serial or UUID. Fleet's proxy
-checks its host/profile URL challenge but forwards the encrypted CSR; this does
-not bind the CSR CN to that host.
-
-Consequently, a requester who can reuse the shared upstream SCEP challenge can
-request a certificate naming another enrolled device and obtain that device's
-VLAN. This limitation predates dynamic VLANs, but matters for segmentation.
-Use an issuer/registration authority that enforces per-device identity binding
-(e.g. per-device challenges bound to the requested CN) before relying on SCEP
-certificates as a hostile-BYOD isolation boundary. Keeping the shared challenge
-secret from outsiders alone does not establish that binding. The VLAN policy
-cannot repair an incorrectly authorized certificate.
+The shared-password impersonation path is closed by signed, expiring challenges
+bound to the requested CN and provisioner. The issuer checks current enrollment,
+and the CA requires the authorization webhook over authenticated mutual TLS.
+An enrollment ID alone is still not proof of device ownership: the trusted MDM
+integration must deliver each token only to its assigned device. Keep the signing
+key server-side. The [migration guide](scep-identity-binding.md) covers existing
+certificates, which are not revoked by an issuance-code change.
 
 References: [Fleet variables](https://fleetdm.com/guides/fleet-variables),
-[Apple Managed Device Attestation](https://support.apple.com/en-us/guide/deployment/dep28afbde6a/web),
-[Fleet SCEP proxy](https://github.com/fleetdm/fleet/blob/main/ee/server/service/scep/scep_proxy.go).
+[Apple Managed Device Attestation](https://support.apple.com/en-us/guide/deployment/dep28afbde6a/web).
 
 ## Other MDMs / inventory sources
 

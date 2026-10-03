@@ -14,16 +14,30 @@ serial (`attestationData.permanentIdentifier`) is Apple-signed and bound to the
 request, so it is a trustworthy key: this service looks it up in Fleet and only
 allows enrolled hosts.
 
+## Authentication
+
+The deployed service listens only on loopback HTTPS and requires mutual TLS.
+It trusts the two configured CA roots and accepts only the CA service DNS SANs
+with both clientAuth and serverAuth EKUs. Ordinary Wi-Fi certificates cannot
+call the authorization endpoints. step-ca supplies its automatically renewed
+internal TLS certificate. The local webhook server certificate is installed in
+the system trust store and renewed before expiry by a daily systemd timer.
+
+Static step-ca 0.30.2 JSON ignores webhook `secret`, `bearerToken`, and `basicAuth`.
+Do not use an empty-key HMAC as authentication. Its supported mTLS transport is
+why the deployed service uses certificate authentication.
+
 ## Endpoints
 
-- `POST /authorize` — step-ca calls this. Verifies the `X-Smallstep-Signature`
-  HMAC-SHA256 over the raw body, extracts the serial, decides, returns
+- `POST /authorize` — step-ca calls this. Verifies the TLS
+  client certificate, extracts the attested serial, decides, returns
   `{"allow": true|false}`.
+- `POST /scep-challenge` — verifies the CA client identity, an identity-bound enrollment token, and current Fleet enrollment.
 - `GET /healthz` — liveness.
 
 ## It denies (allow=false) when
 
-- the signature is missing or invalid,
+- the CA client certificate is missing, invalid, or has the wrong identity,
 - the body is malformed,
 - the serial is empty,
 - the serial is not an enrolled Fleet host,
@@ -34,33 +48,61 @@ allows enrolled hosts.
 
 | Var | Required | Meaning |
 |-----|----------|---------|
-| `WEBHOOK_SIGNING_SECRET` | yes | Raw shared HMAC secret. step-ca's ca.json carries the **base64** of this; step-ca base64-decodes before HMAC, so both sides key on identical raw bytes. |
+| `WEBHOOK_CLIENT_DNS_NAMES` | yes | Comma-separated exact CA service DNS names allowed in client certificate SANs. |
+| `WEBHOOK_CLIENT_CA_FILES` | no | Colon-separated PEM trust bundles; default `/etc/acme-authz-webhook/client-cas.pem`. |
+| `WEBHOOK_TLS_CERT_FILE` | no | HTTPS certificate; default `/etc/acme-authz-webhook/server.crt`. |
+| `WEBHOOK_TLS_KEY_FILE` | no | HTTPS private key; default `/etc/acme-authz-webhook/server.key`. |
 | `FLEET_API_BASE_URL` | yes | e.g. `https://fleet.example.com` |
 | `FLEET_API_TOKEN` | yes | Fleet API token (a read-only, API-only user). |
 | `ALLOW_LABEL` | no | If set, host must carry this Fleet label (e.g. `test-pilots`) to be allowed. Empty = any enrolled host. |
-| `PORT` | no | Listen port (default `8080`; Cloud Run injects it). |
+| `PORT` | no | Loopback listen port (default `8080`). |
+| `SCEP_CHALLENGE_SIGNING_KEY` | SCEP only | Server-only random key of at least 32 bytes. Missing disables SCEP; a short key fails startup. Never put this in an MDM profile. |
 
 ## Build & run
 
 ```bash
 go test ./...
-go build .
-WEBHOOK_SIGNING_SECRET=... FLEET_API_BASE_URL=https://fleet.example FLEET_API_TOKEN=... ./acme-authz-webhook serve
+go build -o acme-authz-webhook .
+# serve additionally requires the TLS files and trusted CA identities above.
+WEBHOOK_CLIENT_DNS_NAMES=ca.example.com,scep.example.com \
+  FLEET_API_BASE_URL=https://fleet.example FLEET_API_TOKEN=... ./acme-authz-webhook serve
 ```
 
 Container image: `docker build -t acme-authz-webhook .` (see `Dockerfile`).
-Deployed on Cloud Run via the repo's `webhook.tf` (gated by `enable_acme_webhook`).
+Runs as a loopback-only systemd service on each RADIUS VM. `webhook.tf` manages
+its secrets and IAM (gated by `enable_acme_webhook`).
 
-## SCEP and serial-free BYOD (v1.2.0)
+## SCEP and serial-free BYOD (v2.0.0)
 
-`POST /scep-challenge` verifies the step-ca HMAC and configured `SCEP_CHALLENGE`,
-then resolves the CSR CN as an enrolled device identity. Exact hardware-serial
-and UUID/enrollment-ID matches are accepted; mutable hostname matches are denied.
-The existing Windows ` Campus WiFi` suffix remains supported.
+SCEP challenges are signed tokens bound to the normalized CSR CN and exact
+step-ca provisioner, with an expiry of at most 24 hours. Static passwords,
+including the old `SMALLSTEP_SCEP_CHALLENGE`, are never accepted. The dedicated
+signing key is independent of both the retired password and the webhook HMAC.
+Tokens allow retries for the same device until expiry; they are not single-use.
 
-ACME `/authorize` continues to require an attested permanent identifier. It does
-not fall back to the CSR CN when Apple User Enrollment omits device identifiers.
+The verifier then resolves the CSR CN as a currently enrolled device. Exact
+hardware-serial and UUID/enrollment-ID matches are accepted; mutable hostname
+matches are denied. The Windows ` Campus WiFi` suffix remains supported.
+Opaque identifiers are case-sensitive; use the same identity when issuing the
+challenge and rendering the device's CSR subject.
 
-The shared SCEP challenge proves possession of the challenge, not ownership of
-the named device. See the [issuance trust boundary](../docs/dynamic-vlans.md#issuance-trust-boundary)
-before using this path for isolation between BYOD and privileged VLANs.
+An administrator or trusted MDM integration can issue a challenge locally:
+
+```sh
+./acme-authz-webhook scep-challenge \
+  --identity 'enrollment-uuid' --provisioner wifi-scep \
+  --signing-key-file /secure/scep-signing-key --ttl 15m \
+  --out /secure/device.challenge
+```
+
+The command creates a new 0600 file, never overwrites it, and supports `--dry-run`
+and `--debug` (no secrets in logs). Alternatively supply the key through
+`SCEP_CHALLENGE_SIGNING_KEY`. Only deliver the resulting challenge to its bound
+device, via the authenticated MDM channel. Do not give devices the signing key.
+
+ACME `/authorize` still requires an attested permanent identifier and never
+falls back to a CSR CN. Both provisioners must place hooks in
+`options.webhooks`, which is the schema step-ca actually loads. The SCEP template
+issues clientAuth-only certificates with no requester-supplied SANs.
+
+See [SCEP identity binding and migration](../docs/scep-identity-binding.md).

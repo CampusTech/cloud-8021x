@@ -259,18 +259,9 @@ if ! command -v step >/dev/null 2>&1 || ! command -v step-ca >/dev/null 2>&1 || 
   command -v step-kms-plugin >/dev/null 2>&1 || { echo "FATAL: step-kms-plugin install failed" >&2; exit 1; }
 fi
 
-# Fetch DB password + SCEP challenge from Secret Manager.
+# Fetch DB password from Secret Manager.
 SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
-SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
-%{ if acme_webhook_url != "" ~}
-# ACME authorizing webhook signing secret. step-ca's ca.json "secret" field is
-# base64; step-ca base64-DECODES it and HMACs the request body with the raw
-# bytes. The webhook service receives the SAME raw secret (via its env) and
-# HMACs with it directly — so both sides key on identical bytes. The Secret
-# Manager value `acme-webhook-signing-secret` holds the RAW secret; we base64
-# it only for ca.json here.
-ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}" | base64 -w0)"
-%{ endif ~}
+
 
 # Reuse an existing CA if one was already published to Secret Manager;
 # otherwise initialize a new KMS-backed CA and publish BOTH certs.
@@ -664,18 +655,19 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "name": "${smallstep_acme_name}",
         "challenges": ["device-attest-01"],
         "attestationFormats": ["apple"],
+        "options": {
 %{ if acme_webhook_url != "" ~}
-        "webhooks": [
-          {
-            "name": "authorize",
-            "url": "${acme_webhook_url}",
-            "kind": "AUTHORIZING",
-            "certType": "X509",
-            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
-          }
-        ],
+          "webhooks": [
+            {
+              "name": "authorize",
+              "url": "${acme_webhook_url}",
+              "kind": "AUTHORIZING",
+              "certType": "X509"
+            }
+          ],
 %{ endif ~}
-        "options": { "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" } },
+          "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" }
+        },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -739,6 +731,21 @@ echo "step-ca started."
 # --- RSA step-ca (instance #2): ca.json, unit, log, probe -------------------
 RSA_SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < /etc/step-ca-rsa/certs/scep_decrypter.crt)"
 RSA_SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < /etc/step-ca-rsa/secrets/scep_decrypter_key)"
+# The challenge webhook binds the CN. The CSR's OU is renewal metadata only;
+# never copy requested SANs or grant serverAuth to a Wi-Fi client certificate.
+mkdir -p /etc/step-ca-rsa/templates/x509
+cat > /etc/step-ca-rsa/templates/x509/wifi-scep.tpl <<'SCEPTPLEOF'
+{
+  "subject": {
+    "commonName": {{ toJson .Subject.CommonName }},
+    "organizationalUnit": {{ toJson .Insecure.CR.Subject.OrganizationalUnit }}
+  },
+  "sans": [],
+  "keyUsage": ["digitalSignature", "keyEncipherment"],
+  "extKeyUsage": ["clientAuth"]
+}
+SCEPTPLEOF
+
 cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
 {
   "root": "/etc/step-ca-rsa/certs/root_ca.crt",
@@ -757,21 +764,20 @@ cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
       {
         "type": "SCEP",
         "name": "${smallstep_scep_rsa_name}",
-        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
         "minimumPublicKeyLength": 2048,
         "encryptionAlgorithmIdentifier": 2,
         "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
-%{ if acme_webhook_enabled ~}
-        "webhooks": [
-          {
-            "name": "scep-challenge",
-            "url": "http://127.0.0.1:${webhook_port}/scep-challenge",
-            "kind": "SCEPCHALLENGE",
-            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
-          }
-        ],
-%{ endif ~}
+        "options": {
+          "webhooks": [
+            {
+              "name": "scep-challenge",
+              "url": "https://127.0.0.1:${webhook_port}/scep-challenge",
+              "kind": "SCEPCHALLENGE"
+            }
+          ],
+          "x509": { "templateFile": "/etc/step-ca-rsa/templates/x509/wifi-scep.tpl" }
+        },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -839,7 +845,7 @@ echo "step-ca-rsa started."
 %{ if acme_webhook_enabled ~}
 # ---------------------------------------------------------------------------
 # ACME authorizing webhook — localhost systemd service (not Cloud Run).
-# step-ca calls http://127.0.0.1:${webhook_port}/authorize per ACME order and
+# step-ca calls https://127.0.0.1:${webhook_port}/authorize per ACME order and
 # refuses to sign unless it returns allow:true (fail-closed). The binary is a
 # static release asset built by the webhook-release GitHub Action.
 # ---------------------------------------------------------------------------
@@ -897,22 +903,79 @@ rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
 
 # Secrets from Secret Manager -> a root-owned EnvironmentFile (0600). The Fleet
-# token + HMAC signing secret never land in the unit file or process args.
+# token + challenge signing key never land in the unit file or process args.
 mkdir -p /etc/acme-authz-webhook
-WEBHOOK_SIGNING_SECRET="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}")"
 FLEET_API_TOKEN="$(gcloud secrets versions access latest --secret=fleet-api-token --project="${project_id}")"
-[ -n "$WEBHOOK_SIGNING_SECRET" ] && [ -n "$FLEET_API_TOKEN" ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
+SCEP_CHALLENGE_SIGNING_KEY="$(gcloud secrets versions access latest --secret=scep-challenge-signing-key --project="${project_id}")"
+[ -n "$FLEET_API_TOKEN" ] && [ "$${#SCEP_CHALLENGE_SIGNING_KEY}" -ge 32 ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
 umask 077
 cat > /etc/acme-authz-webhook/env <<WEBHOOKENV
 PORT=${webhook_port}
 FLEET_API_BASE_URL=${fleet_api_base_url}
 ALLOW_LABEL=${webhook_allow_label}
-WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
+WEBHOOK_CLIENT_DNS_NAMES=${smallstep_ca_dns_name},${smallstep_ca_rsa_dns_name}
 FLEET_API_TOKEN=$FLEET_API_TOKEN
-SMALLSTEP_SCEP_CHALLENGE=$SMALLSTEP_SCEP_CHALLENGE
+SCEP_CHALLENGE_SIGNING_KEY=$SCEP_CHALLENGE_SIGNING_KEY
 WEBHOOKENV
 umask 022
 chmod 600 /etc/acme-authz-webhook/env
+# Public trust anchors readable by the unprivileged webhook even when step's
+# own directories/certificate files are created with restrictive permissions.
+cat "$STEPPATH/certs/root_ca.crt" /etc/step-ca-rsa/certs/root_ca.crt > /etc/acme-authz-webhook/client-cas.pem
+chmod 644 /etc/acme-authz-webhook/client-cas.pem
+
+# step-ca trusts this local HTTPS leaf through the system pool and presents
+# its own CA server certificate. Rotate before expiry even on long-lived VMs.
+cat > /usr/local/sbin/renew-webhook-tls <<'WEBHOOKTLSEOF'
+#!/bin/bash
+set -euo pipefail
+if [ -s /etc/acme-authz-webhook/server.key ] && \
+   openssl x509 -in /etc/acme-authz-webhook/server.crt -checkend 2592000 -noout >/dev/null 2>&1; then
+  exit 0
+fi
+umask 077
+work=$(mktemp -d /etc/acme-authz-webhook/tls.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+  -addext 'basicConstraints=critical,CA:FALSE' \
+  -addext 'keyUsage=critical,digitalSignature' \
+  -addext 'extendedKeyUsage=serverAuth' \
+  -keyout "$work/server.key" -out "$work/server.crt"
+install -o root -g acme-webhook -m 0640 "$work/server.key" /etc/acme-authz-webhook/server.key
+install -m 0644 "$work/server.crt" /etc/acme-authz-webhook/server.crt
+install -m 0644 "$work/server.crt" /usr/local/share/ca-certificates/acme-webhook.crt
+update-ca-certificates
+if [ "$${1:-}" != "--no-restart" ]; then
+  systemctl restart acme-authz-webhook step-ca step-ca-rsa
+fi
+WEBHOOKTLSEOF
+chmod 0750 /usr/local/sbin/renew-webhook-tls
+/usr/local/sbin/renew-webhook-tls --no-restart
+# Restore system trust if a previous bootstrap stopped between cert installation
+# and trust-store refresh; harmless when the certificate has not changed.
+install -m 0644 /etc/acme-authz-webhook/server.crt /usr/local/share/ca-certificates/acme-webhook.crt
+update-ca-certificates
+cat > /etc/systemd/system/renew-webhook-tls.service <<'WEBHOOKTLSUNIT'
+[Unit]
+Description=Renew local CA authorization webhook TLS certificate
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/renew-webhook-tls
+WEBHOOKTLSUNIT
+cat > /etc/systemd/system/renew-webhook-tls.timer <<'WEBHOOKTLSTIMER'
+[Unit]
+Description=Check local webhook TLS certificate daily
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+[Install]
+WantedBy=timers.target
+WEBHOOKTLSTIMER
+systemctl daemon-reload
+systemctl enable --now renew-webhook-tls.timer
 
 cat > /etc/systemd/system/acme-authz-webhook.service <<'WEBHOOKUNIT'
 [Unit]
@@ -937,11 +1000,9 @@ WantedBy=multi-user.target
 WEBHOOKUNIT
 systemctl daemon-reload
 systemctl enable --now acme-authz-webhook
-# Wait for it to answer before step-ca starts handing it ACME orders.
-for i in $(seq 1 15); do
-  curl -fsS -o /dev/null "http://127.0.0.1:${webhook_port}/healthz" 2>/dev/null && break
-  sleep 1
-done
+# Restart even when only credentials/TLS files changed on an existing VM.
+systemctl restart acme-authz-webhook
+systemctl is-active --quiet acme-authz-webhook
 echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
 # step-ca services were started before this block; restart them now that the
 # webhook is reachable so ACME orders / SCEP challenges arriving during the
@@ -951,6 +1012,16 @@ systemctl restart step-ca
 %{ if smallstep_enabled ~}
 systemctl restart step-ca-rsa
 %{ endif ~}
+%{ else ~}
+# Disabling the integration must also stop services left by an earlier boot.
+for unit in renew-webhook-tls.timer renew-webhook-tls.service acme-authz-webhook.service; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    systemctl stop "$unit"
+    if [ "$unit" != "renew-webhook-tls.service" ]; then
+      systemctl disable "$unit"
+    fi
+  fi
+done
 %{ endif ~}
 
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.

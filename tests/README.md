@@ -46,3 +46,10 @@ This test does not simulate SCEP issuance or physical UniFi VLAN/trunk/DHCP setu
 To inspect logs, create your own disposable test container with the same packages
 and pass `--container <name>`; that mode leaves it available afterward. Logs are
 `/tmp/radius-debug.log` and `/tmp/eap-<case>.log` inside the container.
+
+## Certificate issuance
+
+`python3 tests/scep/run.py` exercises actual step-ca issuance and renewal through
+the mutual-TLS webhook using the rendered CA configuration. See
+[`scep/README.md`](scep/README.md). The normal Python suite also tests the private
+per-device profile generator using a locally built webhook CLI.

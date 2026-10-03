@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/CampusTech/cloud-8021x/webhook/internal/authorize"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/config"
@@ -20,15 +23,20 @@ import (
 var version = "dev"
 
 func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		logrus.WithError(err).Fatal("command failed")
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "acme-authz-webhook",
 		Short: "step-ca AUTHORIZING webhook that allows ACME/SCEP issuance only for Fleet-enrolled device identities (fail-closed).",
 	}
 	root.AddCommand(serveCmd())
 	root.AddCommand(versionCmd())
-	if err := root.Execute(); err != nil {
-		logrus.WithError(err).Fatal("command failed")
-	}
+	root.AddCommand(challengeCmd())
+	return root
 }
 
 func versionCmd() *cobra.Command {
@@ -44,21 +52,39 @@ func versionCmd() *cobra.Command {
 func serveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
-		Short: "Run the authorizing webhook HTTP server.",
+		Short: "Run the mutual-TLS authorizing webhook server.",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
+			var roots []byte
+			for _, name := range strings.Split(cfg.ClientCAFiles, ":") {
+				data, err := os.ReadFile(name)
+				if err != nil {
+					return fmt.Errorf("read webhook client CA: %w", err)
+				}
+				roots = append(roots, data...)
+				roots = append(roots, '\n')
+			}
+			tlsConfig, err := server.ClientTLSConfig(roots, strings.Split(cfg.ClientDNSNames, ","))
+			if err != nil {
+				return err
+			}
 			fc := fleet.New(cfg.FleetBaseURL, cfg.FleetToken, cfg.FleetTimeout)
 			authz := authorize.New(fc, cfg.AllowLabel)
-			h := server.New(cfg.SigningSecret, cfg.SCEPChallenge, server.DeciderFunc(func(identity string) bool {
+			h := server.NewMutualTLS(cfg.SCEPChallengeSigningKey, server.DeciderFunc(func(identity string) bool {
 				return authz.Decide(context.Background(), identity)
 			}))
 			// Bind to loopback only — step-ca calls it over localhost on the
 			// same VM. Defense-in-depth in case host firewall rules ever drift.
 			logrus.WithField("port", cfg.Port).Info("authorizing webhook listening")
-			return http.ListenAndServe("127.0.0.1:"+cfg.Port, h)
+			srv := &http.Server{
+				Addr: "127.0.0.1:" + cfg.Port, Handler: h,
+				ReadHeaderTimeout: 5 * time.Second,
+				TLSConfig:         tlsConfig,
+			}
+			return srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 		},
 	}
 }

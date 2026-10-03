@@ -146,12 +146,8 @@
   </Item>
 </Replace>
 <Replace>
-  <!-- SCEP challenge. The upstream step-ca SCEP provisioner authenticates      -->
-  <!-- with a SINGLE STATIC shared challenge (not a per-host secret). The SCEP  -->
-  <!-- path is not webhook-gated - there is no host-level authorization on      -->
-  <!-- Windows, unlike the macOS ACME path (gated by device-attest-01 + an      -->
-  <!-- authorizing webhook). Fleet's proxy substitutes the configured           -->
-  <!-- challenge into this node at deploy time.                                 -->
+  <!-- The self-hosted v2 issuer requires a signed challenge bound to this CN. -->
+  <!-- Static Fleet custom-SCEP challenges are incompatible; see the README. -->
   <Item>
     <Target>
       <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/$FLEET_VAR_SCEP_WINDOWS_CERTIFICATE_ID/Install/Challenge</LocURI>

@@ -155,7 +155,7 @@ locals {
     ca_name_prefix        = var.ca_name_prefix
     smallstep_ca_dns_name = var.smallstep_ca_dns_name
     smallstep_acme_name   = var.smallstep_acme_provisioner_name
-    acme_webhook_url      = var.acme_authorizing_webhook_url
+    acme_webhook_url      = var.acme_authorizing_webhook_url != "" ? var.acme_authorizing_webhook_url : (var.enable_acme_webhook ? "https://127.0.0.1:${var.webhook_port}/authorize" : "")
     # On-VM ACME authorizing webhook (localhost systemd service).
     acme_webhook_enabled          = var.enable_acme_webhook
     webhook_release_version       = var.webhook_release_version
@@ -224,8 +224,8 @@ resource "google_compute_instance" "radius" {
     # on all instances of each resource so the VM waits for the CA's secrets, KMS
     # IAM, and Cloud SQL before the startup script consumes them on first boot.
     google_secret_manager_secret_version.smallstep_db_password,
-    google_secret_manager_secret_version.smallstep_scep_challenge,
-    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_version.scep_challenge_signing_key,
+    google_secret_manager_secret_iam_member.scep_challenge_signing_key_radius,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,
@@ -301,8 +301,8 @@ resource "google_compute_instance" "radius_secondary" {
     google_secret_manager_secret_version.datadog_api_key,
     # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false).
     google_secret_manager_secret_version.smallstep_db_password,
-    google_secret_manager_secret_version.smallstep_scep_challenge,
-    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_version.scep_challenge_signing_key,
+    google_secret_manager_secret_iam_member.scep_challenge_signing_key_radius,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,

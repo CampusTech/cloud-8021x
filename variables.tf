@@ -269,9 +269,14 @@ variable "smallstep_scep_rsa_provisioner_name" {
 }
 
 variable "acme_authorizing_webhook_url" {
-  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback http://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty = ACME provisioner configured but no device should enroll yet."
+  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback https://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty selects the managed HTTPS endpoint when enable_acme_webhook=true; otherwise no ACME authorization hook is configured."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.acme_authorizing_webhook_url == "" || startswith(var.acme_authorizing_webhook_url, "https://")
+    error_message = "step-ca requires HTTPS for authorizing webhooks. Use https://127.0.0.1:<webhook_port>/authorize for the local service."
+  }
 }
 
 variable "smallstep_db_tier" {
@@ -329,11 +334,11 @@ variable "webhook_allow_label" {
 variable "webhook_release_version" {
   description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = "1.2.0"
+  default     = "2.0.0"
 }
 
 variable "webhook_port" {
-  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls http://127.0.0.1:<port>/authorize)."
+  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls https://127.0.0.1:<port>/authorize)."
   type        = number
   default     = 9444
 }

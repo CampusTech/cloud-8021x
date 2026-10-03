@@ -9,7 +9,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def render(enabled=True):
+def render(enabled=True, smallstep=False, webhook=False):
     block = (ROOT / 'compute.tf').read_text().split('startup_script = templatefile', 1)[1].split('\n  })', 1)[0]
     values = {key: 'test' for key in re.findall(r'^    (\w+)\s*=', block, re.M)}
     for key in values:
@@ -18,7 +18,8 @@ def render(enabled=True):
             values[key] = key == 'tls_session_cache'
     values.update(vlan_policy_enabled=enabled, radius_trust_mode='okta', tls_max_version='1.2',
                   tls_session_cache_lifetime=24, radius_clients_json='{}',
-                  rewrite_username_separator=' - ', acme_webhook_url='')
+                  rewrite_username_separator=' - ', acme_webhook_url='https://127.0.0.1:9444/authorize' if webhook else '',
+                  smallstep_enabled=smallstep, acme_webhook_enabled=webhook)
     for name in ('device_policy', 'inventory_policy', 'radius_vlan'):
         values[name + '_module_b64'] = base64.b64encode((ROOT / 'scripts' / (name + '.py')).read_bytes()).decode()
     policy = {'group_vlans': {'staff': 100, 'byod': 200}, 'fallback_vlan': None,
