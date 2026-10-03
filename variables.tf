@@ -58,11 +58,33 @@ variable "disk_size_gb" {
 }
 
 variable "radius_clients" {
-  description = "Map of RADIUS clients (offices). Each gets a unique shared secret auto-generated and stored in Secret Manager."
+  description = "RADIUS offices with unique shared secrets. Use static IPv4 CIDRs, an optional UniFi gateway/console host ID for public WAN discovery, or both."
   type = map(object({
-    cidrs       = list(string)
-    description = optional(string, "Ubiquiti UniFi APs")
+    cidrs         = optional(list(string), [])
+    unifi_host_id = optional(string)
+    description   = optional(string, "Ubiquiti UniFi APs")
   }))
+
+  validation {
+    condition = alltrue([for office, client in var.radius_clients :
+      can(regex("^[a-z][a-z0-9-]{0,47}$", office)) &&
+      (length(client.cidrs) > 0 || try(length(trimspace(client.unifi_host_id)) > 0, false)) &&
+      alltrue([for cidr in client.cidrs : can(cidrnetmask(cidr)) && try(tonumber(split("/", cidr)[1]) > 0, false)])
+    ])
+    error_message = "Office keys must be lowercase safe names (up to 48 characters); each office requires IPv4 CIDRs narrower than /0 or a UniFi host ID."
+  }
+
+  validation {
+    condition = alltrue([for client in values(var.radius_clients) :
+      client.unifi_host_id == null ? true : var.unifi_api_key != "" && client.unifi_host_id == trimspace(client.unifi_host_id)
+    ])
+    error_message = "UniFi host discovery requires unifi_api_key and an exact host ID with no surrounding whitespace."
+  }
+
+  validation {
+    condition     = length(distinct(compact([for client in values(var.radius_clients) : client.unifi_host_id]))) == length(compact([for client in values(var.radius_clients) : client.unifi_host_id]))
+    error_message = "A UniFi host ID can identify only one RADIUS office."
+  }
 }
 
 variable "ssh_allowed_cidrs" {
@@ -361,7 +383,7 @@ variable "enable_fleet_certificate_inventory" {
 # Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
 # not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
 variable "radius_vlan_policy" {
-  description = "Dynamic VLAN authorization. Null disables it. locations keys match radius_clients office names; each location has its own complete group/fallback mapping. Empty locations uses the global mapping. Unknown locations fail closed."
+  description = "Dynamic VLAN authorization. Null disables it. locations keys match radius_clients office names; each location has its own complete group/fallback mapping or dynamic_vlans=false to retain authorization without VLAN assignment. Empty locations uses the global mapping. Unknown locations fail closed."
   type = object({
     group_vlans           = optional(map(number), {})
     fallback_vlan         = optional(number)
@@ -370,7 +392,8 @@ variable "radius_vlan_policy" {
     certificate_inventory = optional(bool, false)
     certificate_max_age   = optional(number, 86400)
     locations = optional(map(object({
-      group_vlans   = map(number)
+      dynamic_vlans = optional(bool, true)
+      group_vlans   = optional(map(number), {})
       fallback_vlan = optional(number)
     })), {})
   })
@@ -385,6 +408,14 @@ variable "radius_vlan_policy" {
       ])
     ])
     error_message = "Location names must be nonempty with no surrounding whitespace, and location VLAN IDs must be integers from 1 through 4094."
+  }
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for policy in values(var.radius_vlan_policy.locations) :
+      policy.dynamic_vlans || (length(policy.group_vlans) == 0 && policy.fallback_vlan == null)
+    ])
+    error_message = "Locations with dynamic_vlans=false must omit group_vlans and fallback_vlan (an empty group_vlans map is allowed)."
   }
 
   validation {

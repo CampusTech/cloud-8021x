@@ -37,7 +37,7 @@ def authorize(request):
         vlan = select_vlan(identity, inventory, config, time.time(), location)
         # Numeric enum values match UniFi's required RADIUS attributes. The VLAN
         # ID itself is a string, per RFC 3580 section 3.31. No tunnel tag is used.
-        reply = (
+        reply = () if vlan is None else (
             ('Tunnel-Type', '13'),
             ('Tunnel-Medium-Type', '6'),
             ('Tunnel-Private-Group-Id', str(vlan)),

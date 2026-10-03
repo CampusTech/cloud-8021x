@@ -69,6 +69,35 @@ class VLANTests(unittest.TestCase):
             request['request'] += (('Tmp-String-1', location), ('NAS-Identifier', 'nyc'))
             self.assert_vlan(vlan, request)
 
+    def test_location_optout_accepts_without_any_tunnel_reply_attributes(self):
+        self.policy['locations'] = {'nyc': {'dynamic_vlans': False}}
+        self.config.write_text(json.dumps(self.policy))
+        for resumed in (False, True):
+            self.write_cache(groups=[])
+            request = self.request(resumed=resumed)
+            request['request'] += (('Tmp-String-1', 'nyc'),)
+            self.assertEqual(self.module.authorize(request), (8, {'reply': ()}))
+            for change in ({'age': 3601}, {'enrolled': False}):
+                self.write_cache(**change)
+                self.assertEqual(self.module.authorize(request), 0)
+            self.write_cache()
+            request = self.request('unknown', resumed=resumed)
+            request['request'] += (('Tmp-String-1', 'nyc'),)
+            self.assertEqual(self.module.authorize(request), 0)
+
+    def test_location_optout_rejects_malformed_mode_and_conflicting_mapping(self):
+        for policy in ({'dynamic_vlans': value, 'group_vlans': {'byod': 200}}
+                       for value in (False, 'false', None, 0, [], {})):
+            with self.subTest(policy=policy):
+                self.policy['locations'] = {'nyc': policy}
+                self.config.write_text(json.dumps(self.policy))
+                request = self.request()
+                request['request'] += (('Tmp-String-1', 'nyc'),)
+                self.assertEqual(self.module.authorize(request), 0)
+        self.policy['locations'] = {'nyc': {'dynamic_vlans': False, 'fallback_vlan': 999}}
+        self.config.write_text(json.dumps(self.policy))
+        self.assertEqual(self.module.authorize(request), 0)
+
     def test_location_mode_rejects_unknown_missing_or_duplicate_context(self):
         self.policy['locations'] = {'nyc': {'group_vlans': {'byod': 210}}}
         self.policy['fallback_vlan'] = 999

@@ -125,7 +125,7 @@ def valid_vlan(value):
 
 
 def select_vlan(identity, inventory, config, now, location=None):
-    """Select from verified SHA256 in certificate mode, otherwise a legacy cert CN."""
+    """Authorize identity, then select VLAN; None means explicit location opt-out."""
     certificate_mode = config.get('certificate_inventory', False)
     if type(certificate_mode) is not bool:
         raise ValueError('invalid certificate inventory mode')
@@ -161,9 +161,18 @@ def select_vlan(identity, inventory, config, now, location=None):
             raise ValueError('invalid location policy')
     else:
         policy = config
-    rules = policy['group_vlans']
+    dynamic_vlans = policy.get('dynamic_vlans', True)
+    if type(dynamic_vlans) is not bool:
+        raise ValueError('invalid dynamic VLAN mode')
+    rules = policy.get('group_vlans', {})
     if not isinstance(rules, dict) or any(not valid_vlan(v) for v in rules.values()):
         raise ValueError('invalid VLAN rules')
+    if not dynamic_vlans:
+        if not locations:
+            raise ValueError('dynamic VLAN opt-out requires an explicit location')
+        if rules or policy.get('fallback_vlan') is not None:
+            raise ValueError('dynamic VLAN opt-out conflicts with VLAN mapping')
+        return None
     vlans = {rules[g] for g in groups if g in rules}
     if len(vlans) > 1:
         raise ValueError('conflicting VLAN rules')

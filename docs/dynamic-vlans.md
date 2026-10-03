@@ -62,17 +62,123 @@ the matched, authenticated client's configured `shortname` as the location.
 it. Offices behind the same RADIUS proxy/egress need distinct trusted client
 paths before they can use separate location policies.
 
+### Source CIDRs and automatic UniFi WAN discovery
+
+`radius_clients.<office>.cidrs` already accepts whole IPv4 subnets, not just `/32`
+addresses. Use a routed/VPN AP subnet when those private source addresses reach
+RADIUS unchanged. If APs reach RADIUS through NAT, match the public egress
+address; listing their private subnet does not match the NATed packets.
+
+For changing public WAN addresses, pin the **gateway/console host ID** returned
+by UniFi's [List Hosts API](https://developer.ui.com/site-manager/v1.0.0/listhosts),
+using the existing `unifi_api_key`. This is the console at the office's network
+edge, not an AP ID, site display name, CloudKey at another location, or a
+remotely hosted controller. The API's `ipAddress` must be the public address
+from which that site's RADIUS packets egress. Optional `reportedState.wans`
+public IPv4 addresses are included for UniFi versions that report multi-WAN.
+
+```hcl
+radius_clients = {
+  nyc = {
+    # Use the exact opaque ID from /v1/hosts, not a name.
+    unifi_host_id = "<NYC gateway host ID>"
+    # Optional additional routed/VPN AP subnet; omit if all RADIUS is NATed.
+    cidrs = ["10.20.0.0/16"]
+  }
+  atl = {
+    unifi_host_id = "<ATL gateway host ID>"
+  }
+  branch-office = {
+    cidrs = ["198.51.100.0/24"]
+  }
+}
+
+radius_vlan_policy = {
+  certificate_inventory = true
+  locations = {
+    nyc = { group_vlans = { "fleet:1" = 100 } }
+    atl = { group_vlans = { "fleet:1" = 110 } }
+    branch-office = { dynamic_vlans = false }
+  }
+}
+```
+
+Each RADIUS VM refreshes the authenticated host list every minute (plus up to
+15 seconds jitter), keeps each office's existing shared secret, and updates its
+own GCP firewall rule and FreeRADIUS client include. Client changes are checked
+with `freeradius -XC` before a restart. Unchanged addresses do not cause restarts.
+A source address change can briefly interrupt authentication; configure both
+RADIUS servers in UniFi and pilot WAN failover. Accounting records already
+signed for that office retain their binding across an address change.
+
+Discovery rejects missing/duplicate host IDs, absent public IPv4 addresses, and
+source ranges overlapping different offices. A failed refresh preserves the
+previous snapshot **for at most 15 minutes**. After that, the RADIUS source guard
+rejects discovered sources even if an old firewall rule/client entry remains.
+Static CIDRs remain configured independently. The API resource's `updatedAt`
+is a modification timestamp, not a heartbeat; the cache lifetime starts at the
+successful API fetch. UniFi must report the current egress address accurately.
+CGNAT/shared egress and external policy routing require a distinct trusted VPN
+path or explicit CIDR setup; a NAS identifier cannot bypass this requirement.
+
+The optional firewall IAM role can read/update only the two discovery firewall
+rules; it cannot create/delete rules. A second role grants the Compute PATCH
+API's prerequisite `compute.networks.updatePolicy` permission at project scope
+(Network does not support resource-name IAM conditions); it grants no other
+network or firewall permissions. Terraform continues to own their network,
+ports, and target tags, while discovery owns `source_ranges` and `disabled`.
+Both rules start disabled. The service's API/shared-secret credentials are
+restored to root-only `/run` storage before discovery runs on each boot.
+Discovery credential failures do not block FreeRADIUS or static source CIDRs.
+
+Check `radius-source-refresh.service` / `.timer` and Datadog service
+`radius-source-discovery` for refresh failures. Inspect the proposed addresses
+without changing clients or firewall rules with:
+
+```sh
+sudo python3 /etc/freeradius/3.0/mods-config/python3/radius_sources.py refresh --dry-run
+sudo systemctl start radius-source-refresh.service
+```
+
+Public WAN discovery, scoped GCP IAM, and physical UniFi failover need a pilot
+on the deployed topology; tests use authenticated API fixtures and real local
+FreeRADIUS packets, without changing cloud infrastructure.
+
 Each location supplies a complete mapping and may specify its own
 `fallback_vlan` for known enrolled devices without a mapped group. When
 `locations` is nonempty, top-level `group_vlans`/`fallback_vlan` are not inherited;
-unknown locations and missing mappings are rejected. With `locations` omitted
+unknown locations and missing mappings are rejected unless the matched location
+explicitly sets `dynamic_vlans = false`. With `locations` omitted
 or empty, the original global mapping continues to work.
 
 No certificate or profile changes are needed when a device moves between offices.
 The current office's mapping is evaluated on authentication, including legacy
 TLS resumption. The certificate readiness report includes each host's VLAN and
 readiness per configured location; overall readiness requires all locations to
-have a valid assignment.
+have a valid assignment or explicitly disable dynamic VLANs.
+
+To keep an office on its SSID's configured network while retaining certificate
+and inventory authorization, opt that location out of VLAN assignment:
+
+```hcl
+radius_vlan_policy = {
+  certificate_inventory = true
+  locations = {
+    nyc = { group_vlans = { "fleet:1" = 100, "fleet:2" = 200 } }
+    atl = { dynamic_vlans = false }
+  }
+}
+```
+
+`dynamic_vlans` defaults to `true`. An opted-out location must omit
+`group_vlans` (or use an empty map) and `fallback_vlan`; conflicting settings are
+rejected. Accepted requests omit all three tunnel VLAN attributes, so UniFi uses
+the SSID's configured network. Exact certificate, enrollment, and inventory
+freshness checks still run; unknown locations still deny. Verified device and
+owner fields remain in authentication and accounting logs, with an empty
+`vlan_id`. The readiness report marks this location ready with `vlan: null` and
+`dynamic_vlans: false`. Setting the whole policy to `null` also disables inventory
+authorization, so use the per-location setting to retain those checks.
 
 VLAN IDs must be integers from 1 to 4094. The built-in cache requires a lifetime
 of at least 600 seconds; custom cache paths allow 60 seconds or more. A null policy (the default) disables
@@ -81,7 +187,8 @@ policy rejects:
 
 - Unknown, ambiguously identified, or unenrolled devices.
 - Missing, malformed, future-dated, or expired inventory snapshots.
-- Devices with no mapped group, unless `fallback_vlan` is configured.
+- Devices with no mapped group, unless `fallback_vlan` is configured or the
+  matched location explicitly disables dynamic VLANs.
 - Devices whose mapped groups select different VLANs.
 
 A fallback applies only to known enrolled devices with no matching rule. It

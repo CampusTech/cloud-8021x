@@ -29,6 +29,8 @@ def certificate_readiness(hosts, devices, observations, config, now):
                 if len(vlans) != 1:
                     raise ValueError('ambiguous VLAN')
                 result['vlan'] = next(iter(vlans))
+                if result['vlan'] is None:
+                    result['dynamic_vlans'] = False
             except (ValueError, KeyError, TypeError):
                 result['reason'] = 'no_vlan_assignment'
                 row['reason'] = 'no_vlan_assignment'

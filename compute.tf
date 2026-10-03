@@ -140,6 +140,9 @@ locals {
     device_policy_module_b64        = filebase64("${path.module}/scripts/device_policy.py")
     inventory_policy_module_b64     = filebase64("${path.module}/scripts/inventory_policy.py")
     radius_identity_module_b64      = filebase64("${path.module}/scripts/radius_identity.py")
+    radius_sources_module_b64       = filebase64("${path.module}/scripts/radius_sources.py")
+    unifi_source_discovery_enabled  = local.unifi_source_discovery_enabled
+    radius_sources_config_b64       = base64encode(jsonencode({ project = google_project.this.project_id, clients = var.radius_clients }))
     radius_log_module_b64           = filebase64("${path.module}/scripts/radius_log.py")
     radius_vlan_module_b64          = filebase64("${path.module}/scripts/radius_vlan.py")
     fleet_certificates_module_b64   = filebase64("${path.module}/scripts/fleet_certificates.py")
@@ -188,7 +191,7 @@ resource "google_compute_instance" "radius" {
   name         = "radius-primary"
   machine_type = var.machine_type
   zone         = var.zone
-  tags         = ["radius-server"]
+  tags         = ["radius-server", "radius-primary"]
 
   boot_disk {
     initialize_params {
@@ -236,6 +239,10 @@ resource "google_compute_instance" "radius" {
     google_secret_manager_secret_version.scep_broker_token,
     google_secret_manager_secret_iam_member.scep_broker_token_radius,
     terraform_data.certificate_inventory_contract,
+    google_project_iam_member.radius_source_discovery,
+    google_project_iam_member.radius_source_network_policy,
+    google_compute_firewall.radius_discovered,
+    google_secret_manager_secret_iam_member.unifi_api_key_access,
     google_secret_manager_secret_version.radius_accounting_key,
     google_secret_manager_secret_iam_member.radius_accounting_key,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
@@ -273,7 +280,7 @@ resource "google_compute_instance" "radius_secondary" {
   name         = "radius-secondary"
   machine_type = var.machine_type
   zone         = var.secondary_zone
-  tags         = ["radius-server"]
+  tags         = ["radius-server", "radius-secondary"]
 
   boot_disk {
     initialize_params {
@@ -318,6 +325,10 @@ resource "google_compute_instance" "radius_secondary" {
     google_secret_manager_secret_version.scep_broker_token,
     google_secret_manager_secret_iam_member.scep_broker_token_radius,
     terraform_data.certificate_inventory_contract,
+    google_project_iam_member.radius_source_discovery,
+    google_project_iam_member.radius_source_network_policy,
+    google_compute_firewall.radius_discovered,
+    google_secret_manager_secret_iam_member.unifi_api_key_access,
     google_secret_manager_secret_version.radius_accounting_key,
     google_secret_manager_secret_iam_member.radius_accounting_key,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,

@@ -55,13 +55,15 @@ def issue(key, device_id, fingerprint, vlan, location, calling_station, now):
         raise ValueError('invalid accounting binding key')
     if not isinstance(device_id, str) or not 1 <= len(device_id.encode()) <= 96:
         raise ValueError('invalid stable device ID')
-    if not valid_vlan(vlan):
+    if vlan is not None and not valid_vlan(vlan):
         raise ValueError('invalid VLAN')
     if not math.isfinite(now) or not 0 <= now < 2 ** 64:
         raise ValueError('invalid binding timestamp')
     fingerprint = bytes.fromhex(normalize_fingerprint(fingerprint))
     context = _context(location, calling_station)
-    payload = _HEADER.pack(int(now), secrets.token_bytes(12), fingerprint, vlan) + device_id.encode()
+    # Zero is a signed internal sentinel for no assignment, never a wire VLAN.
+    payload = _HEADER.pack(int(now), secrets.token_bytes(12), fingerprint,
+                           0 if vlan is None else vlan) + device_id.encode()
     signature = hmac.new(key, _DOMAIN + context + payload, hashlib.sha256).digest()
     return PREFIX + _encode(payload + signature)
 
@@ -92,9 +94,9 @@ def _verify(token, location, station, now):
         raise ValueError('invalid Class signature')
     issued, _, fingerprint, vlan = _HEADER.unpack(payload[:_HEADER.size])
     require_fresh(issued, now, MAX_AGE)
-    if not valid_vlan(vlan):
+    if vlan != 0 and not valid_vlan(vlan):
         raise ValueError('invalid Class VLAN')
-    return payload[_HEADER.size:].decode('utf-8'), fingerprint.hex(), vlan
+    return payload[_HEADER.size:].decode('utf-8'), fingerprint.hex(), None if vlan == 0 else vlan
 
 
 def enrich(request, accounting=False):
@@ -114,8 +116,9 @@ def enrich(request, accounting=False):
         device_id, fingerprint, vlan = _verify(token, location, station, now)
     except (ValueError, TypeError, KeyError, OSError, OverflowError):
         return ()
-    attributes = [('Tmp-String-2', device_id), ('Tmp-String-3', fingerprint),
-                  ('Tunnel-Private-Group-Id', str(vlan))]
+    attributes = [('Tmp-String-2', device_id), ('Tmp-String-3', fingerprint)]
+    if vlan is not None:
+        attributes.append(('Tunnel-Private-Group-Id', str(vlan)))
     try:
         with open(CONFIG_FILE) as stream:
             config = json.load(stream)

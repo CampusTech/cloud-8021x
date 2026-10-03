@@ -108,6 +108,12 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(report['ready'])
         self.assertEqual(report['hosts'][0]['locations'], {
             'nyc': {'reason': 'ready', 'vlan': 210}, 'atl': {'reason': 'ready', 'vlan': 220}})
+        config['locations']['atl'] = {'dynamic_vlans': False}
+        report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
+        self.assertTrue(report['ready'])
+        self.assertEqual(report['hosts'][0]['locations']['atl'], {
+            'reason': 'ready', 'vlan': None, 'dynamic_vlans': False})
+        config['locations']['atl'] = {'group_vlans': {}}
         config['locations']['atl']['group_vlans'] = {}
         report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
         self.assertFalse(report['ready'])

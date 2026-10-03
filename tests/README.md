@@ -22,6 +22,7 @@ Requires local Docker and Terraform:
 ```sh
 python3 tests/radius_integration.py
 python3 tests/radius_integration.py --certificate-inventory
+python3 tests/radius_integration.py --certificate-inventory --source-discovery
 ```
 
 This creates a disposable Debian 12 container, installs FreeRADIUS 3.x and
@@ -47,6 +48,17 @@ It verifies full handshakes on reauthentication (resumption is disabled in this
 mode), current group/enrollment changes, and removal of private handoff files.
 Both modes also exercise the same device from NYC and ATL clients with different
 VLAN IDs, reauthentication, a spoofed NAS-Identifier, and an unknown location.
+Both also verify opted-out locations return no VLAN attributes while keeping
+verified identity, and reauthentication follows changes between mapped and
+opted-out policy. Certificate mode checks signed Class accounting with no VLAN.
+
+The `--source-discovery` run uses the generated source guard with local API-state
+fixtures: fresh dynamic sources, stale authentication/accounting rejection,
+static `/24` acceptance despite stale discovery, spoofed NAS rejection, and
+changed console-ID rejection. Unit tests cover discovery pagination, exact host
+matching, address changes, overlap rejection, rollback, and firewall failure.
+GCP PATCH/IAM and physical UniFi WAN behavior still require a deployment pilot.
+
 Accounting's SQL invocation is replaced by `noop` in the fixture; VLAN policy,
 EAP certificate authorization, post-auth and reject configuration come from the rendered startup script.
 This test does not simulate SCEP issuance or physical UniFi VLAN/trunk/DHCP setup.

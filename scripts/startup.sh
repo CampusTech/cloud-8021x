@@ -100,6 +100,7 @@ echo "=== Installing FreeRADIUS and MariaDB ==="
 apt-get install -y freeradius freeradius-utils freeradius-mysql freeradius-python3 mariadb-server
 
 # Stop services while we configure them
+systemctl stop radius-source-refresh.timer radius-source-refresh.service 2>/dev/null || true
 systemctl stop freeradius 2>/dev/null || true
 
 RADDB="/etc/freeradius/3.0"
@@ -109,13 +110,14 @@ RADDB="/etc/freeradius/3.0"
 mkdir -p "$RADDB/mods-config/python3"
 printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/device_policy.py"
 printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
+printf '%s' '${radius_sources_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_sources.py"
 printf '%s' '${radius_identity_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_identity.py"
 printf '%s' '${radius_log_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_log.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
 printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
 printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
-chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log}.py "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log,radius_sources}.py "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
 chmod 644 "$RADDB/mods-config/python3/windows_certificates.ps1"
 
@@ -1651,6 +1653,106 @@ CLIENTEOF
     done
 done
 
+%{ if unifi_source_discovery_enabled ~}
+# Discovery is a trusted control-plane update, never a packet NAS-ID lookup.
+printf '%s' '${radius_sources_config_b64}' | base64 -d > "$RADDB/radius-sources.json"
+chown root:freerad "$RADDB/radius-sources.json"
+chmod 640 "$RADDB/radius-sources.json"
+install -d -m 0755 /var/lib/radius-sources
+touch /var/log/freeradius/source-discovery.log
+chown root:freerad /var/log/freeradius/source-discovery.log
+chmod 640 /var/log/freeradius/source-discovery.log
+cat > /etc/logrotate.d/radius-source-discovery << 'SOURCELOGROTATEEOF'
+/var/log/freeradius/source-discovery.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    create 0640 root freerad
+}
+SOURCELOGROTATEEOF
+# Bootstrap starts with no discovered clients. The timer restores a fresh set.
+install -o root -g freerad -m 0640 /dev/null "$RADDB/clients-discovered.conf"
+echo '$INCLUDE /etc/freeradius/3.0/clients-discovered.conf' >> "$RADDB/clients.conf"
+cat > /usr/local/bin/radius-source-secrets.py << 'SOURCESECRETSEOF'
+#!/usr/bin/python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+config = json.loads(Path('/etc/freeradius/3.0/radius-sources.json').read_text())
+def secret(name):
+    return subprocess.run(['gcloud', 'secrets', 'versions', 'access', 'latest',
+                           '--secret=' + name, '--project=' + config['project']],
+                          check=True, capture_output=True, text=True, timeout=30).stdout.strip()
+credentials = {'api_key': secret('unifi-api-key'), 'offices': {
+    office: secret('radius-shared-secret-' + office)
+    for office, client in config['clients'].items() if client.get('unifi_host_id')}}
+with tempfile.NamedTemporaryFile(mode='w', dir='/run', delete=False) as stream:
+    os.fchmod(stream.fileno(), 0o600)
+    json.dump(credentials, stream)
+    temporary = stream.name
+os.replace(temporary, '/run/radius-source-secrets.json')
+SOURCESECRETSEOF
+chmod 700 /usr/local/bin/radius-source-secrets.py
+cat > /etc/systemd/system/radius-source-secrets.service << 'SOURCESECRETSUNITEOF'
+[Unit]
+Description=Restore credentials for UniFi RADIUS source discovery
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/radius-source-secrets.py
+RemainAfterExit=yes
+SOURCESECRETSUNITEOF
+cat > /etc/systemd/system/radius-source-refresh.service << 'SOURCEREFRESHUNITEOF'
+[Unit]
+Description=Refresh trusted UniFi RADIUS sources
+Requires=radius-source-secrets.service
+After=radius-source-secrets.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/radius_sources.py refresh
+TimeoutStartSec=180
+StandardOutput=append:/var/log/freeradius/source-discovery.log
+StandardError=append:/var/log/freeradius/source-discovery.log
+SOURCEREFRESHUNITEOF
+cat > /etc/systemd/system/radius-source-refresh.timer << 'SOURCETIMEREOF'
+[Unit]
+Description=Discover UniFi WAN address changes every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+RandomizedDelaySec=15
+[Install]
+WantedBy=timers.target
+SOURCETIMEREOF
+# Discovery credentials must not block fixed-CIDR clients from starting.
+# Remove the dependency if an earlier bootstrap installed it.
+rm -f /etc/systemd/system/freeradius.service.d/source-secrets.conf
+cat > "$RADDB/mods-available/radius_source_check" << 'SOURCECHECKEOF'
+exec radius_source_check {
+    wait = yes
+    program = "/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/radius_sources.py check %%{Packet-Src-IP-Address} %%{client:shortname}"
+    timeout = 5
+}
+SOURCECHECKEOF
+ln -sf "$RADDB/mods-available/radius_source_check" "$RADDB/mods-enabled/radius_source_check"
+systemctl daemon-reload
+systemctl restart radius-source-secrets.service || echo "Source discovery credentials unavailable; fixed-CIDR clients remain available and discovery will retry."
+%{ else ~}
+systemctl disable --now radius-source-refresh.timer 2>/dev/null || true
+systemctl stop radius-source-refresh.service radius-source-secrets.service 2>/dev/null || true
+rm -f "$RADDB/mods-enabled/radius_source_check" \
+    /etc/systemd/system/freeradius.service.d/source-secrets.conf \
+    /etc/systemd/system/radius-source-refresh.{service,timer} \
+    /etc/systemd/system/radius-source-secrets.service /run/radius-source-secrets.json
+systemctl daemon-reload
+%{ endif ~}
+
 # ---------------------------------------------------------------------------
 # 7. Configure MariaDB for RADIUS accounting
 #    FreeRADIUS native sql module for RADIUS accounting.
@@ -3108,6 +3210,15 @@ server default {
             Tmp-String-1 := "%%{client:shortname}"
             Tmp-String-6 := "%%{Packet-Src-IP-Address}"
         }
+%{ if unifi_source_discovery_enabled ~}
+        radius_source_check {
+            reject = 1
+            fail = 1
+        }
+        if (reject || fail) {
+            reject
+        }
+%{ endif ~}
 %{ if certificate_inventory_enabled ~}
         if (!&session-state:Tmp-String-0) {
             update session-state {
@@ -3125,6 +3236,15 @@ server default {
     }
 
     preacct {
+%{ if unifi_source_discovery_enabled ~}
+        radius_source_check {
+            reject = 1
+            fail = 1
+        }
+        if (reject || fail) {
+            reject
+        }
+%{ endif ~}
         update control {
             Tmp-String-1 := "%%{client:shortname}"
             Tmp-String-6 := "%%{Packet-Src-IP-Address}"
@@ -3256,6 +3376,13 @@ logs:
     path: /var/log/freeradius/radius.log
     source: freeradius
     service: radius
+
+%{ if unifi_source_discovery_enabled ~}
+  - type: file
+    path: /var/log/freeradius/source-discovery.log
+    source: freeradius
+    service: radius-source-discovery
+%{ endif ~}
 
   - type: file
     path: /var/log/radius-bootstrap.log
@@ -3585,6 +3712,13 @@ WantedBy=timers.target
 STEPCATIMEREOF
 systemctl daemon-reload
 systemctl enable --now stepca-dd-metrics.timer
+%{ endif ~}
+
+%{ if unifi_source_discovery_enabled ~}
+# Start only after the complete FreeRADIUS configuration is installed.
+systemctl daemon-reload
+systemctl enable --now radius-source-refresh.timer
+systemctl start radius-source-refresh.service || echo "Source discovery unavailable; dynamic sources remain closed until a successful refresh."
 %{ endif ~}
 
 # Restart Datadog Agent to pick up all new config

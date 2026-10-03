@@ -37,6 +37,25 @@ class CertificatePolicyTests(unittest.TestCase):
             inventory if inventory is not None else device_policy.snapshot([self.device], self.now),
             self.config, self.now)
 
+    def test_location_optout_retains_exact_certificate_and_inventory_checks(self):
+        self.config['locations'] = {'nyc': {'dynamic_vlans': False}}
+        inventory = device_policy.snapshot([self.device], self.now)
+        self.assertIsNone(device_policy.select_vlan(self.fingerprint, inventory, self.config, self.now, 'nyc'))
+        for location in (None, 'unknown'):
+            with self.subTest(location=location), self.assertRaises(ValueError):
+                device_policy.select_vlan(self.fingerprint, inventory, self.config, self.now, location)
+        for change in ({'certificate_fingerprints': []}, {'enrolled': False},
+                       {'certificates_observed_at': self.now - 3600}):
+            invalid = device_policy.snapshot([dict(self.device, **change)], self.now)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                device_policy.select_vlan(self.fingerprint, invalid, self.config, self.now, 'nyc')
+        for identity in ('staff-serial', 'b2' * 32):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                device_policy.select_vlan(identity, inventory, self.config, self.now, 'nyc')
+        inventory['updated_at'] = self.now - 3600
+        with self.assertRaises(ValueError):
+            device_policy.select_vlan(self.fingerprint, inventory, self.config, self.now, 'nyc')
+
     def test_snapshot_binds_fingerprint_to_current_device(self):
         result = device_policy.snapshot([self.device], self.now)
         self.assertEqual(result['version'], 2)
@@ -125,6 +144,44 @@ class CertificatePolicyTests(unittest.TestCase):
         self.device['certificates_observed_at'] = self.now - 86400
         with self.assertRaises(ValueError):
             self.select()
+
+    def test_optout_exact_authorization_issues_identity_binding_without_tunnel_attributes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.json'
+            cache = root / 'cache.json'
+            self.config['locations'] = {'nyc': {'dynamic_vlans': False}}
+            self.device['metadata'] = {'serial': 'staff-serial', 'device_name': 'Laptop',
+                                       'device_owner': 'owner@example.com', 'device_model': 'Mac'}
+            config.write_text(json.dumps(dict(self.config, cache_file=str(cache))))
+            cache.write_text(json.dumps(device_policy.snapshot([self.device], self.now)))
+            spec = importlib.util.spec_from_file_location('radius_vlan', SCRIPTS / 'radius_vlan.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.CONFIG_FILE = str(config)
+            module.CERTIFICATE_DIRECTORY = directory
+            token = 'b' * 64
+            (root / token).write_text(self.fingerprint)
+            request = {'request': (('Tmp-String-0', token), ('Tmp-String-1', 'nyc'),
+                                   ('Calling-Station-Id', 'AA-BB-CC-DD-EE-FF'),
+                                   ('User-Name', 'untrusted-identity')),
+                       'config': (('Tmp-String-1', 'nyc'),)}
+            key = root / 'key'
+            key.write_bytes(b'A' * 64)
+            with patch.object(radius_identity, 'KEY_FILE', str(key)), \
+                 patch.object(radius_identity, 'CONFIG_FILE', str(config)):
+                result = module.authorize(request)
+                self.assertEqual(result[0], 8)
+                self.assertEqual(set(dict(result[1]['reply'])), {'Class'})
+                for accounting in (False, True):
+                    packet = dict(request, reply=result[1]['reply'])
+                    if accounting:
+                        packet['request'] += result[1]['reply']
+                    attrs = dict(radius_identity.enrich(packet, accounting=accounting))
+                    self.assertEqual(attrs, {'Tmp-String-2': 'fleet:1', 'Tmp-String-3': self.fingerprint,
+                        'Login-LAT-Service': 'staff-serial', 'Filter-Id': 'Laptop',
+                        'Reply-Message': 'owner@example.com', 'Login-LAT-Node': 'Mac'})
+                self.assertEqual(module.authorize(request), 0)
 
     def test_radius_requires_server_session_binding_even_with_valid_cn(self):
         with tempfile.TemporaryDirectory() as directory:

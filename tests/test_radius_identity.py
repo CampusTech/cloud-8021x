@@ -58,6 +58,20 @@ class RadiusIdentityTests(unittest.TestCase):
                     'Filter-Id': 'Actual laptop', 'Reply-Message': 'actual@example.com',
                     'Login-LAT-Node': 'MacBook Pro'})
 
+    def test_optout_binding_preserves_verified_identity_without_vlan_attribute(self):
+        token = self.issue(vlan=None)
+        for accounting in (False, True):
+            with self.subTest(accounting=accounting):
+                attrs = dict(self.module.enrich(self.request(token, accounting), accounting=accounting))
+                self.assertEqual(attrs, {'Tmp-String-2': self.device, 'Tmp-String-3': self.fp,
+                    'Login-LAT-Service': 'ACTUAL-SERIAL', 'Filter-Id': 'Actual laptop',
+                    'Reply-Message': 'actual@example.com', 'Login-LAT-Node': 'MacBook Pro'})
+        self.cache.unlink()
+        self.assertEqual(dict(self.module.enrich(self.request(token))), {
+            'Tmp-String-2': self.device, 'Tmp-String-3': self.fp})
+        self.assertEqual(self.module.enrich(self.request(token, location='atl')), ())
+        self.assertEqual(self.module.enrich(self.request(token, station='11:22:33:44:55:66')), ())
+
     def test_class_wire_hex_and_mac_normalization(self):
         token = self.issue()
         self.assertLessEqual(len(token.encode()), 253)

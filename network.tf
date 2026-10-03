@@ -53,7 +53,10 @@ resource "google_compute_firewall" "allow_radius" {
     ports    = ["1812", "1813"]
   }
 
-  source_ranges = distinct(flatten([for k, v in var.radius_clients : v.cidrs]))
+  # Empty source_ranges means all sources in GCP, so explicitly disable the
+  # static rule when every office uses discovery.
+  source_ranges = length(local.static_radius_sources) > 0 ? local.static_radius_sources : ["192.0.2.1/32"]
+  disabled      = length(local.static_radius_sources) == 0
   target_tags   = ["radius-server"]
 }
 

@@ -13,8 +13,11 @@ import time
 RADDB = Path('/etc/freeradius/3.0')
 CACHE = RADDB / 'device-policy-cache.json'
 CERTIFICATE_MODE = '--certificate-inventory' in sys.argv
+SOURCE_DISCOVERY = '--source-discovery' in sys.argv
+SOURCE_STATE = Path('/var/lib/radius-sources/state.json')
 AUTH_LOG = Path('/var/log/freeradius/radius-auth.json')
 ACCT_LOG = Path('/var/log/freeradius/radius-acct.json')
+NO_VLAN = 'unassigned'  # Access-Accept with no tunnel attributes; None means reject.
 DEVICES = {
     '42': {'serial': '', 'device_owner': 'byod"owner\n@example.com',
            'device_name': 'Personal "Mac"\nLaptop', 'device_model': 'MacBook Air'},
@@ -32,7 +35,7 @@ def configure():
              'CERTIFICATE_INVENTORY=' + str(CERTIFICATE_MODE).lower(),
              'TLS_SESSION_CACHE=true', 'TLS_SESSION_CACHE_LIFETIME=24', 'TLS_MAX_VERSION=1.2']
     start = source.index('# Shared identity/policy code')
-    end = source.index('\n', source.index('\nchmod 644', start) + 1)
+    end = source.index('\nCERT_DIR=', start)
     parts.append(source[start:end])
     start = source.index('echo "=== Configuring EAP-TLS')
     parts.append(source[start:source.index('# 6. Configure RADIUS', start)])
@@ -42,6 +45,13 @@ def configure():
     parts.append(source[start:source.index('# 11. Configure FreeRADIUS JSON auth logging', start)])
     start = source.index('echo "=== Configuring JSON auth logging')
     parts.append(source[start:source.index('# 12. Configure status', start)])
+    if SOURCE_DISCOVERY:
+        start = source.index('cat > "$RADDB/mods-available/radius_source_check"')
+        end = source.index('\nSOURCECHECKEOF', start) + len('\nSOURCECHECKEOF')
+        parts.append(source[start:end])
+        parts.append('ln -sf "$RADDB/mods-available/radius_source_check" "$RADDB/mods-enabled/radius_source_check"')
+    else:
+        (RADDB / 'mods-enabled/radius_source_check').unlink(missing_ok=True)
     subprocess.run(['bash'], input='\n'.join(parts), text=True, check=True)
     for log in (AUTH_LOG, ACCT_LOG):
         log.write_text('')
@@ -58,6 +68,20 @@ def configure():
         for suffix, office in [(2, 'nyc'), (3, 'atl'), (4, 'unknown-office')]:
             stream.write(f'\nclient office{suffix} {{\n ipaddr = 127.0.0.{suffix}\n'
                          f' secret = testing123\n shortname = {office}\n}}\n')
+    if SOURCE_DISCOVERY:
+        with (RADDB / 'clients.conf').open('a') as stream:
+            for name, address, office in [('discovered', '127.0.0.5', 'dynamic-office'),
+                                           ('old-discovered', '127.0.0.6', 'dynamic-office'),
+                                           ('cidr', '127.0.1.0/24', 'cidr-office')]:
+                stream.write(f'\nclient {name} {{\n ipaddr = {address}\n'
+                             f' secret = testing123\n shortname = {office}\n}}\n')
+        clients = {office: {'cidrs': [f'127.0.0.{suffix}/32']}
+                   for suffix, office in [(1, 'localhost'), (2, 'nyc'), (3, 'atl'), (4, 'unknown-office')]}
+        clients['dynamic-office'] = {'cidrs': [], 'unifi_host_id': 'fixture-console'}
+        clients['cidr-office'] = {'cidrs': ['127.0.1.0/24']}
+        (RADDB / 'radius-sources.json').write_text(json.dumps({'project': 'test', 'clients': clients}))
+        SOURCE_STATE.parent.mkdir(exist_ok=True)
+        source_state()
     # Accounting's SQL database is unrelated to EAP auth; this fixture has no DB.
     site = RADDB / 'sites-available/default'
     site.write_text(site.read_text().replace('        sql\n', '        noop\n'))
@@ -96,6 +120,13 @@ chmod 640 server-key.pem
     if result.returncode:
         raise AssertionError(result.stdout + result.stderr)
     print('PASS: rendered FreeRADIUS configuration validates', flush=True)
+
+
+def source_state(age=0, identifier='fixture-console'):
+    SOURCE_STATE.write_text(json.dumps({'updated_at': time.time() - age,
+        'host_ids': {'dynamic-office': identifier},
+        'sources': {'dynamic-office': ['127.0.0.5/32']}}))
+    SOURCE_STATE.chmod(0o644)
 
 
 def inventory(groups=None, enrolled=True, age=0, certificate_age=0, ambiguous=False):
@@ -153,7 +184,8 @@ def identity_log(record, device_id, certificate, vlan):
     """These assertions exercise emitted JSON, including quote/newline escaping."""
     der = ssl.PEM_cert_to_DER_cert((RADDB / 'certs' / (certificate + '.pem')).read_text())
     expected = dict(DEVICES[device_id], device_id=device_id,
-                    certificate_fingerprint=hashlib.sha256(der).hexdigest(), vlan_id=str(vlan),
+                    certificate_fingerprint=hashlib.sha256(der).hexdigest(),
+                    vlan_id='' if vlan == NO_VLAN else str(vlan),
                     identity_verified=True, raw_identity='STAFFSERIAL')
     for key, value in expected.items():
         assert record.get(key) == value, (key, record, value)
@@ -166,7 +198,7 @@ def unattributed_log(record):
 
 
 def accounting(name, binding, status=1, source_ip='127.0.0.1', station=None,
-               expected_device='42', expected_vlan=200):
+               expected_device='42', expected_vlan=200, expect_drop=False):
     """Send real Accounting-Requests with unchanged or deliberately bad Class."""
     def attr(kind, value):
         if isinstance(value, str):
@@ -187,10 +219,20 @@ def accounting(name, binding, status=1, source_ip='127.0.0.1', station=None,
     request = header + authenticator + attrs
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
         client.bind((source_ip, 0))
-        client.settimeout(5)
+        client.settimeout(2 if expect_drop else 5)
         client.sendto(request, ('127.0.0.1', 1813))
+        if expect_drop:
+            try:
+                response, _ = client.recvfrom(65535)
+            except socket.timeout:
+                assert records(ACCT_LOG)[offset:] == [], (name, 'Denied accounting must not be logged')
+                print('PASS: accounting dropped', name, flush=True)
+                return
+            raise AssertionError((name, 'Denied accounting unexpectedly received a response', response))
         response, _ = client.recvfrom(65535)
     assert response[:2] == bytes((5, status)), (name, response)
+    if expected_vlan == NO_VLAN:
+        assert not vlan_attributes(response), (name, 'Opt-out accounting must not emit a VLAN')
     assert response[4:20] == hashlib.md5(response[:4] + authenticator + response[20:] + secret).digest()
     logged = records(ACCT_LOG)[offset:]
     assert len(logged) == 1, (name, logged)
@@ -265,7 +307,8 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
             stop.set()
             worker.join()
     Path('/tmp/eap-' + name + '.log').write_text(result.stdout + result.stderr)
-    want = [(3, []) if vlan is None else (2, [(64, 13), (65, 6), (81, str(vlan))]) for vlan in expected]
+    want = [(3, []) if vlan is None else (2, [] if vlan == NO_VLAN else
+            [(64, 13), (65, 6), (81, str(vlan))]) for vlan in expected]
     assert not errors, errors
     assert replies == want, (name, replies, want, result.stdout[-2000:])
     assert (result.returncode == 0) == (expected[-1] is not None), (name, result.returncode)
@@ -348,6 +391,23 @@ def main():
             CACHE.write_text('{')
             authenticate('corrupt-cache', expected=(None,))
             inventory()
+            if SOURCE_DISCOVERY:
+                source_state()
+                dynamic = authenticate('fresh-discovered-source', source_ip='127.0.0.5')
+                if CERTIFICATE_MODE:
+                    accounting('fresh-discovered-source', dynamic, source_ip='127.0.0.5')
+                authenticate('unobserved-source-spoofed-nas', source_ip='127.0.0.6',
+                             nas_identifier='dynamic-office', expected=(None,))
+                source_state(age=901)
+                authenticate('stale-discovered-source', source_ip='127.0.0.5',
+                             nas_identifier='localhost', expected=(None,))
+                if CERTIFICATE_MODE:
+                    accounting('stale-discovered-source', dynamic, source_ip='127.0.0.5', expect_drop=True)
+                authenticate('static-cidr-with-stale-discovery', source_ip='127.0.1.27')
+                source_state(identifier='other-console')
+                authenticate('changed-console-id', source_ip='127.0.0.5', expected=(None,))
+                source_state()
+                authenticate('refreshed-discovered-source', source_ip='127.0.0.5')
             policy_file = RADDB / 'vlan-policy.json'
             policy = json.loads(policy_file.read_text())
             policy['locations'] = {'nyc': {'group_vlans': {'byod': 210}},
@@ -357,6 +417,41 @@ def main():
             authenticate('atl-location-spoofed-nas', source_ip='127.0.0.3', nas_identifier='nyc', expected=(220,))
             authenticate('atl-location-reauth', source_ip='127.0.0.3', expected=(220, 220))
             authenticate('unknown-location', source_ip='127.0.0.4', nas_identifier='nyc', expected=(None,))
+
+            def atl_policy(value):
+                policy['locations']['atl'] = value
+                policy_file.write_text(json.dumps(policy))
+
+            atl_policy({'dynamic_vlans': False})
+            inventory(groups=[])
+            optout = authenticate('atl-optout-unmapped', source_ip='127.0.0.3', expected=(NO_VLAN,))
+            if CERTIFICATE_MODE:
+                for status in (1, 3, 2):
+                    accounting('optout-' + str(status), optout, status=status,
+                               source_ip='127.0.0.3', expected_vlan=NO_VLAN)
+                accounting('optout-cross-office', optout, source_ip='127.0.0.2', expected_device=None)
+            inventory()
+            authenticate('nyc-still-mapped', source_ip='127.0.0.2', expected=(210,))
+            authenticate('optout-unknown-location', source_ip='127.0.0.4', expected=(None,))
+            authenticate('optout-unknown-certificate', certificate='unknown', source_ip='127.0.0.3', expected=(None,))
+            inventory(age=3601)
+            authenticate('optout-expired-cache', source_ip='127.0.0.3', expected=(None,))
+            if CERTIFICATE_MODE:
+                inventory(certificate_age=86401)
+                authenticate('optout-expired-certificate', source_ip='127.0.0.3', expected=(None,))
+                inventory(ambiguous=True)
+                authenticate('optout-ambiguous-certificate', source_ip='127.0.0.3', expected=(None,))
+                inventory()
+                authenticate('optout-forged-staff-cn', certificate='forged-staff', source_ip='127.0.0.3', expected=(None,))
+            inventory()
+            authenticate('optout-reauth-unenrolled', source_ip='127.0.0.3', expected=(NO_VLAN, None),
+                         after_accept=lambda: inventory(enrolled=False))
+            inventory()
+            authenticate('optout-reauth-to-mapped', source_ip='127.0.0.3', expected=(NO_VLAN, 220),
+                         after_accept=lambda: atl_policy({'group_vlans': {'byod': 220}}))
+            authenticate('mapped-reauth-to-optout', source_ip='127.0.0.3', expected=(220, NO_VLAN),
+                         after_accept=lambda: atl_policy({'dynamic_vlans': False}))
+
         finally:
             server.terminate()
             server.wait(timeout=10)
