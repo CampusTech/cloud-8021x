@@ -60,8 +60,10 @@ switches.
 
 ## Configuration and staging
 
-Publish webhook **2.0.0** before applying its Terraform version pin. No cloud
-changes or profile delivery happen just by merging this PR.
+Ensure the **webhook-v2.0.0** release and checksum assets exist before applying
+the `webhook_release_version` pin. The release workflow runs on relevant merges
+to main (or manual dispatch); wait for it to succeed. Merging alone does not
+apply Terraform or deliver profiles.
 
 First enable collection to measure existing certificate coverage:
 
@@ -77,12 +79,16 @@ fleetd with scripts enabled. Fleet's observer role cannot issue commands;
 a maintainer scoped to the managed fleets (or a global maintainer) supports both
 operations. Store the token directly in Secret Manager, not Terraform variables.
 
-Then enable fingerprint authorization and the self-hosted dynamic broker:
+After coverage is complete, enable fingerprint authorization and the self-hosted
+dynamic broker. The following builds on the collection settings above:
 
 ```hcl
-enable_smallstep_ca = true
-enable_acme_webhook = true
-radius_trust_mode  = "smallstep" # "both" also supports migration from another CA
+enable_smallstep_ca          = true
+smallstep_ca_dns_name        = "ca.example.com"
+smallstep_ca_rsa_dns_name    = "ca-rsa.example.com"
+enable_acme_webhook          = true
+acme_authorizing_webhook_url = "" # managed loopback HTTPS endpoint
+radius_trust_mode           = "smallstep" # "both" also trusts legacy Okta clients
 
 radius_vlan_policy = {
   certificate_inventory = true
@@ -94,6 +100,12 @@ radius_vlan_policy = {
   }
 }
 ```
+
+The CA hostnames need working HTTPS and DNS pointing at their load balancers,
+as described by the Terraform outputs. This is separate from AP RADIUS server
+addresses, which can be IPs. `smallstep` and `both` also switch the RADIUS
+**server certificate** to the EC Smallstep chain: stage that root and the server
+name in client Wi-Fi profiles before cutover. See [trust roots](../examples/README.md#choose-the-correct-trust-root).
 
 Fingerprint mode applies to **every client using these RADIUS servers**, including
 existing ACME certificates. The built-in collector supports Apple macOS, iOS,
@@ -112,8 +124,9 @@ to avoid unbounded retries. Investigate unresolved reservations before resetting
 collector state.
 Both VMs keep their own private collection state and must have coverage.
 
-The broker is enabled only with fingerprint enforcement and the built-in Fleet
-collector; Terraform rejects an unsafe combination. Collection alone does not
+The broker is automatically enabled by `enable_acme_webhook` plus
+`radius_vlan_policy.certificate_inventory`; it requires the built-in Fleet
+collector and self-hosted CA. There is no separate broker toggle; Terraform rejects an unsafe combination. Collection alone does not
 enable neutral challenge issuance.
 
 ## Register the CA and deliver one profile
@@ -164,7 +177,7 @@ SYSTEM. Migrate any existing User-scoped SCEP and user-auth Wi-Fi profiles to
 Device scope and machine authentication together. Collect existing machine
 certificates before enforcement where possible. A real Windows pilot must check
 certificate installation, Fleet script completion, both VMs' coverage, initial
-EAP-TLS, correct NYC VLAN and DHCP, pre-login authentication, and renewal. Local
+EAP-TLS, correct site-specific VLAN and DHCP, pre-login authentication, and renewal. Local
 protocol tests do not substitute for that Windows pilot.
 
 ## Friday-to-Tuesday rollout checks

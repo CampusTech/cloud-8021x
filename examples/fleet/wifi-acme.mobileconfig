@@ -8,7 +8,7 @@
 <!-- Fleet's $FLEET_VAR_HOST_HARDWARE_SERIAL substitution (Fleet replaces it -->
 <!-- per host at profile delivery time). See examples/fleet/README.md.       -->
 <!--                                                                        -->
-<!-- Substitute: ACME_DIRECTORY_URL, SSID, CA_CERT_PEM (see README).         -->
+<!-- Substitute: ACME_DIRECTORY_URL, SSID, CA_CERT_PEM, RADIUS_SERVER_CN.         -->
 <!-- ===================================================================== -->
 <plist version="1">
   <dict>
@@ -85,6 +85,12 @@
               <string>$FLEET_VAR_HOST_HARDWARE_SERIAL</string>
             </array>
           </array>
+          <array>
+            <array>
+              <string>OU</string>
+              <string>$FLEET_VAR_CERTIFICATE_RENEWAL_ID</string>
+            </array>
+          </array>
         </array>
       </dict>
       <dict>
@@ -150,6 +156,12 @@
           </array>
           <key>UserName</key>
           <string/>
+          <key>TLSTrustedServerNames</key>
+          <array>
+            <string>RADIUS_SERVER_CN</string>
+          </array>
+          <key>TLSAllowTrustExceptions</key>
+          <false/>
           <key>PayloadCertificateAnchorUUID</key>
           <array>
             <string>F4B10AEC-C73D-46B6-8E2E-990934E81D34</string>

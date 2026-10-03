@@ -1,5 +1,10 @@
 # ACME Authorizing Webhook Implementation Plan (Plan 2 of 3)
 
+> Historical design/implementation record. Commands and configuration may have
+> been superseded. Use the current [README](../../../README.md),
+> [VLAN guide](../../dynamic-vlans.md), and
+> [SCEP deployment guide](../../scep-identity-binding.md) for deployment.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the security gate that makes self-hosted ACME safe: a small Go HTTPS service that step-ca calls (AUTHORIZING webhook) on every certificate order, which allows issuance ONLY for device serials that are enrolled hosts in Fleet — fail-closed on any doubt. Deploy it on Cloud Run via Terraform in `cloud-8021x`, and wire its URL into step-ca.

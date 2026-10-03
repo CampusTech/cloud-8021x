@@ -4,10 +4,10 @@
 <!-- TEMPLATE ONLY - not deployed by Terraform. Substitute the tokens       -->
 <!-- (see examples/README.md) and import into your MDM.                     -->
 <!--                                                                        -->
-<!-- Installs your self-hosted step-ca root CA into the Local Machine        -->
+<!-- Installs the RADIUS server trust root into the Local Machine        -->
 <!-- Trusted Root store (RootCATrustedCertificates CSP) so Windows can       -->
 <!-- validate the RADIUS server certificate chain when joining the 802.1X    -->
-<!-- (EAP-TLS) network, once RADIUS trusts your CA.                          -->
+<!-- (EAP-TLS) network. This is separate from client-certificate trust.                          -->
 <!--                                                                        -->
 <!-- Windows counterpart of the com.apple.security.root payload in           -->
 <!-- examples/acme/wifi-acme.mobileconfig - same certificate, same trust     -->

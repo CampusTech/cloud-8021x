@@ -40,6 +40,22 @@ Technical deep-dive into how cloud-8021x works. Read this if you need to modify 
 
 ## System Overview
 
+Terraform deploys **two** RADIUS VMs in separate zones. The diagram below shows
+one node's base services; each also hosts optional EC/RSA step-ca services, the
+loopback authorization webhook, and (in inventory mode) the Fleet challenge
+broker. CA state uses shared Cloud SQL Postgres; RADIUS accounting remains in
+**local MariaDB on each node**.
+
+Fleet or Jamf bulk inventory runs every five minutes with VLAN policy enabled,
+or every 30 minutes otherwise. Fleet certificate commands/scripts run hourly,
+with results polled during inventory refresh. UniFi AP enrichment runs every
+five minutes; separate source discovery runs every minute with up to 15 seconds
+jitter. See [VLAN policy](docs/dynamic-vlans.md) and
+[SCEP/inventory staging](docs/scep-identity-binding.md).
+
+The compact diagram depicts the legacy Jamf enrichment path; Fleet replaces
+that adapter and adds certificate inventory when configured.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ GCE VM (Debian 12)                                          │
@@ -68,8 +84,8 @@ Technical deep-dive into how cloud-8021x works. Read this if you need to modify 
 Key processes:
 - **FreeRADIUS** — handles all RADIUS auth and accounting
 - **MariaDB** — stores RADIUS accounting records (`radacct` table)
-- **rlm_python3 module** — runs inside FreeRADIUS, reads local cache files to enrich auth/accounting with device and AP info
-- **Cron scripts** — run outside FreeRADIUS, call external APIs (Jamf, UniFi) and write cache files
+- **rlm_python3 modules** — enforce source/VLAN policy and read local caches for device/AP enrichment; exact certificate capture and signed accounting bindings support serial-free devices
+- **Cron scripts** — run outside FreeRADIUS, call external APIs (Fleet or Jamf, plus AP integrations) and write cache files
 - **Datadog Agent** — ships logs and metrics
 - **freeradius_exporter** — Prometheus exporter, scraped by Datadog
 
@@ -81,18 +97,19 @@ Key processes:
 
 | Step | Section | What it does |
 |------|---------|-------------|
-| 0 | Idempotency check | If FreeRADIUS is already running, exit immediately |
+| 0 | Downgrade/idempotency guards | Refuse unsafe fingerprint downgrade; skip only if FreeRADIUS is running and the rendered script hash matches the completed bootstrap stamp |
 | 1 | System prerequisites | `apt-get update`, install `curl`, `jq`, `python3` |
 | 2 | Install packages | `freeradius`, `freeradius-utils`, `freeradius-mysql`, `freeradius-python3`, `mariadb-server` |
 | 3 | Okta CA | Retrieve Okta Intermediate CA (and optionally Root CA) from Secret Manager → `/etc/freeradius/3.0/certs/okta-ca.pem` |
 | 4 | Server certificates | Restore from Secret Manager if they exist, otherwise generate self-signed CA + server cert and store them back |
+| 4a | Optional CA/webhook | Restore or initialize EC/RSA CAs, start step-ca and mTLS webhook, configure broker when enabled, select Smallstep server certificate and renewal timers |
 | 5 | EAP-TLS config | Write `mods-available/eap` with certificate paths, TLS settings |
-| 6 | RADIUS clients | Generate `clients.conf` from `radius_clients` variable — one client block per office with per-office shared secrets from Secret Manager |
+| 6 | RADIUS clients | Generate static clients from office CIDRs and shared secrets; optional UniFi discovery maintains dynamic client includes and firewall sources |
 | 7 | MariaDB setup | Create `radius` database, load FreeRADIUS SQL schema, configure `mods-available/sql` |
 | 8 | Whitespace filter patch | Disable whitespace rejection in `policy.d/filter` (SCEP CNs contain spaces) |
-| 9 | Jamf credentials + cache | Write credentials JSON, deploy `jamf-device-cache.sh` (bulk) and `jamf-device-fetch.sh` (single), run initial cache build, set up cron |
+| 9 | Inventory + cache | Deploy Fleet or Jamf bulk/single-host adapters; optional Fleet certificate collection, policy snapshot and readiness report |
 | 10 | UniFi cache | Write credentials, deploy `unifi-ap-cache.sh`, run initial cache build, set up cron |
-| 10a | Python module | Write `radius_lookups.py` and FreeRADIUS module config, enable module |
+| 10a | Python modules | Install policy, source-discovery, certificate and identity helpers; render `radius_lookups.py` and module configuration |
 | 11 | JSON logging | Configure `json_log` (auth) and `acct_log` (accounting) linelog modules |
 | 12 | Virtual server | Write `sites-available/default` with authorize → authenticate → accounting → post-auth pipeline |
 | 13 | Status server | Configure status virtual server on `127.0.0.1:18121` for Prometheus exporter |
@@ -103,7 +120,9 @@ Key processes:
 
 ### Re-running the startup script
 
-The idempotency check means you must stop FreeRADIUS before re-running:
+A changed rendered script runs on the next bootstrap even if FreeRADIUS is active.
+An unchanged completed script is skipped while the service is running. To force
+a full run, stop FreeRADIUS first (do one node at a time after verifying failover):
 
 ```bash
 sudo systemctl stop freeradius
@@ -115,72 +134,71 @@ A `gcloud compute instances reset` also works (full VM reboot).
 
 ## Certificate Architecture
 
-Two completely independent CA chains:
+Client trust and server trust have distinct roles:
 
-```
-Server chain (RADIUS server identity):
-  Self-signed RADIUS CA (CN=<server_cert_org> RADIUS CA)
-    └── Server cert (CN=<server_cert_cn>)
+| Mode | Client validation bundle | Standard presented RADIUS server chain |
+| --- | --- | --- |
+| `okta` | Configured Okta intermediate/root | Legacy self-signed RADIUS CA → server leaf |
+| `smallstep` | EC ACME and RSA SCEP CA chains | Smallstep EC root → EC intermediate → server leaf |
+| `both` | Combined Okta and Smallstep bundle | Same Smallstep server chain |
 
-Client chain (device identity):
-  Okta Root CA (optional)
-    └── Okta Intermediate Authority
-          └── Client SCEP cert (CN=<serial> managementAttestation <udid> <profile>)
-```
+The RSA SCEP root is not normally the server trust anchor. MDM Wi-Fi profiles
+must trust the actual server root **and pin `server_cert_cn`** independently of
+the client issuer. See [profile trust-root selection](examples/README.md#choose-the-correct-trust-root).
 
-- **Server CA + cert**: Generated on first boot by the startup script using `openssl`. Stored in Secret Manager so they persist across VM replacements. The CA cert must be uploaded to Jamf once (trusted server certificate in WiFi profile).
-- **Client CA**: Okta Intermediate CA cert provided via `okta_ca_cert_pem` Terraform variable, stored in Secret Manager, written to `/etc/freeradius/3.0/certs/okta-ca.pem`. FreeRADIUS validates client certificates against this CA.
-- **EAP-TLS config**: `ca_file` points to the Okta CA (client validation), while `certificate_file`/`private_key_file` point to the server cert/key.
+The bootstrap persists CA/server material in Secret Manager and restores it
+on replacement VMs. Runtime private keys and credentials use protected local
+files; they are not universally memory-only. EC/RSA intermediate signing uses
+Cloud KMS HSM; the SCEP message decrypter is a shared software RSA key.
+`radius-cert-renew.timer` renews the Smallstep server leaf before
+expiry; devices/MDM separately renew their client certificates.
+
+Attested ACME checks the Apple-signed permanent identifier against Fleet.
+Inventory-mode SCEP deliberately issues the neutral CN `cloud-8021x-inventory`:
+its challenge permits issuance, but cannot select a host or VLAN. RADIUS then
+requires the exact leaf fingerprint reported through authenticated Fleet MDM
+(Apple) or SYSTEM script results (Windows). Legacy identity-bound SCEP is
+retained for other integrations. Never use the neutral CN as network identity.
 
 ## Authentication Flow
 
-```
-MacBook              WiFi AP              FreeRADIUS
-  │                    │                     │
-  │── 802.1X Start ──> │                     │
-  │                    │── Access-Request ─> │
-  │                    │  (User-Name=serial) │
-  │                    │                     │
-  │                    │   authorize:        │
-  │                    │    filter_username  │
-  │                    │    eap → ok=return  │
-  │                    │                     │
-  │<══════ EAP-TLS handshake (multi) ═════>  │
-  │  Client presents SCEP cert               │
-  │  Server presents RADIUS cert             │
-  │  Validates client cert vs Okta CA        │
-  │                    │                     │
-  │                    │   authenticate:     │
-  │                    │    eap              │
-  │                    │                     │
-  │                    │   post-auth:        │
-  │                    │    radius_lookups   │
-  │                    │     Jamf cache read │
-  │                    │     UniFi cache     │
-  │                    │     SSID extract    │
-  │                    │     Set reply attrs │
-  │                    │    json_log         │
-  │                    │     Write auth JSON │
-  │                    │                     │
-  │                    │<── Access-Accept ──-│
-  │<── WiFi Connected─ │                     │
-  │                    │                     │
-  │                    │── Acct-Start ─────> │
-  │                    │                     │
-  │                    │   accounting:       │
-  │                    │    radius_lookups   │
-  │                    │     Jamf + UniFi    │
-  │                    │    sql → MariaDB    │
-  │                    │    acct_log → JSON  │
+```text
+Device → AP → authenticated RADIUS client (office shared secret)
+  authorize: source guard (if discovery enabled), EAP negotiation
+  authenticate: EAP-TLS chain validation and proof of private-key possession
+    check-device-vlan: exact leaf fingerprint (inventory mode) or secure CN (legacy)
+      → fresh inventory + current enrollment + office group mapping
+      → reject unknown/ambiguous/stale/unmapped identities
+  post-auth: current VLAN policy, verified identity, AP enrichment, JSON auth log
+      → Access-Accept with VLAN attributes and signed Class (inventory mode)
+  accounting: source guard, verify echoed Class, enrich, local SQL + JSON log
 ```
 
 ### Key details
 
-- **EAP outer identity**: The WiFi profile sets `$SERIALNUMBER` as the EAP outer identity. This appears as `User-Name` in the RADIUS request and is used to look up the device in Jamf.
-- **User-Name rewrite**: In post-auth, if Jamf returns an email, the Python module rewrites `User-Name` to `email - serial` (e.g. `robbie@campus.edu - H176YHQ9XV`). This is what the AP sees and caches.
-- **Accounting enrichment**: Accounting packets arrive with `User-Name` set to either the raw serial or the rewritten `email - serial`. The Python module extracts the serial (splitting on ` - ` if needed) and does the same cache lookup.
+- `User-Name`, CSR subjects, NAS identifiers, and client MACs are not trusted
+  inventory identities. Fingerprint mode captures the actual TLS leaf and
+  disables session resumption. Legacy CN mode rechecks policy on resumed sessions.
+- The authenticated client's configured `shortname` selects the location.
+  Its mapping is evaluated on authentication. `dynamic_vlans = false` omits
+  all tunnel VLAN attributes while retaining device authorization.
+- In inventory mode, accepted requests mint a signed RADIUS `Class` binding
+  device ID, leaf fingerprint, and original VLAN to the office and client MAC.
+  Accounting must echo it. Wrong/missing/expired bindings leave device/owner
+  attribution empty and `identity_verified: false`. The shared signing key is
+  restored before FreeRADIUS starts on both nodes; bindings last 30 days.
+- Legacy log enrichment can resolve a serial from `User-Name`; those fields
+  are diagnostic and do not have fingerprint-mode verification guarantees.
+- `rewrite_username` defaults to false. When enabled, legacy mode returns
+  `email - serial`; fingerprint mode uses `email - device_id`. It is only a
+  display feature and does not change authorization.
+- Changing groups/VLANs does not terminate active sessions. No CoA is sent.
 
 ## Log Enrichment Pipeline
+
+The legacy enrichment diagram below shows Jamf. Fleet uses the same separation
+of API work from authentication; fingerprint mode resolves verified device IDs
+through `radius_identity.py` rather than trusting the outer username.
 
 The enrichment pipeline has two layers: **external cache scripts** (call APIs, write files) and the **FreeRADIUS Python module** (reads files, sets RADIUS attributes).
 
@@ -214,22 +232,42 @@ Example: BSSID `84-78-48-16-DD-73` → base MAC `84784816DD70` (offset 3) → AP
 
 ### Cache miss handling
 
+This describes legacy enrichment only. Policy snapshots are replaced only by a
+complete successful bulk refresh; background lookups cannot authorize an unknown
+device or extend policy/certificate freshness.
+
 If a serial isn't in the Jamf cache (new device enrolled after last cache build), the Python module spawns a background thread that calls `jamf-device-fetch.sh` via `subprocess`. This does not block the current auth — the device gets empty Jamf fields this time, but the cache is updated for the next auth. The fetch script reads the existing cache file, adds the new entry, and writes it back atomically.
 
 ## JSON Log Schemas
 
 ### Auth log (`/var/log/freeradius/radius-auth.json`)
 
-One JSON line per Access-Accept or Access-Reject.
+One JSON line per Access-Accept or Access-Reject. In fingerprint mode,
+`radius_log.py`, called by `radius_lookups.py`, serializes JSON into `reply:Tmp-String-4`; linelog emits that
+value, preserving proper escaping. Identity-related fields are:
+
+| Field | Meaning in fingerprint mode |
+| --- | --- |
+| `identity_verified` | Whether this event has a valid signed device binding |
+| `device_id` | Stable inventory ID, including serial-free BYOD |
+| `certificate_fingerprint` | SHA-256 of the exact leaf DER |
+| `serial` | Actual inventory serial, empty if unavailable |
+| `raw_identity` / `cert_cn` | Diagnostic claims, never ownership lookup keys |
+| `vlan_id` | Assigned VLAN as a string; empty at opted-out locations |
+| `device_owner`, `device_name`, `device_model` | Metadata from fresh inventory for the verified device |
+
+Rejected handshakes cannot assert verified ownership from their subjects. The
+remaining transport/AP fields are shared with legacy mode. This table describes
+the legacy attribute carriers as well:
 
 | Field | Source | Example |
 |-------|--------|---------|
 | `timestamp` | FreeRADIUS `%S` | `2026-03-02 16:19:16` |
 | `event` | Packet type | `Access-Accept` or `Access-Reject` |
-| `serial` | `User-Name` request attr | `H176YHQ9XV` |
-| `device_owner` | Jamf cache (via `Reply-Message`) | `robbie@campus.edu` |
-| `device_name` | Jamf cache (via `Filter-Id`) | `Robbie's MacBook Pro` |
-| `device_model` | Jamf cache (via `Login-LAT-Node`) | `MacBook Pro (16-inch, 2024) M4 Max` |
+| `serial` | Inventory serial in fingerprint mode; normalized identity in legacy mode | `H176YHQ9XV` |
+| `device_owner` | Fleet/Jamf cache (via `Reply-Message`) | `robbie@campus.edu` |
+| `device_name` | Fleet/Jamf cache (via `Filter-Id`) | `Robbie's MacBook Pro` |
+| `device_model` | Fleet/Jamf cache (via `Login-LAT-Node`) | `MacBook Pro (16-inch, 2024) M4 Max` |
 | `src_ip` | `Packet-Src-IP-Address` | `216.200.20.23` |
 | `nas_ip` | `NAS-IP-Address` | `192.168.1.143` |
 | `nas_port` | `NAS-Port` | `5` |
@@ -246,16 +284,19 @@ One JSON line per Access-Accept or Access-Reject.
 
 ### Accounting log (`/var/log/freeradius/radius-acct.json`)
 
-One JSON line per Acct-Start, Acct-Stop, or Interim-Update.
+One JSON line per Acct-Start, Acct-Stop, or Interim-Update. Fingerprint mode also
+includes `identity_verified`, `device_id`, `certificate_fingerprint`, `serial`,
+and the original `vlan_id` from the verified Class binding, with the same rules
+as auth logs. These are historical session assignments, not a new policy decision.
 
 | Field | Source | Events |
 |-------|--------|--------|
 | `timestamp` | FreeRADIUS `%S` | All |
 | `event` | `Acct-Status-Type` | `Acct-Start`, `Acct-Stop`, `Acct-Update` |
 | `username` | `User-Name` (may be `email - serial`) | All |
-| `device_owner` | Jamf cache (via `Reply-Message`) | All |
-| `device_name` | Jamf cache (via `Filter-Id`) | All |
-| `device_model` | Jamf cache (via `Login-LAT-Node`) | All |
+| `device_owner` | Fleet/Jamf cache (via `Reply-Message`) | All |
+| `device_name` | Fleet/Jamf cache (via `Filter-Id`) | All |
+| `device_model` | Fleet/Jamf cache (via `Login-LAT-Node`) | All |
 | `src_ip` | `Packet-Src-IP-Address` | All |
 | `nas_ip` | `NAS-IP-Address` | All |
 | `calling_station` | `Calling-Station-Id` (client MAC) | All |
@@ -281,45 +322,24 @@ FreeRADIUS `linelog` can only read RADIUS attributes, not arbitrary Python varia
 | `Login-LAT-Port` | `ssid` | String type (unlike `Class` which is octets → renders as hex) |
 | `Callback-Id` | `ap_name` | String type, not used in modern WiFi |
 | `Connect-Info` | `site_name` | String type |
-| `User-Name` | `email - serial` (rewritten) | Standard — AP caches this as the client identity |
+| `User-Name` | Optional `email - serial` or verified `email - device_id` | Standard — AP caches this as the client identity |
 
 **Important**: These reply attributes are set by `radius_lookups.py` and consumed by `json_log`/`acct_log` linelog modules. They are also sent back to the AP in the Access-Accept, but the AP ignores attributes it doesn't understand.
 
 ## FreeRADIUS Virtual Server
 
-The default virtual server (`sites-available/default`) has a minimal pipeline:
+The bootstrap renders `sites-available/default` plus `check-device-vlan` when
+policy is enabled. EAP-TLS uses that policy virtual server during certificate
+validation; post-auth reevaluates policy before sending the final acceptance.
+`radius_source_check` guards both authentication and accounting when UniFi WAN
+discovery is enabled. A rejection after TLS success removes acceptance-only
+attributes and replaces EAP-Success with the rejection response.
 
-```
-authorize {
-    filter_username        # Reject invalid characters (spaces allowed)
-    eap { ok = return }    # Start EAP negotiation
-}
-
-authenticate {
-    eap                    # Complete EAP-TLS handshake
-}
-
-preacct {
-    acct_unique            # Generate unique accounting session ID
-}
-
-accounting {
-    radius_lookups         # Jamf + UniFi enrichment (if enabled)
-    sql                    # Write to MariaDB radacct table
-    acct_log               # Write JSON accounting log
-}
-
-post-auth {
-    radius_lookups         # Jamf + UniFi enrichment (if enabled)
-    json_log               # Write JSON auth log
-
-    Post-Auth-Type REJECT {
-        json_log           # Also log rejections
-    }
-}
-```
-
-The `radius_lookups` module is only included if Jamf or UniFi integrations are enabled (`HAS_JAMF_LOOKUP` or `HAS_UNIFI_LOOKUP`).
+`radius_lookups` runs for enabled Fleet/Jamf/AP integrations or policy/identity
+features. It precedes auth/accounting JSON logging, including on the reject path.
+Accounting also writes through `sql` to local MariaDB. The exact generated
+configuration is in `scripts/startup.sh`; the packet tests in
+[tests/README.md](tests/README.md) exercise this rendered configuration.
 
 ## Observability Stack
 
@@ -355,7 +375,7 @@ The startup script uses `templatefile()` which has its own interpolation syntax 
 |-------------------|-------------------|-----|
 | `${shell_var}` | `$${shell_var}` | `$$` escapes Terraform `${}` interpolation |
 | `%{User-Name}` (FreeRADIUS) | `%%{User-Name}` | `%%` escapes Terraform `%{}` directive syntax |
-| `%S` (FreeRADIUS timestamp) | `%%S` | Same `%%` escape |
+| `%S` (FreeRADIUS timestamp) | `%S` | No Terraform directive brace; no escape needed |
 | `${.module}` (FreeRADIUS config) | `$${.module}` | Same `$$` escape |
 | `${project_id}` (Terraform var) | `${project_id}` | Normal interpolation |
 
@@ -397,13 +417,13 @@ cat /etc/freeradius/3.0/unifi-ap-cache.json | python3 -m json.tool | head -20
 ### View live auth events
 
 ```bash
-sudo tail -f /var/log/freeradius/radius-auth.json | python3 -m json.tool
+sudo tail -f /var/log/freeradius/radius-auth.json | jq --unbuffered .
 ```
 
 ### View live accounting events
 
 ```bash
-sudo tail -f /var/log/freeradius/radius-acct.json | python3 -m json.tool
+sudo tail -f /var/log/freeradius/radius-acct.json | jq --unbuffered .
 ```
 
 ### Query accounting database
@@ -415,17 +435,32 @@ sudo mysql radius -e "SELECT radacctid, username, acctstarttime, acctstoptime, \
 
 ### Debug a specific device
 
+For fingerprint mode, filter by verified stable device ID rather than assuming
+a serial exists:
+
+```sh
+sudo jq -c 'select(.identity_verified == true and .device_id == "fleet:752")' \
+  /var/log/freeradius/radius-auth.json
+sudo cat /var/lib/cloud-8021x/certificate-readiness.json
+```
+
+Use the actual ID from inventory/logs. For legacy serial-based enrichment:
+
 ```bash
 SERIAL="H176YHQ9XV"
 # Check Jamf cache
 python3 -c "import json; d=json.load(open('/etc/freeradius/3.0/jamf-device-cache.json')); print(json.dumps(d.get('$SERIAL', 'NOT FOUND'), indent=2))"
 # Check auth log
-sudo grep "$SERIAL" /var/log/freeradius/radius-auth.json | tail -5 | python3 -m json.tool
+sudo grep "$SERIAL" /var/log/freeradius/radius-auth.json | tail -5 | jq .
 # Check accounting
-sudo grep "$SERIAL" /var/log/freeradius/radius-acct.json | tail -5 | python3 -m json.tool
+sudo grep "$SERIAL" /var/log/freeradius/radius-acct.json | tail -5 | jq .
 ```
 
 ### Add a new field to auth/accounting logs
+
+For fingerprint mode, update the JSON serializer in
+`scripts/radius_log.py` and its regression tests as well as the dashboard/facets.
+For legacy linelog formats:
 
 1. If the field comes from a RADIUS request attribute (e.g. `Acct-Session-Id`), add it directly to the linelog format in `scripts/startup.sh` using `%%{Attribute-Name}`.
 2. If the field comes from an external source (API, cache), add it to `radius_lookups.py`:

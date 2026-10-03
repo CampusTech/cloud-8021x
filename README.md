@@ -1,31 +1,35 @@
 # cloud-8021x
 
-Terraform deployment for cloud-hosted FreeRADIUS servers on Google Cloud, providing RADIUS/802.1X authentication for WiFi networks using certificate-based EAP-TLS. The recommended setup also stands up a co-located self-hosted [Smallstep](https://smallstep.com/docs/step-ca/) `step-ca` that issues the client certificates (ACME hardware-attestation for Apple, SCEP for Windows) — no external CA dependency or rate limits. Works with any RADIUS-capable access point (Ubiquiti UniFi, Cisco Meraki, etc.) and deploys primary + secondary VMs in separate zones for HA failover.
+Terraform deployment for cloud-hosted FreeRADIUS servers on Google Cloud, providing RADIUS/802.1X authentication for WiFi networks using certificate-based EAP-TLS. The recommended setup also stands up a co-located self-hosted [Smallstep](https://smallstep.com/docs/step-ca/) `step-ca` that issues the client certificates (ACME hardware attestation for eligible Apple devices, SCEP for serial-free Apple BYOD and Windows). Works with any RADIUS-capable access point (Ubiquiti UniFi, Cisco Meraki, etc.) and deploys primary + secondary VMs in separate zones for HA failover.
 
 ## Architecture
 
 ```text
 Device (EAP-TLS client cert)
-  ├─ macOS/iOS — ACME device-attest-01 from the self-hosted step-ca
-  └─ Windows   — SCEP from the self-hosted step-ca (or Okta SCEP, legacy)
+  ├─ Managed Apple with attested serial — ACME device-attest-01
+  ├─ Serial-free Apple BYOD — dynamic SCEP + Fleet certificate inventory
+  └─ Windows — dynamic SCEP machine certificate + Fleet script inventory
       → WiFi AP (WPA2/WPA3 Enterprise — UniFi, Meraki, etc.)
         → RADIUS (UDP 1812/1813) over internet
           → Primary:   FreeRADIUS on GCE VM (us-east4-a, static public IP)
           → Secondary: FreeRADIUS on GCE VM (us-east4-c, static public IP)
             → EAP-TLS: validates client cert against the configured CA(s)
+            → Optional inventory authorization + location-specific VLAN policy
             → Access-Accept → WiFi connected
 
 Self-hosted CA (when enable_smallstep_ca = true), co-located on the RADIUS VMs:
-  GCLB (HTTPS, Cloud Armor) → step-ca :8443 (ACME + SCEP)
-    ├─ KMS-backed intermediate (Cloud KMS HSM signing key)
-    └─ ACME HA state in Cloud SQL (Postgres)
+  EC GCLB (HTTPS, Cloud Armor) → step-ca :8443 (attested ACME)
+  RSA GCLB (HTTPS, Cloud Armor) → step-ca :8444 (SCEP)
+    └─ /fleet/* challenge routes → HTTPS broker :9081 (optional)
+  Separate CA chains, KMS HSM-backed intermediates, Cloud SQL Postgres state
+  CA authorization → loopback mTLS webhook :9444
 ```
 
-- **Authentication**: EAP-TLS only (no passwords). Client certificates come from the self-hosted step-ca (ACME for Apple, SCEP for Windows); Okta Managed Attestation SCEP remains supported for existing/migrating deployments.
-- **Trust model**: Independent server and client chains. The RADIUS server cert is signed by a self-signed RADIUS CA (generated on first boot, persisted in Secret Manager). Client certs are validated against the CA selected by `radius_trust_mode` — `smallstep`, `okta`, or `both` (transitional dual-trust for migration).
+- **Authentication**: EAP-TLS only (no passwords). Client certificates come from the self-hosted step-ca (ACME for eligible Apple devices, SCEP for Apple BYOD and Windows); Okta Managed Attestation SCEP remains supported for existing/migrating deployments.
+- **Trust model**: Client validation and server trust are separate settings. `radius_trust_mode` selects Smallstep, Okta, or both client CA chains. In `smallstep`/`both` mode the standard bootstrap presents a Smallstep EC-rooted server certificate; `okta` mode uses the legacy self-signed RADIUS CA. Stage the matching server trust root on devices before switching. See [profile trust roots](examples/README.md#choose-the-correct-trust-root).
 - **Self-hosted CA** (optional, recommended): step-ca runs on the RADIUS VMs behind a global HTTPS load balancer + Cloud Armor, with a Cloud KMS–backed intermediate and Cloud SQL for ACME HA state. CA material persists in Secret Manager and is restored on reboot/rebuild (never re-minted on a transient failure).
 - **Accounting**: FreeRADIUS native SQL module writes to local MariaDB (`radacct` table).
-- **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server + CA certs, Datadog API key, Fleet token). No secrets on disk at rest.
+- **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server + CA certs, Datadog API key, Fleet token). Runtime keys and credentials are restored into protected files; some remain on disk. Terraform-managed secret values also exist in Terraform state, which must be protected.
 - **Site sources**: Match routed/VPN subnets by CIDR, or pin a UniFi gateway host ID to follow public WAN changes automatically. Per-site `dynamic_vlans = false` keeps device authorization/logging while using the SSID network. See [configuration and rollout details](docs/dynamic-vlans.md#source-cidrs-and-automatic-unifi-wan-discovery).
 - **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. Prometheus exporters for FreeRADIUS and step-ca metrics. Structured JSON auth/accounting logs via FreeRADIUS `linelog`, plus step-ca request logs (with real client IP via `X-Forwarded-For`).
 - **Log enrichment**: Optional MDM (Fleet **or** Jamf) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs, resolved from a local cache (no API calls on the auth path). Certificate inventory mode uses verified certificate bindings and stable device IDs, including serial-free BYOD; legacy mode uses serials.
@@ -41,8 +45,8 @@ This deployment supports two independent paths for client certificate validation
 > fleet scale the 429s cause MDM profile installs to fail and certs to never
 > issue, which is hard to diagnose and silently breaks Wi-Fi onboarding. A
 > self-hosted `step-ca` removes that dependency entirely: you own the issuance
-> path, there are no external rate limits, and it supports both ACME (hardware
-> attestation on Apple) and SCEP (for Windows). New deployments should prefer
+> path, with deployment-controlled Cloud Armor rate limits, and it supports ACME
+> (hardware attestation on Apple) and SCEP (Apple BYOD and Windows). New deployments should prefer
 > this; the Okta SCEP path remains supported for existing setups and migration.
 
 Set `enable_smallstep_ca = true` to stand up a self-hosted Smallstep `step-ca`
@@ -50,31 +54,34 @@ co-located on the RADIUS VMs. It exposes:
 
 - **ACME** (`/acme/<name>/directory`) with Apple `device-attest-01` attestation,
   fronted by a public GCLB + Cloud Armor. Gate issuance with
-  `acme_authorizing_webhook_url` (see `examples/` and the webhook plan) — Apple
+  `enable_acme_webhook = true` (see [webhook setup](webhook/README.md)) — Apple
   attestation alone proves "a real Apple device", not "one of yours".
-- **SCEP** (`/scep/<name>`) for MDMs without ACME (e.g. Windows), typically
+- **SCEP** on the separate RSA CA (`/scep/<name>`) for Windows and serial-free Apple BYOD, typically
   fronted by an MDM's SCEP proxy.
 
-The CA signing key and SCEP decrypter live in Cloud KMS (HSM). ACME state is in
-a regional Cloud SQL Postgres. The CA root cert is published to the
-`smallstep-ca-cert` Secret Manager secret.
+Intermediate CA signing keys live in Cloud KMS HSM. SCEP envelope decryption
+and response signing use a shared software RSA key stored in Secret Manager.
+CA state uses regional Cloud SQL Postgres. EC and RSA roots are published as
+`smallstep-ca-cert` and `smallstep-rsa-root-cert`.
 
-**RADIUS trust:** Two independent CA chains are used regardless of trust mode:
-- **Server certificates** signed by the self-signed RADIUS CA (generated on first boot)
-- **Client certificates** validated by the CA specified in `radius_trust_mode`:
-  - `"okta"` (default): FreeRADIUS trusts client certs signed by the Okta Intermediate CA
-  - `"smallstep"`: FreeRADIUS trusts ONLY client certs signed by the Smallstep CA
+**RADIUS client validation:**
 
-Setting `radius_trust_mode = "smallstep"` flips validation to Smallstep-only. Pre-stage
-client certs on devices, confirm issuance, then flip the trust mode.
+- `"okta"` (default): trust the configured Okta CA bundle.
+- `"smallstep"`: trust the self-hosted EC and RSA client CA chains.
+- `"both"`: trust both during migration. This also switches the presented server
+  certificate to Smallstep; dual client trust does not preserve legacy server trust.
 
-Example client profiles (ACME + SCEP, generic + Fleet variant) live in
-`examples/`.
+Pre-stage client certificates **and the matching server trust root/name**, then
+pilot the trust-mode change. Fingerprint enforcement additionally requires
+inventory coverage on both RADIUS nodes for every supported client.
+
+See [example profiles](examples/README.md) and the
+[Fleet deployment guide](docs/scep-identity-binding.md).
 
 
 ## Prerequisites
 
-- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.5
+- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.9
 - GCP account with permissions to create projects and enable billing
 - `gcloud` CLI authenticated (`gcloud auth application-default login`)
 - For the **Okta SCEP** client-cert path (one of two options):
@@ -88,7 +95,8 @@ Example client profiles (ACME + SCEP, generic + Fleet variant) live in
 ```bash
 # 1. Copy and edit the example tfvars
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars — set billing_account_id, office IPs, okta_ca_cert_pem, datadog_api_key
+# Edit terraform.tfvars — choose CA/trust mode, billing, office sources and monitoring.
+# For Fleet BYOD/Windows, follow docs/scep-identity-binding.md before enforcement.
 
 # 2. Initialize and deploy
 terraform init
@@ -100,12 +108,17 @@ terraform apply
 ./scripts/fetch-outputs.sh
 
 # Outputs are saved to out/:
-#   out/radius-ca.cer              — RADIUS CA cert (upload to Jamf)
-#   out/radius-server.cer          — RADIUS server cert (reference)
+#   out/radius-ca.cer              — Legacy RADIUS CA only; see trust-root note below
+#   out/radius-server.cer          — Legacy server cert (not the Smallstep leaf)
 #   out/shared-secret-<office>.txt — Per-office shared secrets
 #   out/config.json                — IPs, ports, SSH commands
 #   out/README.md                  — Human-readable summary with all values
 ```
+
+`fetch-outputs.sh` exports legacy server certificate secrets. In Smallstep mode,
+fetch the EC server trust root separately as described in
+[the profile guide](examples/README.md#choose-the-correct-trust-root).
+The `out/` directory includes secrets; keep it private and out of Git.
 
 ## What Terraform Creates
 
@@ -117,7 +130,8 @@ terraform apply
 | Firewall rules | UDP 1812/1813 from office IPs, SSH from IAP |
 | GCE Instances (x2) | Primary + secondary in different zones, Debian 12, `e2-medium`, FreeRADIUS + MariaDB |
 | Service Account | Minimal permissions (Secret Manager read/write) |
-| Secret Manager | N+7 secrets (per-office RADIUS secrets, Okta CA, Datadog API key, 5x server certs) |
+| Secret Manager | Per-office secrets, CA/server material, integration credentials, and optional challenge/accounting signing keys |
+| Optional Smallstep services | EC/RSA HTTPS load balancers, Cloud Armor, KMS HSM keys, and Cloud SQL Postgres |
 
 ## Secrets in Secret Manager
 
@@ -132,26 +146,31 @@ terraform apply
 | `radius-server-cert` | Startup script | RADIUS server certificate |
 | `radius-dh-params` | Startup script | Diffie-Hellman parameters |
 | `datadog-api-key` | Terraform | Datadog Agent API key |
-| `fleet-api-token` | Out-of-band (optional) | Fleet API observer token for device lookup + ACME webhook |
+| `fleet-api-token` | Out-of-band (optional) | Observer for lookup/ACME authorization; scoped maintainer for certificate collection |
+| `radius-smallstep-server-cert` / `radius-smallstep-server-key` | Startup/renewal scripts | Smallstep-issued RADIUS server identity |
+| `smallstep-ca-cert` / `smallstep-rsa-root-cert` | Startup script | EC and RSA client roots; EC root also anchors the standard Smallstep RADIUS server |
+| `radius-accounting-key` | Terraform (inventory mode) | Shared signing key for verified Class accounting bindings |
+| `scep-broker-token` | Terraform (inventory mode) | Fleet-to-broker Basic authentication password |
+| `scep-challenge-signing-key` | Terraform (webhook enabled) | Server-only SCEP challenge signing key |
 | `jamf-url` | Terraform (optional) | Jamf Pro base URL for device lookup |
 | `jamf-client-id` | Terraform (optional) | Jamf Pro API Client ID |
 | `jamf-client-secret` | Terraform (optional) | Jamf Pro API Client Secret |
 | `unifi-url` | Terraform (optional) | UniFi API URL for AP/site lookup |
 | `unifi-api-key` | Terraform (optional) | UniFi API key |
 
-Server certs are generated on first boot and stored in Secret Manager so they persist across VM replacements. You only need to upload `radius-server-ca-cert` to Jamf once.
+Server identities persist in Secret Manager across VM replacements. Install the root appropriate to the **live server chain**, and stage trust changes before CA rotation or a trust-mode migration.
 
 ## Configuration
 
 ### Variables
 
-See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key variables:
+See [terraform.tfvars.example](terraform.tfvars.example) for common settings and [variables.tf](variables.tf) for the complete schema. Key variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `billing_account_id` | Yes | GCP billing account to link |
-| `radius_clients` | Yes | Map of offices with CIDRs (secrets auto-generated) |
-| `okta_ca_cert_pem` | Yes | Okta Intermediate CA cert PEM content |
+| `radius_clients` | Yes | Office CIDRs and/or UniFi gateway host IDs; secrets auto-generated |
+| `okta_ca_cert_pem` | Yes | Okta Intermediate PEM for `okta`/`both`; set `""` for Smallstep-only deployments |
 | `okta_root_ca_cert_pem` | No | Okta Root CA cert PEM (enables full chain validation) |
 | `datadog_api_key` | Yes | Datadog API key for monitoring agent |
 | `ssh_allowed_cidrs` | No | IPs for SSH access (default: GCP IAP) |
@@ -165,9 +184,11 @@ See [terraform.tfvars.example](terraform.tfvars.example) for all options. Key va
 | `jamf_url` | No | Jamf Pro URL — enables device lookup in auth logs (mutually exclusive with `enable_fleet_lookup`) |
 | `jamf_client_id` | No | Jamf Pro API Client ID (requires Read Computers) |
 | `jamf_client_secret` | No | Jamf Pro API Client Secret |
-| `rewrite_username` | No | Set reply:User-Name to `email - serial` in Access-Accept (default: `false`) |
+| `rewrite_username` | No | Display `email - serial` (legacy) or `email - device_id` (fingerprint mode) in Access-Accept; default `false` |
 | `rewrite_username_separator` | No | Separator between email and serial in rewritten User-Name (default: ` - `) |
-| `tls_session_cache` | No | Enable TLS session caching for faster re-auth (default: `true`) |
+| `tls_session_cache` | No | Enable faster re-auth (default: `true`); fingerprint enforcement always disables resumption |
+| `enable_fleet_certificate_inventory` | No | Collect exact managed Apple and Windows machine certificate fingerprints; requires Fleet lookup and command/script permissions |
+| `radius_vlan_policy` | No | Global or per-location group mappings, site opt-out, and optional exact certificate enforcement |
 | `tls_session_cache_lifetime` | No | TLS session cache lifetime in hours (default: `24`) |
 | `tls_max_version` | No | Max TLS version: `1.2` (default, disk cache works) or `1.3` (in-memory only) |
 | `unifi_url` | No | UniFi API URL — enables AP/site name in auth logs |
@@ -191,6 +212,9 @@ Configure your access points (UniFi, Meraki, or any 802.1X-capable AP) with:
 
 ### Jamf Configuration
 
+This is the legacy Okta SCEP path. The built-in fingerprint collector does not
+collect Jamf certificates; provide a trusted adapter before enforcing fingerprints.
+
 1. Upload the RADIUS server CA cert to Jamf:
    ```bash
    # After running ./scripts/fetch-outputs.sh
@@ -200,7 +224,7 @@ Configure your access points (UniFi, Meraki, or any 802.1X-capable AP) with:
 
 2. Create an **SCEP** payload:
    - SCEP Subject: `CN=$SERIALNUMBER managementAttestation $UDID $PROFILE_IDENTIFIER`
-   - Using `$SERIALNUMBER` as CN avoids spaces that can cause issues with RADIUS username filters
+   - The bootstrap permits spaces in these legacy SCEP subjects
 
 3. Create a **WiFi** payload:
    - Security: WPA2/WPA3 Enterprise
@@ -209,7 +233,7 @@ Configure your access points (UniFi, Meraki, or any 802.1X-capable AP) with:
    - Identity Certificate: Okta SCEP certificate
    - Trust: Add the server CA cert above
    - Trusted Server Certificate Names: `radius.example.com` (must match `server_cert_cn`)
-   - Disable Private MAC Address: recommended for consistent device tracking
+   - Disabling Private MAC Address is optional for stable MAC-based operations; certificate authorization does not require it
 
 ### Okta Root CA (Optional)
 
@@ -244,15 +268,18 @@ The Fleet-managed counterpart of the Jamf lookup below — use this if Fleet is 
 - `device_owner` — assigned user's email from Fleet (`device_mapping`/`end_users`)
 - `device_name` — Fleet host display name
 - `device_model` — hardware model (e.g. `Mac16,5`)
-- In auth: overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
+- If `rewrite_username = true`, overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
 
-The cache is built on boot and refreshed every 30 minutes via cron. Cache misses trigger a background single-host fetch (`GET /api/v1/fleet/hosts/identifier/{serial}`, does not block auth). If Fleet is unreachable or the device isn't found, the serial is used as-is.
+The cache is built on boot and refreshed every five minutes with VLAN policy enabled, or every 30 minutes otherwise. Cache misses trigger a background single-host fetch (`GET /api/v1/fleet/hosts/identifier/{serial}`, does not block auth). If Fleet is unreachable or the device isn't found, the serial is used as-is.
 
 > **Fleet and Jamf are mutually exclusive** — both populate the same enrichment fields. Set `enable_fleet_lookup = true` **or** `jamf_url`, not both (Terraform rejects both).
 
 **Setup:**
 
-1. Create a Fleet API-only user with the **Observer** role and capture its token:
+1. For lookup and ACME authorization alone, use a Fleet API-only **Observer**.
+   Certificate collection instead needs a **maintainer scoped to every managed
+   fleet** (or global maintainer), with MDM command and Windows script access.
+   Confirm the account's effective role when creating it:
    ```bash
    fleetctl user create --name 'RADIUS Lookup' --api-only   # prints the token
    ```
@@ -280,14 +307,16 @@ The cache is built on boot and refreshed every 30 minutes via cron. Cache misses
 
 ### Jamf Device Lookup (Optional)
 
+This section describes legacy serial-based enrichment, not verified fingerprint attribution.
+
 When EAP-TLS authenticates a device, the outer identity is the serial number (e.g. `H176YHQ9XV`). If you provide Jamf Pro API credentials, a background cache script bulk-fetches all Jamf inventory and stores it locally. FreeRADIUS reads from this cache (no API calls on the auth path) to resolve the serial to device details. This adds the following fields to both auth and accounting JSON logs:
 
 - `device_owner` — assigned user's email from Jamf
 - `device_name` — device name (e.g. `Robbie's MacBook Pro`)
 - `device_model` — hardware model (e.g. `MacBook Pro (16-inch, 2024) M4 Max`)
-- In auth: overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
+- If `rewrite_username = true`, overwrites `User-Name` in the reply to `email - serial` so UniFi and accounting show the owner
 
-The cache is built on boot and refreshed every 30 minutes via cron. Cache misses trigger a background fetch (does not block auth). If Jamf is unreachable or the device isn't found, the serial is used as-is.
+The cache is built on boot and refreshed every five minutes with VLAN policy enabled, or every 30 minutes otherwise. Cache misses trigger a background fetch (does not block auth). If Jamf is unreachable or the device isn't found, the serial is used as-is.
 
 **Setup:**
 
@@ -422,7 +451,7 @@ sudo systemctl status datadog-agent
 From a host with an allowed source IP:
 
 ```bash
-# Basic connectivity test
+# Basic UDP/shared-secret check: an Access-Reject is expected (password auth is disabled)
 radtest user password <radius-ip> 0 <shared-secret>
 
 # Full EAP-TLS test (requires eapol_test from wpa_supplicant)
@@ -463,13 +492,20 @@ goes stale rather than silently counting down.
 
 ### Client Certificate Expiry
 
-Device (client) certs have the same 90-day lifetime as the server cert, but **nothing on
-this side renews them** — only the device can re-order from the CA, and macOS does not
-re-order the `com.apple.security.acme` payload on its own. A cert is issued once when the
-Wi-Fi profile installs and expires 90 days later. Because the fleet enrolled in one burst
-(June 2026), the certs expire in one burst too: on 2026-09-04 there were 136 devices
-inside a three-day expiry window, with zero ACME orders reaching the CA in the previous
-48 hours.
+Client certificates normally have a 90-day lifetime. RADIUS cannot renew them;
+the device must enroll again through MDM. Fleet can schedule profile redelivery
+when the issued certificate contains its renewal ID in the subject OU. The
+[Fleet ACME example](examples/fleet/wifi-acme.mobileconfig) and SCEP examples now
+include the appropriate renewal variable, and the CA templates preserve it.
+Existing certificates without that OU need a profile update to gain renewal
+tracking. Confirm renewal on real devices; adding the variable does not prove
+that already-issued certificates have it. See
+[Fleet's renewal requirements](https://fleetdm.com/guides/connect-end-user-to-wifi-with-certificate).
+
+For historical context, the September 2026 ACME outage involved a cohort of
+certificates without renewal tracking: no new orders arrived before expiry.
+Fingerprint authorization does not itself require those certificates to be
+reissued, but it also does not repair their renewal setup.
 
 An expired **client** cert is a per-device lockout, and like the server-cert case nothing
 server-side goes red — `radius_down` and `radius_no_accepts` both stay green, because
@@ -484,7 +520,7 @@ Three signals cover it, in order of lead time:
 
 | Signal | Lead time | Meaning |
 |---|---|---|
-| `smallstep.x509.signed.count{provisioner:wifi-acme}` flat for 24h | weeks | renewal has stopped; every cert is now counting down |
+| `smallstep.x509.signed.count{provisioner:wifi-acme}` flat for 24h | varies | no issuance observed; investigate renewal if orders were expected |
 | `radius.client_cert.expiring_soon{window:48h}` > 0 | 2 days | certs about to expire, nobody locked out yet |
 | `@reject_reason:"*certificate has expired*"` in `service:radius-auth` | none | devices have lost Wi-Fi right now |
 
@@ -502,36 +538,31 @@ sudo /usr/local/bin/radius-client-cert-metrics.sh
 
 # Who is already locked out
 sudo grep -F 'certificate has expired' /var/log/freeradius/radius-auth.json \
-  | python3 -c 'import sys,json;print(sorted({json.loads(l)["serial"] for l in sys.stdin}))'
+  | jq -c '{timestamp, device_id, identity_verified, serial, raw_identity, cert_cn, reject_reason}'
 ```
 
-**The fix for an affected device is a profile re-push, not anything on these nodes.**
-Re-installing the Campus Wi-Fi ACME profile from `fleet-gitops` makes the device place a
-fresh ACME order.
+Restore alternate connectivity and correct the device's renewal/profile setup,
+then redeliver the profile to request a fresh certificate. In fingerprint mode,
+wait for a new trusted observation on **both** nodes before relying on Wi-Fi.
+Rejected certificate subjects are diagnostic claims, not verified device ownership.
 
-Before assuming the CA is rejecting orders, rule it out — compare the two counters for the
-ACME provisioner specifically, on the EC CA's metrics endpoint:
+To distinguish missing orders from CA failures, inspect issuance and webhook
+authorization counters for the ACME provisioner on the EC CA metrics endpoint:
 
 ```bash
 curl -s http://127.0.0.1:9090/metrics | grep -E \
-  '^step_ca_x509_(signed|webhook_authorized)_total\{provisioner="wifi-acme",success="true"\}'
+  '^step_ca_x509_(signed|webhook_authorized)_total\{provisioner="wifi-acme",success="(true|false)"\}'
 ```
 
-Both label sets must match (`provisioner="wifi-acme",success="true"`) or the comparison is
-meaningless — an unlabeled total folds in other provisioners and the `success="false"`
-series, which can make a broken gate look healthy. Equal values mean the webhook allowed
-every order it saw, so a shortfall is orders never arriving, not orders being denied. A
-`webhook_authorized` total that *trails* `signed`, or any `success="false"` series, is the
-opposite conclusion: issuance is being refused, and the webhook's own log
-(`journalctl -u acme-authz-webhook`) says why. When this was diagnosed both read exactly
-164 — no denials, no orders.
+Compare recent counter **increases**, not absolute totals: restarts, retries,
+and successful authorization followed by failed issuance can separate the two.
+Inspect both success and failure series and `journalctl -u acme-authz-webhook`
+for the actual denial reason. No new orders can indicate a device/MDM renewal
+problem; a flat issuance counter alone does not identify the cause.
 
-Once a real device-side renewal mechanism exists, set `enable_acme_issuance_monitor = true`
-to turn on the 24h issuance alert, and consider dropping the `wifi-acme` provisioner's
-`defaultTLSCertDuration` well below 2160h. Long certs are why this went unnoticed for
-three months: the renewal path only runs once a quarter, so a break in it stays invisible
-until a whole cohort ages out at once. Do **not** shorten it before renewal works — that
-converts a 90-day fuse into a one-week one.
+After verifying end-to-end renewal, enable `enable_acme_issuance_monitor` for
+the 24-hour issuance alert. Keep certificate duration unchanged until that
+workflow is proven; a shorter duration also shortens the recovery window.
 
 ## File Structure
 

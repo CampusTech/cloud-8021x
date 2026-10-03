@@ -9,6 +9,10 @@ addresses never select a VLAN.
 
 ## Configuration
 
+These snippets show policy shapes. For reusable Fleet SCEP, complete the
+[collection, broker, and trust staging prerequisites](scep-identity-binding.md)
+before enabling `certificate_inventory`; the first example below is legacy CN mode.
+
 ```hcl
 enable_fleet_lookup = true
 fleet_api_base_url  = "https://fleet.example.com"
@@ -300,6 +304,14 @@ how long a certificate observation remains usable, separately from `cache_max_ag
   "version": 2,
   "updated_at": 1790985600,
   "identities": {},
+  "devices": {
+    "your-inventory-record-id": {
+      "serial": "",
+      "device_name": "Example BYOD device",
+      "device_owner": "owner@example.com",
+      "device_model": "iPhone"
+    }
+  },
   "certificates": {
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": {
       "device_id": "your-inventory-record-id",
@@ -310,6 +322,10 @@ how long a certificate observation remains usable, separately from `cache_max_ag
   }
 }
 ```
+
+The optional `devices` map supplies verified log metadata keyed by `device_id`.
+Without it, a valid binding still records the stable ID, fingerprint and VLAN,
+but owner/name/model/serial remain empty. Do not invent a serial for BYOD.
 
 Keys are lowercase SHA-256 of exact leaf DER, not certificate serials or SHA-1.
 `observed_at` must be the original authenticated device report time; rereading a

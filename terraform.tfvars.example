@@ -61,7 +61,7 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # Jamf lookup below. Enriches RADIUS auth logs with the assigned user's email,
 # device name, and model, resolved from Fleet by serial. The API token is NOT a
 # variable — store it out-of-band in the `fleet-api-token` Secret Manager secret
-# (an api-only Observer token; the same secret the ACME webhook uses).
+# (Observer for lookup/ACME; scoped maintainer for certificate collection).
 # Mutually exclusive with the Jamf lookup below — set one MDM source, not both.
 # enable_fleet_lookup = true
 # fleet_api_base_url  = "https://fleet.example.com"
@@ -78,14 +78,16 @@ datadog_api_key = "CHANGE-ME-your-datadog-api-key"
 # rewrite_username   = true     # set reply:User-Name to "email<sep>serial" in Access-Accept (shown as 802.1X Identity in UniFi)
 # rewrite_username_separator = " - "  # separator between email and serial (default: " - ")
 
-# TLS session caching — speeds up EAP-TLS re-authentication by resuming TLS sessions
+# TLS session caching — speeds up legacy EAP-TLS re-authentication.
+# Fingerprint enforcement always disables resumption, regardless of this setting.
 # tls_session_cache          = true   # default: true (set false to disable)
 # tls_session_cache_lifetime = 24     # cache lifetime in hours (default: 24)
 # tls_max_version            = "1.2"  # "1.2" (default, enables disk-based session cache) or "1.3"
 
 # Okta Intermediate CA certificate (PEM format)
 # This is the trust anchor for SCEP client certs issued via Jamf/Okta.
-# Paste the full PEM content, or use: okta_ca_cert_pem = file("freeradius/freeradius-wifi-auth/certs/okta-ca.pem")
+# Paste full PEM, or use -var-file input with a literal PEM value.
+# For Smallstep-only deployments, replace this assignment with okta_ca_cert_pem = "".
 okta_ca_cert_pem = <<-EOT
 -----BEGIN CERTIFICATE-----
 PASTE YOUR OKTA INTERMEDIATE CA CERTIFICATE HERE
@@ -105,13 +107,14 @@ EOT
 # --- Optional self-hosted Smallstep step-ca (default: disabled) ---
 # enable_smallstep_ca              = false
 # radius_trust_mode                = "okta"      # flip to "smallstep" only after pre-staging certs
-# smallstep_ca_dns_name            = "ca.campusgroup.co"
+# smallstep_ca_dns_name            = "ca.example.com"
 # smallstep_acme_provisioner_name  = "wifi-acme"   # must be globally unique (≠ scep name)
-# smallstep_scep_provisioner_name  = "wifi-scep"   # step-ca rejects duplicate provisioner names
-# acme_authorizing_webhook_url     = ""          # set to the Plan 2 webhook before enabling ACME
+# smallstep_scep_rsa_provisioner_name = "wifi-scep"   # step-ca rejects duplicate provisioner names
+# enable_acme_webhook             = true        # required authorization gate before real enrollment
+# acme_authorizing_webhook_url     = ""          # uses managed loopback HTTPS when webhook enabled
 # smallstep_db_tier                = "db-custom-1-3840"  # standard tier required for REGIONAL HA
 
-# DNS name for the RSA SCEP step-ca instance (Windows + non-ADE Macs). Point an
+# DNS name for the RSA SCEP step-ca instance (Windows + serial-free Apple BYOD). Point an
 # A record at the `smallstep_rsa_lb_ip` output. Required when enable_smallstep_ca=true.
 # smallstep_ca_rsa_dns_name = "ca-rsa.example.com"
 
@@ -127,3 +130,24 @@ EOT
 #   # fallback_vlan = 999 # Known enrolled devices with no mapped group only.
 #   cache_max_age = 3600 # Reject if no complete inventory refresh for an hour.
 # }
+
+# Recommended Fleet dynamic SCEP + fingerprint authorization. Stage collection
+# and verify coverage on BOTH nodes before enabling the policy. Requires the
+# self-hosted CA/webhook above and radius_trust_mode = "smallstep" or "both".
+# See docs/scep-identity-binding.md; do not combine this policy with the one above.
+# enable_fleet_lookup                = true
+# enable_fleet_certificate_inventory = true
+# fleet_api_base_url                 = "https://fleet.example.com"
+# radius_vlan_policy = {
+#   certificate_inventory = true
+#   certificate_max_age   = 86400
+#   cache_max_age         = 3600
+#   locations = {
+#     nyc = { group_vlans = { "fleet:1" = 100, "fleet:2" = 200 } }
+#     atl = { group_vlans = { "fleet:1" = 110, "fleet:2" = 220 } }
+#     branch-office = { dynamic_vlans = false } # Use SSID network; still authorize devices.
+#   }
+# }
+# Keys must match radius_clients. Location maps do not inherit global mappings.
+# Every client on these servers needs an exact trusted fingerprint binding;
+# existing ACME identities can be collected without reissuance.

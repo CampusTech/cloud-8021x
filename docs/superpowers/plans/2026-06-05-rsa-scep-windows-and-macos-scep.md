@@ -1,5 +1,10 @@
 # RSA SCEP CA (Windows + non-ADE Macs) Implementation Plan
 
+> Historical design/implementation record. Commands and configuration may have
+> been superseded. Use the current [README](../../../README.md),
+> [VLAN guide](../../dynamic-vlans.md), and
+> [SCEP deployment guide](../../scep-identity-binding.md) for deployment.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Shipped correction:** the plan originally put the RSA intermediate "under the existing EC root." That proved impossible (the EC root key is discarded after EC init; the EC intermediate is `pathlen:0`). The shipped RSA CA is **self-contained**: its own self-signed **RSA-4096 root** → RSA intermediate (KMS) → RSA decrypter, in a **standalone init-or-restore block decoupled from the EC CA** (keyed on `smallstep-rsa-intermediate-cert`). RADIUS trusts **both** roots (EC + RSA → 4 anchors). New secret `smallstep-rsa-root-cert` persists the RSA root. Read "under the existing EC root" / "EC-root-signed" anywhere below as "self-signed RSA root."

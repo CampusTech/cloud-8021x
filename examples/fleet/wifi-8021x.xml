@@ -82,9 +82,9 @@
 		&lt;/security&gt;
 	&lt;/MSM&gt;
 	&lt;!-- Disable Windows per-SSID MAC randomization on this network. EAP-TLS
-	     auth is cert-based (not MAC), but a randomized MAC defeats per-device
-	     tracking, DHCP reservations, and RADIUS accounting by hardware
-	     address. Pin the hardware MAC for this network only. --&gt;
+	     auth and verified device attribution work with private MACs. Disable
+	     randomization only when stable MAC-based DHCP reservations or
+	     operational tracking are required. --&gt;
 	&lt;MacRandomization xmlns="http://www.microsoft.com/networking/WLAN/profile/v3"&gt;
 		&lt;enableRandomization&gt;false&lt;/enableRandomization&gt;
 	&lt;/MacRandomization&gt;

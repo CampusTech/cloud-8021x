@@ -1,9 +1,10 @@
 # acme-authz-webhook
 
-A step-ca **AUTHORIZING** webhook (the reference implementation for cloud-8021x's
-optional ACME path). step-ca calls it on every certificate order; it returns
-`{"allow": true}` **only** for device serials that are enrolled hosts in Fleet.
-Every other case denies. It is **fail-closed by construction**.
+A step-ca authorization service for attested ACME and SCEP, plus an optional
+Fleet dynamic SCEP challenge broker. ACME authorization requires an attested
+serial belonging to an enrolled Fleet host. Legacy SCEP checks an identity-bound
+challenge and enrollment. Inventory-mode SCEP checks a provisioner-scoped
+challenge; exact certificate inventory authorizes network access later.
 
 ## Why it exists
 
@@ -32,10 +33,10 @@ why the deployed service uses certificate authentication.
 - `POST /authorize` — step-ca calls this. Verifies the TLS
   client certificate, extracts the attested serial, decides, returns
   `{"allow": true|false}`.
-- `POST /scep-challenge` — verifies the CA client identity, an identity-bound enrollment token, and current Fleet enrollment.
+- `POST /scep-challenge` — verifies the CA client identity and signed challenge. Legacy mode also checks the bound CSR identity and current enrollment; inventory mode permits neutral issuance only for its configured provisioner.
 - `GET /healthz` — liveness.
 
-## It denies (allow=false) when
+## ACME denies (allow=false) when
 
 - the CA client certificate is missing, invalid, or has the wrong identity,
 - the body is malformed,
@@ -53,9 +54,9 @@ why the deployed service uses certificate authentication.
 | `WEBHOOK_TLS_CERT_FILE` | no | HTTPS certificate; default `/etc/acme-authz-webhook/server.crt`. |
 | `WEBHOOK_TLS_KEY_FILE` | no | HTTPS private key; default `/etc/acme-authz-webhook/server.key`. |
 | `FLEET_API_BASE_URL` | yes | e.g. `https://fleet.example.com` |
-| `FLEET_API_TOKEN` | yes | Fleet API token (a read-only, API-only user). |
-| `ALLOW_LABEL` | no | If set, host must carry this Fleet label (e.g. `test-pilots`) to be allowed. Empty = any enrolled host. |
-| `PORT` | no | Loopback listen port (default `8080`). |
+| `FLEET_API_TOKEN` | yes | Fleet API-only token. Observer suffices for webhook lookups; the shared built-in certificate collector needs scoped maintainer permissions. |
+| `ALLOW_LABEL` | no | Host label gate for ACME and legacy identity-bound SCEP. Neutral inventory-mode issuance cannot evaluate a host label; network policy scopes access. |
+| `PORT` | no | Standalone loopback default `8080`; Terraform supplies `webhook_port`, default `9444`. |
 | `SCEP_CHALLENGE_SIGNING_KEY` | SCEP only | Server-only random key of at least 32 bytes. Missing disables SCEP; a short key fails startup. Never put this in an MDM profile. |
 
 ## Build & run

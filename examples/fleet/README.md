@@ -17,9 +17,22 @@ fingerprint reported through authenticated Fleet results; the CSR subject cannot
 select a host or VLAN. See the [deployment guide](../../docs/scep-identity-binding.md)
 for staging, freshness limits, and rollback.
 
+## Apple ACME
+
+Use `wifi-acme.mobileconfig` for supported hardware and enrollment that provide
+an attested serial. Replace `ACME_DIRECTORY_URL`, `SSID`, `RADIUS_SERVER_CN`, and
+`CA_CERT_PEM` (base64 DER of the **server** trust root). Leave Fleet's serial and
+certificate renewal variables intact. The subject CN must match ClientIdentifier;
+the OU carries Fleet's renewal ID, which the CA template preserves. Confirm that
+OU in the issued certificate and verify renewal before broad rollout.
+
+This System-scoped example is not the serial-free User Enrollment profile.
+Existing managed ACME certificates can be inventoried without reissuance; updating
+older profiles lacking the renewal OU is a separate lifecycle requirement.
+
 ## Apple BYOD
 
-Register a Smallstep CA named `CANAME` in Fleet using the SCEP provisioner URL,
+Register a Smallstep CA named `CANAME` in Fleet using `terraform output -raw smallstep_scep_rsa_url`,
 Terraform output `fleet_scep_challenge_url`, username `fleet`, and Secret Manager's
 `scep-broker-token` password. Replace `CANAME`, `SSID`, `RADIUS_SERVER_CN`, and
 `RADIUS_CA_CERT_BASE64_DER` in `wifi-ios-byod.mobileconfig`.
@@ -54,6 +67,12 @@ cloud-8021x implements the challenge endpoint itself; no Microsoft NDES server i
 needed. Fleet has one NDES integration slot, also used for Okta. Check existing
 NDES/Okta profiles before changing that integration. Keep credentials out of Git.
 
+Use the [token/encoding guide](../README.md#tokens) for certificate formats,
+URI escaping, and the separate client/server trust chains. `CA_CERT_PEM` in the
+root profile is base64 DER, not PEM. Fleet's own Windows certificate verification
+and renewal also require a current fleetd/osquery version; see
+[Fleet's certificate requirements](https://fleetdm.com/guides/connect-end-user-to-wifi-with-certificate).
+
 Deploy these three profiles:
 
 1. `../scep/root-ca.xml`: install the RADIUS server trust root.
@@ -78,5 +97,5 @@ last 60 minutes to cover Fleet's 57-minute cache; Apple Smallstep challenges las
 
 Fleet rejects repeated CA URL/challenge variable literals, including occurrences
 inside XML comments. Keep exactly one live occurrence of each. Do not substitute
-static shared challenges. The issuer replaces the requested CN with
+static shared challenges. In inventory-mode SCEP, the issuer replaces the requested CN with
 `cloud-8021x-inventory` and preserves the renewal OU.

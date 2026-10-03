@@ -1,6 +1,7 @@
 # Tests
 
-Fast policy/inventory tests use only Python's standard library:
+The policy/profile tests use Python's standard library. The full suite also
+invokes OpenSSL and Go for certificate fixtures and the profile-generator CLI:
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -82,6 +83,6 @@ responses, second-precision request timestamps, absent results, and bounded
 pending scripts after an uncertain POST. Profile tests check Device-scoped SCEP,
 NDES variables, machine authentication, and server name/root validation.
 
-These are API fixtures, not execution on Windows. Pilot the PowerShell collector,
+The automated suite uses API fixtures rather than executing on Windows. Pilot the PowerShell collector,
 Fleet profile installation, pre-login Wi-Fi, NYC VLAN/DHCP, and renewal on a real
 Windows device before enabling fingerprint enforcement.
