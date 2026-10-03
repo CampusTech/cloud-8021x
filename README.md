@@ -354,9 +354,24 @@ If you provide a Datadog Application key, Terraform creates a dashboard with aut
 
 **Without Terraform**: Import `datadog-dashboard.json` (FreeRADIUS) and, if you run the Smallstep CA, `datadog-smallstep-dashboard.json` via Datadog UI → Dashboards → New Dashboard → Import Dashboard JSON.
 
+The **VLAN Assignments** section adds a `$vlan` filter, accepted authentications
+by VLAN, distinct verified devices seen during the selected time range, a
+source-IP/VLAN breakdown, and a combined authentication/accounting event table.
+The VLAN filter applies only to this section, so the overview and reject widgets
+continue to show events without an assignment. Infrastructure metrics have no
+per-VLAN dimension.
+
+VLAN IDs are local to each location. Use the site filter or source-IP breakdown
+to distinguish the same ID at different sites. Source IP remains available when
+UniFi site-name enrichment is absent. Distinct-device counts use `@device_id`
+and `@identity_verified:true`, including serial-free BYOD; they are not a count
+of currently connected sessions. A blank/missing `vlan_id` means no dynamic
+assignment was recorded (expected at opted-out sites), not VLAN 0 or a failure.
+It does not tell us the AP/switch's default VLAN.
+
 **Required: Create Log Facets**
 
-The dashboard's log-based widgets and the `$site` template variable filter require log facets to be declared in Datadog. These are **not** auto-created — the Datadog Terraform provider [does not support facet creation](https://github.com/DataDog/terraform-provider-datadog/issues/1644).
+Create log facets for the dashboard's groupings, distinct-device counts, and `$site` / `$vlan` dropdown suggestions. Attribute searches work without facets. These are **not** auto-created — the Datadog Terraform provider [does not support facet creation](https://github.com/DataDog/terraform-provider-datadog/issues/1644).
 
 After your first log data arrives, go to **Datadog → Logs → Facets → Add** and create the following:
 
@@ -373,7 +388,8 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | `@serial` | `@serial` | String | Legacy expired client certificate monitor (device cardinality) |
 | `@device_id` | `@device_id` | String | Stable device identity, including serial-free BYOD |
 | `@certificate_fingerprint` | `@certificate_fingerprint` | String | Exact authenticated certificate |
-| `@vlan_id` | `@vlan_id` | String | Assigned VLAN |
+| Assigned VLAN | `@vlan_id` | String | VLAN filter, assignment trends, verified devices by VLAN |
+| RADIUS Source IP | `@src_ip` | String | Assignments by RADIUS Source / VLAN |
 | `@identity_verified` | `@identity_verified` | Boolean | Verified attribution versus diagnostic claims |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |
 | `@session_time` | `@session_time` | Measure (seconds) | Avg Session Duration |

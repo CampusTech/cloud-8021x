@@ -16,9 +16,18 @@ locals {
 
   dashboard_json = {
     title       = "FreeRADIUS 802.1X"
-    description = "RADIUS authentication, devices, accounting, and infrastructure"
+    description = "RADIUS authentication, assigned VLANs, devices, accounting, and infrastructure. The VLAN filter applies to the VLAN Assignments section; other sections retain unassigned and rejected events."
     layout_type = "ordered"
     template_variables = [
+      {
+        name   = "vlan"
+        prefix = "@vlan_id"
+        available_values = [
+        ]
+        defaults = [
+          "*",
+        ]
+      },
       {
         name             = "site"
         prefix           = "@site_name"
@@ -261,6 +270,189 @@ locals {
                   ]
                 }
               }
+            ]
+          }
+        },
+
+        # Assigned VLANs (filter scoped here to preserve unassigned/rejected events).
+        {
+          definition = {
+            title       = "VLAN Assignments"
+            type        = "group"
+            layout_type = "ordered"
+            widgets = [
+              {
+                definition = {
+                  type             = "note"
+                  content          = "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview."
+                  background_color = "white"
+                  font_size        = "14"
+                  text_align       = "left"
+                  show_tick        = false
+                }
+              },
+              {
+                definition = {
+                  title = "Accepted Authentications by VLAN"
+                  type  = "timeseries"
+                  requests = [
+                    {
+                      queries = [
+                        {
+                          data_source = "logs"
+                          name        = "query1"
+                          search = {
+                            query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                          }
+                          indexes = [
+                            "*",
+                          ]
+                          compute = {
+                            aggregation = "count"
+                          }
+                          group_by = [
+                            {
+                              facet = "@vlan_id"
+                              limit = 20
+                              sort = {
+                                aggregation = "count"
+                                order       = "desc"
+                              }
+                            },
+                          ]
+                        },
+                      ]
+                      response_format = "timeseries"
+                      formulas = [
+                        {
+                          formula = "query1"
+                        },
+                      ]
+                      display_type = "bars"
+                    },
+                  ]
+                }
+              },
+              {
+                definition = {
+                  title = "Verified Devices Seen by VLAN"
+                  type  = "toplist"
+                  requests = [
+                    {
+                      queries = [
+                        {
+                          data_source = "logs"
+                          name        = "query1"
+                          search = {
+                            query = "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
+                          }
+                          indexes = [
+                            "*",
+                          ]
+                          compute = {
+                            aggregation = "cardinality"
+                            metric      = "@device_id"
+                          }
+                          group_by = [
+                            {
+                              facet = "@vlan_id"
+                              limit = 20
+                              sort = {
+                                aggregation = "cardinality"
+                                order       = "desc"
+                                metric      = "@device_id"
+                              }
+                            },
+                          ]
+                        },
+                      ]
+                      response_format = "scalar"
+                      formulas = [
+                        {
+                          formula = "query1"
+                        },
+                      ]
+                    },
+                  ]
+                }
+              },
+              {
+                definition = {
+                  title = "Assignments by RADIUS Source / VLAN"
+                  type  = "toplist"
+                  requests = [
+                    {
+                      queries = [
+                        {
+                          data_source = "logs"
+                          name        = "query1"
+                          search = {
+                            query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                          }
+                          indexes = [
+                            "*",
+                          ]
+                          compute = {
+                            aggregation = "count"
+                          }
+                          group_by = [
+                            {
+                              facet = "@src_ip"
+                              limit = 20
+                              sort = {
+                                aggregation = "count"
+                                order       = "desc"
+                              }
+                            },
+                            {
+                              facet = "@vlan_id"
+                              limit = 20
+                              sort = {
+                                aggregation = "count"
+                                order       = "desc"
+                              }
+                            },
+                          ]
+                        },
+                      ]
+                      response_format = "scalar"
+                      formulas = [
+                        {
+                          formula = "query1"
+                        },
+                      ]
+                    },
+                  ]
+                }
+              },
+              {
+                definition = {
+                  title = "Recent VLAN Authentication and Accounting"
+                  type  = "log_stream"
+                  indexes = [
+                    "*",
+                  ]
+                  query = "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                  columns = [
+                    "@timestamp",
+                    "@event",
+                    "@vlan_id",
+                    "@site_name",
+                    "@src_ip",
+                    "@nas_ip",
+                    "@device_id",
+                    "@device_name",
+                    "@device_owner",
+                    "@identity_verified",
+                    "@session_id",
+                  ]
+                  sort = {
+                    column = "@timestamp"
+                    order  = "desc"
+                  }
+                  message_display = "inline"
+                }
+              },
             ]
           }
         },
