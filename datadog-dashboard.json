@@ -1,7 +1,15 @@
 {
-  "description": "RADIUS authentication, devices, accounting, and infrastructure",
+  "description": "RADIUS authentication, assigned VLANs, devices, accounting, and infrastructure. The VLAN filter applies to the VLAN Assignments section; other sections retain unassigned and rejected events.",
   "layout_type": "ordered",
   "template_variables": [
+    {
+      "available_values": [],
+      "defaults": [
+        "*"
+      ],
+      "name": "vlan",
+      "prefix": "@vlan_id"
+    },
     {
       "available_values": [],
       "defaults": [
@@ -104,7 +112,7 @@
           {
             "definition": {
               "autoscale": true,
-              "precision": 1,
+              "precision": 0,
               "requests": [
                 {
                   "conditional_formats": [
@@ -116,34 +124,32 @@
                   ],
                   "formulas": [
                     {
-                      "formula": "(default_zero(a) + default_zero(b)) * 60"
+                      "formula": "default_zero(a)"
                     }
                   ],
                   "queries": [
                     {
-                      "aggregator": "avg",
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_accepts.count{$host}.as_rate()"
-                    },
-                    {
-                      "aggregator": "avg",
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_rate()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                      }
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Accepts / min",
+              "title": "Accepts",
               "type": "query_value"
             }
           },
           {
             "definition": {
               "autoscale": true,
-              "precision": 1,
+              "precision": 0,
               "requests": [
                 {
                   "conditional_formats": [
@@ -155,27 +161,25 @@
                   ],
                   "formulas": [
                     {
-                      "formula": "(default_zero(a) + default_zero(b)) * 60"
+                      "formula": "default_zero(a)"
                     }
                   ],
                   "queries": [
                     {
-                      "aggregator": "avg",
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_rejects.count{$host}.as_rate()"
-                    },
-                    {
-                      "aggregator": "avg",
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_rate()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                      }
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Rejects / min",
+              "title": "Rejects",
               "type": "query_value"
             }
           },
@@ -205,33 +209,29 @@
                   ],
                   "formulas": [
                     {
-                      "formula": "((default_zero(a) + default_zero(b)) / (default_zero(a) + default_zero(b) + default_zero(c) + default_zero(d))) * 100"
+                      "formula": "(default_zero(a) / (default_zero(a) + default_zero(c))) * 100"
                     }
                   ],
                   "queries": [
                     {
-                      "aggregator": "sum",
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_accepts.count{$host}.as_count()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                      }
                     },
                     {
-                      "aggregator": "sum",
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_count()"
-                    },
-                    {
-                      "aggregator": "sum",
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "c",
-                      "query": "sum:freeradius.total_access_rejects.count{$host}.as_count()"
-                    },
-                    {
-                      "aggregator": "sum",
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_count()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                      }
                     }
                   ],
                   "response_format": "scalar"
@@ -258,19 +258,19 @@
                   "formulas": [
                     {
                       "alias": "Accepts",
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "formula": "a"
                     }
                   ],
                   "queries": [
                     {
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_accepts.count{$host}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_accepts.count{$host}.as_rate()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                      }
                     }
                   ],
                   "response_format": "timeseries",
@@ -283,19 +283,19 @@
                   "formulas": [
                     {
                       "alias": "Rejects",
-                      "formula": "default_zero(c) + default_zero(d)"
+                      "formula": "c"
                     }
                   ],
                   "queries": [
                     {
-                      "data_source": "metrics",
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
                       "name": "c",
-                      "query": "sum:freeradius.total_access_rejects.count{$host}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "sum:freeradius.freeradius_total_access_rejects.count{$host}.as_rate()"
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                      }
                     }
                   ],
                   "response_format": "timeseries",
@@ -339,7 +339,10 @@
               "columns": [
                 "@timestamp",
                 "@event",
+                "@device_id",
                 "@serial",
+                "@certificate_fingerprint",
+                "@vlan_id",
                 "@device_owner",
                 "@device_name",
                 "@ssid",
@@ -398,6 +401,187 @@
               ],
               "title": "Reject Reasons",
               "type": "toplist"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "VLAN Assignments",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "background_color": "white",
+              "content": "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview.",
+              "font_size": "14",
+              "show_tick": false,
+              "text_align": "left",
+              "type": "note"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "formula": "query1"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@vlan_id",
+                          "limit": 20,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "query1",
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "title": "Accepted Authentications by VLAN",
+              "type": "timeseries"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "query1"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "cardinality",
+                        "metric": "@device_id"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@vlan_id",
+                          "limit": 20,
+                          "sort": {
+                            "aggregation": "cardinality",
+                            "metric": "@device_id",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "query1",
+                      "search": {
+                        "query": "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Verified Devices Seen by VLAN",
+              "type": "toplist"
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "query1"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@src_ip",
+                          "limit": 20,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@vlan_id",
+                          "limit": 20,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "query1",
+                      "search": {
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Assignments by RADIUS Source / VLAN",
+              "type": "toplist"
+            }
+          },
+          {
+            "definition": {
+              "columns": [
+                "@timestamp",
+                "@event",
+                "@vlan_id",
+                "@site_name",
+                "@src_ip",
+                "@nas_ip",
+                "@device_id",
+                "@device_name",
+                "@device_owner",
+                "@identity_verified",
+                "@session_id"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "message_display": "inline",
+              "query": "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\"",
+              "sort": {
+                "column": "@timestamp",
+                "order": "desc"
+              },
+              "title": "Recent VLAN Authentication and Accounting",
+              "type": "log_stream"
             }
           }
         ]

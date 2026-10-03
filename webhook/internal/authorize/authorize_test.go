@@ -13,7 +13,7 @@ type fakeLookup struct {
 	err  error
 }
 
-func (f fakeLookup) LookupHostBySerial(_ context.Context, _ string) (*fleet.Host, error) {
+func (f fakeLookup) LookupHostByIdentity(_ context.Context, _ string) (*fleet.Host, error) {
 	return f.host, f.err
 }
 

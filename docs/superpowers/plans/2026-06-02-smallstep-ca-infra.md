@@ -1,5 +1,10 @@
 # cloud-8021x Smallstep step-ca Infrastructure Implementation Plan (Plan 1 of 3)
 
+> Historical design/implementation record. Commands and configuration may have
+> been superseded. Use the current [README](../../../README.md),
+> [VLAN guide](../../dynamic-vlans.md), and
+> [SCEP deployment guide](../../scep-identity-binding.md) for deployment.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up an optional, off-by-default self-hosted Smallstep `step-ca` co-located on the existing cloud-8021x RADIUS VMs, exposing both an ACME (`device-attest-01`) and a SCEP provisioner, with a Cloud-KMS-backed CA, Cloud SQL Postgres for ACME HA, a GCLB + Cloud Armor front door, and an independently-gated RADIUS trust swap to Smallstep-only.

@@ -221,29 +221,6 @@ resource "google_service_networking_connection" "smallstep" {
   reserved_peering_ranges = [google_compute_global_address.smallstep_psa[0].name]
 }
 
-# --- SCEP static challenge (Fleet proxies a per-host challenge in front; this
-#     is the upstream secret step-ca itself checks). ---------------------------
-resource "random_password" "smallstep_scep_challenge" {
-  count   = local.smallstep_enabled
-  length  = 40
-  special = false
-}
-
-resource "google_secret_manager_secret" "smallstep_scep_challenge" {
-  count     = local.smallstep_enabled
-  project   = google_project.this.project_id
-  secret_id = "smallstep-scep-challenge"
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "smallstep_scep_challenge" {
-  count       = local.smallstep_enabled
-  secret      = google_secret_manager_secret.smallstep_scep_challenge[0].id
-  secret_data = random_password.smallstep_scep_challenge[0].result
-}
-
 # --- CA root cert: created empty, populated by the VM on first init, read back
 #     out for distribution (RADIUS trust bundle, MDM profiles). ----------------
 resource "google_secret_manager_secret" "smallstep_ca_cert" {
@@ -253,15 +230,6 @@ resource "google_secret_manager_secret" "smallstep_ca_cert" {
   replication {
     auto {}
   }
-}
-
-# --- Secret IAM: VM SA can read challenge + read/write the CA cert. -----------
-resource "google_secret_manager_secret_iam_member" "smallstep_scep_challenge" {
-  count     = local.smallstep_enabled
-  project   = google_project.this.project_id
-  secret_id = google_secret_manager_secret.smallstep_scep_challenge[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_version_manager" {
@@ -547,6 +515,13 @@ resource "google_compute_instance_group" "smallstep_primary" {
     name = "stepca-rsa"
     port = 8444
   }
+  dynamic "named_port" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name = "scep-broker"
+      port = 9081
+    }
+  }
 }
 
 resource "google_compute_instance_group" "smallstep_secondary" {
@@ -563,6 +538,13 @@ resource "google_compute_instance_group" "smallstep_secondary" {
   named_port {
     name = "stepca-rsa"
     port = 8444
+  }
+  dynamic "named_port" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name = "scep-broker"
+      port = 9081
+    }
   }
 }
 
@@ -727,6 +709,24 @@ resource "google_compute_url_map" "smallstep_rsa" {
   project         = google_project.this.project_id
   name            = "smallstep-ca-rsa-urlmap"
   default_service = google_compute_backend_service.smallstep_rsa[0].id
+  dynamic "host_rule" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      hosts        = [var.smallstep_ca_rsa_dns_name]
+      path_matcher = "scep-broker"
+    }
+  }
+  dynamic "path_matcher" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name            = "scep-broker"
+      default_service = google_compute_backend_service.smallstep_rsa[0].id
+      path_rule {
+        paths   = ["/fleet/scep-challenge", "/fleet/ndes-challenge"]
+        service = google_compute_backend_service.scep_broker[0].id
+      }
+    }
+  }
 }
 
 resource "google_compute_target_https_proxy" "smallstep_rsa" {

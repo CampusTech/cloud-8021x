@@ -121,21 +121,36 @@ resource "google_secret_manager_secret_iam_member" "cert_secrets_write" {
 
 locals {
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
-    project_id                 = google_project.this.project_id
-    server_cert_cn             = var.server_cert_cn
-    server_cert_org            = var.server_cert_org
-    has_root_ca                = var.okta_root_ca_cert_pem != ""
-    has_jamf_lookup            = var.jamf_url != ""
-    has_fleet_lookup           = var.enable_fleet_lookup
-    has_unifi_lookup           = var.unifi_api_key != ""
-    has_meraki_lookup          = var.meraki_api_key != ""
-    meraki_org_id              = var.meraki_org_id
-    rewrite_username           = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
-    rewrite_username_separator = var.rewrite_username_separator
-    tls_session_cache          = var.tls_session_cache
-    tls_session_cache_lifetime = var.tls_session_cache_lifetime
-    tls_max_version            = var.tls_max_version
-    datadog_site               = var.datadog_site
+    project_id                      = google_project.this.project_id
+    server_cert_cn                  = var.server_cert_cn
+    server_cert_org                 = var.server_cert_org
+    has_root_ca                     = var.okta_root_ca_cert_pem != ""
+    has_jamf_lookup                 = var.jamf_url != ""
+    has_fleet_lookup                = var.enable_fleet_lookup
+    has_unifi_lookup                = var.unifi_api_key != ""
+    has_meraki_lookup               = var.meraki_api_key != ""
+    meraki_org_id                   = var.meraki_org_id
+    rewrite_username                = var.rewrite_username && (var.jamf_url != "" || var.enable_fleet_lookup)
+    rewrite_username_separator      = var.rewrite_username_separator
+    tls_session_cache               = var.tls_session_cache
+    tls_session_cache_lifetime      = var.tls_session_cache_lifetime
+    tls_max_version                 = var.tls_max_version
+    vlan_policy_enabled             = var.radius_vlan_policy != null
+    vlan_policy_config_b64          = base64encode(jsonencode(var.radius_vlan_policy))
+    device_policy_module_b64        = filebase64("${path.module}/scripts/device_policy.py")
+    inventory_policy_module_b64     = filebase64("${path.module}/scripts/inventory_policy.py")
+    radius_identity_module_b64      = filebase64("${path.module}/scripts/radius_identity.py")
+    radius_sources_module_b64       = filebase64("${path.module}/scripts/radius_sources.py")
+    unifi_source_discovery_enabled  = local.unifi_source_discovery_enabled
+    radius_sources_config_b64       = base64encode(jsonencode({ project = google_project.this.project_id, clients = var.radius_clients }))
+    radius_log_module_b64           = filebase64("${path.module}/scripts/radius_log.py")
+    radius_vlan_module_b64          = filebase64("${path.module}/scripts/radius_vlan.py")
+    fleet_certificates_module_b64   = filebase64("${path.module}/scripts/fleet_certificates.py")
+    windows_certificates_script_b64 = filebase64("${path.module}/scripts/windows_certificates.ps1")
+    fleet_certificate_inventory     = var.enable_fleet_certificate_inventory
+    scep_certificate_inventory      = local.scep_inventory_enabled
+    certificate_inventory_enabled   = try(var.radius_vlan_policy.certificate_inventory, false)
+    datadog_site                    = var.datadog_site
     radius_clients_json = jsonencode({
       for k, v in var.radius_clients : k => {
         cidrs       = v.cidrs
@@ -150,7 +165,7 @@ locals {
     ca_name_prefix        = var.ca_name_prefix
     smallstep_ca_dns_name = var.smallstep_ca_dns_name
     smallstep_acme_name   = var.smallstep_acme_provisioner_name
-    acme_webhook_url      = var.acme_authorizing_webhook_url
+    acme_webhook_url      = var.acme_authorizing_webhook_url != "" ? var.acme_authorizing_webhook_url : (var.enable_acme_webhook ? "https://127.0.0.1:${var.webhook_port}/authorize" : "")
     # On-VM ACME authorizing webhook (localhost systemd service).
     acme_webhook_enabled          = var.enable_acme_webhook
     webhook_release_version       = var.webhook_release_version
@@ -176,7 +191,7 @@ resource "google_compute_instance" "radius" {
   name         = "radius-primary"
   machine_type = var.machine_type
   zone         = var.zone
-  tags         = ["radius-server"]
+  tags         = ["radius-server", "radius-primary"]
 
   boot_disk {
     initialize_params {
@@ -199,9 +214,7 @@ resource "google_compute_instance" "radius" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    startup-script = local.startup_script
-  }
+  metadata = local.startup_metadata
 
   shielded_instance_config {
     enable_secure_boot          = true
@@ -211,6 +224,7 @@ resource "google_compute_instance" "radius" {
 
   depends_on = [
     google_project_service.apis["compute.googleapis.com"],
+    google_storage_bucket_iam_member.startup_script_reader,
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
@@ -219,8 +233,17 @@ resource "google_compute_instance" "radius" {
     # on all instances of each resource so the VM waits for the CA's secrets, KMS
     # IAM, and Cloud SQL before the startup script consumes them on first boot.
     google_secret_manager_secret_version.smallstep_db_password,
-    google_secret_manager_secret_version.smallstep_scep_challenge,
-    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_version.scep_challenge_signing_key,
+    google_secret_manager_secret_iam_member.scep_challenge_signing_key_radius,
+    google_secret_manager_secret_version.scep_broker_token,
+    google_secret_manager_secret_iam_member.scep_broker_token_radius,
+    terraform_data.certificate_inventory_contract,
+    google_project_iam_member.radius_source_discovery,
+    google_project_iam_member.radius_source_network_policy,
+    google_compute_firewall.radius_discovered,
+    google_secret_manager_secret_iam_member.unifi_api_key_access,
+    google_secret_manager_secret_version.radius_accounting_key,
+    google_secret_manager_secret_iam_member.radius_accounting_key,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,
@@ -256,7 +279,7 @@ resource "google_compute_instance" "radius_secondary" {
   name         = "radius-secondary"
   machine_type = var.machine_type
   zone         = var.secondary_zone
-  tags         = ["radius-server"]
+  tags         = ["radius-server", "radius-secondary"]
 
   boot_disk {
     initialize_params {
@@ -279,9 +302,7 @@ resource "google_compute_instance" "radius_secondary" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    startup-script = local.startup_script
-  }
+  metadata = local.startup_metadata
 
   shielded_instance_config {
     enable_secure_boot          = true
@@ -291,13 +312,23 @@ resource "google_compute_instance" "radius_secondary" {
 
   depends_on = [
     google_project_service.apis["compute.googleapis.com"],
+    google_storage_bucket_iam_member.startup_script_reader,
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
     # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false).
     google_secret_manager_secret_version.smallstep_db_password,
-    google_secret_manager_secret_version.smallstep_scep_challenge,
-    google_secret_manager_secret_iam_member.smallstep_scep_challenge,
+    google_secret_manager_secret_version.scep_challenge_signing_key,
+    google_secret_manager_secret_iam_member.scep_challenge_signing_key_radius,
+    google_secret_manager_secret_version.scep_broker_token,
+    google_secret_manager_secret_iam_member.scep_broker_token_radius,
+    terraform_data.certificate_inventory_contract,
+    google_project_iam_member.radius_source_discovery,
+    google_project_iam_member.radius_source_network_policy,
+    google_compute_firewall.radius_discovered,
+    google_secret_manager_secret_iam_member.unifi_api_key_access,
+    google_secret_manager_secret_version.radius_accounting_key,
+    google_secret_manager_secret_iam_member.radius_accounting_key,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_version_manager,
     google_secret_manager_secret_iam_member.smallstep_ca_cert_accessor,
     google_secret_manager_secret_iam_member.smallstep_intermediate_cert_version_manager,

@@ -1,4 +1,4 @@
-// Package fleet is a minimal client for looking up a host by hardware serial.
+// Package fleet is a minimal client for looking up a host by certificate device identifier (serial or enrollment UUID).
 // Distinguishes three outcomes the authorizer needs: found (enrolled host),
 // not-found (nil host, nil error), and error (Fleet unreachable / 5xx / bad
 // auth) — the last MUST propagate so the caller can fail closed.
@@ -17,6 +17,7 @@ import (
 type Host struct {
 	ID               int
 	HardwareSerial   string
+	UUID             string
 	Platform         string
 	Enrolled         bool
 	EnrollmentStatus string
@@ -46,6 +47,7 @@ type hostResponse struct {
 	Host *struct {
 		ID             int    `json:"id"`
 		HardwareSerial string `json:"hardware_serial"`
+		UUID           string `json:"uuid"`
 		Platform       string `json:"platform"`
 		Labels         []struct {
 			Name string `json:"name"`
@@ -63,10 +65,10 @@ func enrolledFromStatus(s string) bool {
 	return strings.HasPrefix(s, "On")
 }
 
-// LookupHostBySerial returns (host, nil) if enrolled, (nil, nil) if no such
+// LookupHostByIdentity returns (host, nil) for an exact serial/UUID match, (nil, nil) if no such
 // host (404), or (nil, error) on any transport/non-2xx/parse failure.
-func (c *Client) LookupHostBySerial(ctx context.Context, serial string) (*Host, error) {
-	u := fmt.Sprintf("%s/api/latest/fleet/hosts/identifier/%s", c.base, url.PathEscape(serial))
+func (c *Client) LookupHostByIdentity(ctx context.Context, identity string) (*Host, error) {
+	u := fmt.Sprintf("%s/api/latest/fleet/hosts/identifier/%s", c.base, url.PathEscape(identity))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -93,9 +95,16 @@ func (c *Client) LookupHostBySerial(ctx context.Context, serial string) (*Host, 
 	h := &Host{
 		ID:               hr.Host.ID,
 		HardwareSerial:   hr.Host.HardwareSerial,
+		UUID:             hr.Host.UUID,
 		Platform:         hr.Host.Platform,
 		EnrollmentStatus: hr.Host.MDM.EnrollmentStatus,
 		Enrolled:         enrolledFromStatus(hr.Host.MDM.EnrollmentStatus),
+	}
+	// Fleet's identifier endpoint also accepts hostnames. A mutable hostname
+	// must never authorize issuance for someone else's serial/enrollment ID.
+	if identity == "" || (h.HardwareSerial != identity &&
+		(h.UUID == "" || !strings.EqualFold(h.UUID, identity))) {
+		return nil, nil
 	}
 	for _, l := range hr.Host.Labels {
 		h.Labels = append(h.Labels, l.Name)

@@ -45,6 +45,7 @@ resource "google_project" "this" {
 resource "google_project_service" "apis" {
   for_each = toset([
     "compute.googleapis.com",
+    "storage.googleapis.com",
     "secretmanager.googleapis.com",
     "iap.googleapis.com",
     "logging.googleapis.com",

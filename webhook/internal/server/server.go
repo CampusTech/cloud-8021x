@@ -1,15 +1,16 @@
 // Package server is the HTTP surface. It reads the raw body, verifies the
-// step-ca HMAC signature, parses the request, extracts the device serial, and
+// step-ca caller, parses the request, extracts the device identity, and
 // asks the Decider. Any failure along the way responds allow=false: the
 // handler is fail-closed by construction.
 package server
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
+	"time"
+
+	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
 
 	"github.com/CampusTech/cloud-8021x/webhook/internal/signature"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/types"
@@ -31,16 +32,22 @@ type ResponseShape struct {
 }
 
 type handler struct {
-	secret        []byte
-	scepChallenge []byte
-	decider       Decider
+	secret               []byte
+	scepSigningKey       []byte
+	decider              Decider
+	mutualTLS            bool
+	inventoryProvisioner string
 }
 
 // New returns an http.Handler serving POST /authorize, POST /scep-challenge,
-// and GET /healthz. scepChallenge is the shared SCEP challenge value; when
-// empty, /scep-challenge denies every request (fail-closed misconfiguration).
-func New(signingSecret, scepChallenge string, d Decider) http.Handler {
-	h := &handler{secret: []byte(signingSecret), scepChallenge: []byte(scepChallenge), decider: d}
+// and GET /healthz. scepSigningKey verifies identity-bound challenge tokens;
+// an absent or short key makes /scep-challenge deny every request.
+func New(signingSecret, scepSigningKey string, d Decider) http.Handler {
+	h := &handler{secret: []byte(signingSecret), scepSigningKey: []byte(scepSigningKey), decider: d}
+	return h.routes()
+}
+
+func (h *handler) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/authorize", h.authorize)
 	mux.HandleFunc("/scep-challenge", h.scepChallengeHandler)
@@ -74,8 +81,8 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
 		deny(w)
 		return
 	}
-	if !signature.Verify(h.secret, body, r.Header.Get("X-Smallstep-Signature")) {
-		logrus.Warn("deny: invalid or missing signature")
+	if !h.authenticated(r, body) {
+		logrus.Warn("deny: invalid webhook authentication")
 		deny(w)
 		return
 	}
@@ -97,8 +104,8 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
 }
 
 // scepChallengeHandler serves step-ca's SCEP SCEPCHALLENGE webhook. It enforces
-// BOTH the static shared challenge value AND that the serial in the CSR Subject
-// CommonName is a Fleet-enrolled host. Fail-closed at every step.
+// an expiring challenge bound to the CSR identity and exact provisioner, then
+// checks current device enrollment. Fail-closed at every step.
 func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		deny(w)
@@ -110,8 +117,8 @@ func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		deny(w)
 		return
 	}
-	if !signature.Verify(h.secret, body, r.Header.Get("X-Smallstep-Signature")) {
-		logrus.Warn("deny: invalid or missing signature")
+	if !h.authenticated(r, body) {
+		logrus.Warn("deny: invalid webhook authentication")
 		deny(w)
 		return
 	}
@@ -121,32 +128,31 @@ func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 		deny(w)
 		return
 	}
-	if len(h.scepChallenge) == 0 {
-		logrus.Warn("deny: scep challenge not configured")
-		deny(w)
-		return
-	}
-	if subtle.ConstantTimeCompare(h.scepChallenge, []byte(req.SCEPChallenge)) != 1 {
-		logrus.Warn("deny: invalid scep challenge")
-		deny(w)
-		return
-	}
 	if req.X509CertificateRequest == nil {
 		logrus.Warn("deny: missing CSR")
 		deny(w)
 		return
 	}
-	serial := strings.TrimSpace(req.X509CertificateRequest.Subject.CommonName)
-	serial = strings.TrimSuffix(serial, " Campus WiFi")
-	serial = strings.TrimSpace(serial)
-	if serial == "" {
-		logrus.Warn("deny: empty serial in CSR common name")
+	if h.inventoryProvisioner != "" && req.ProvisionerName == h.inventoryProvisioner && challenge.VerifyInventory(h.scepSigningKey, req.SCEPChallenge, h.inventoryProvisioner, time.Now()) {
+		allow(w)
+		return
+	}
+	identity := challenge.NormalizeIdentity(req.X509CertificateRequest.Subject.CommonName)
+	if !challenge.Verify(h.scepSigningKey, req.SCEPChallenge, req.X509CertificateRequest.Subject.CommonName, req.ProvisionerName, time.Now()) {
+		logrus.Warn("deny: invalid or expired identity-bound SCEP challenge")
 		deny(w)
 		return
 	}
-	if h.decider.Allow(serial) {
+	if h.decider.Allow(identity) {
 		allow(w)
 		return
 	}
 	deny(w)
+}
+
+func (h *handler) authenticated(r *http.Request, body []byte) bool {
+	if h.mutualTLS {
+		return r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0
+	}
+	return signature.Verify(h.secret, body, r.Header.Get("X-Smallstep-Signature"))
 }

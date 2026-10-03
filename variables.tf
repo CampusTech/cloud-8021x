@@ -58,11 +58,33 @@ variable "disk_size_gb" {
 }
 
 variable "radius_clients" {
-  description = "Map of RADIUS clients (offices). Each gets a unique shared secret auto-generated and stored in Secret Manager."
+  description = "RADIUS offices with unique shared secrets. Use static IPv4 CIDRs, an optional UniFi gateway/console host ID for public WAN discovery, or both."
   type = map(object({
-    cidrs       = list(string)
-    description = optional(string, "Ubiquiti UniFi APs")
+    cidrs         = optional(list(string), [])
+    unifi_host_id = optional(string)
+    description   = optional(string, "Ubiquiti UniFi APs")
   }))
+
+  validation {
+    condition = alltrue([for office, client in var.radius_clients :
+      can(regex("^[a-z][a-z0-9-]{0,47}$", office)) &&
+      (length(client.cidrs) > 0 || try(length(trimspace(client.unifi_host_id)) > 0, false)) &&
+      alltrue([for cidr in client.cidrs : can(cidrnetmask(cidr)) && try(tonumber(split("/", cidr)[1]) > 0, false)])
+    ])
+    error_message = "Office keys must be lowercase safe names (up to 48 characters); each office requires IPv4 CIDRs narrower than /0 or a UniFi host ID."
+  }
+
+  validation {
+    condition = alltrue([for client in values(var.radius_clients) :
+      client.unifi_host_id == null ? true : var.unifi_api_key != "" && client.unifi_host_id == trimspace(client.unifi_host_id)
+    ])
+    error_message = "UniFi host discovery requires unifi_api_key and an exact host ID with no surrounding whitespace."
+  }
+
+  validation {
+    condition     = length(distinct(compact([for client in values(var.radius_clients) : client.unifi_host_id]))) == length(compact([for client in values(var.radius_clients) : client.unifi_host_id]))
+    error_message = "A UniFi host ID can identify only one RADIUS office."
+  }
 }
 
 variable "ssh_allowed_cidrs" {
@@ -269,9 +291,14 @@ variable "smallstep_scep_rsa_provisioner_name" {
 }
 
 variable "acme_authorizing_webhook_url" {
-  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback http://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty = ACME provisioner configured but no device should enroll yet."
+  description = "URL step-ca calls per ACME order to authorize issuance (refuses to sign unless it returns allow:true). The webhook runs on the VM, so this is normally the loopback https://127.0.0.1:<webhook_port>/authorize. MUST be set and healthy (fail-closed) before enrolling real devices. Empty selects the managed HTTPS endpoint when enable_acme_webhook=true; otherwise no ACME authorization hook is configured."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.acme_authorizing_webhook_url == "" || startswith(var.acme_authorizing_webhook_url, "https://")
+    error_message = "step-ca requires HTTPS for authorizing webhooks. Use https://127.0.0.1:<webhook_port>/authorize for the local service."
+  }
 }
 
 variable "smallstep_db_tier" {
@@ -291,6 +318,11 @@ variable "enable_acme_webhook" {
   description = "Run the ACME authorizing webhook on the RADIUS VMs (localhost systemd service) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.enable_acme_webhook || var.enable_smallstep_ca
+    error_message = "enable_acme_webhook requires enable_smallstep_ca = true."
+  }
 }
 
 variable "fleet_api_base_url" {
@@ -329,11 +361,103 @@ variable "webhook_allow_label" {
 variable "webhook_release_version" {
   description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = "1.1.0"
+  default     = "2.0.0"
 }
 
 variable "webhook_port" {
-  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls http://127.0.0.1:<port>/authorize)."
+  description = "Loopback port the on-VM ACME authorizing webhook listens on (step-ca calls https://127.0.0.1:<port>/authorize)."
   type        = number
   default     = 9444
+}
+
+variable "enable_fleet_certificate_inventory" {
+  description = "Collect Apple managed identities through Fleet MDM and Windows machine identities through Fleet scripts. Requires permission to run CertificateList and scripts, with fleetd scripts enabled on Windows. Can be staged before fingerprint enforcement."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_fleet_certificate_inventory || var.enable_fleet_lookup
+    error_message = "Certificate collection requires enable_fleet_lookup=true."
+  }
+}
+
+variable "scep_broker_requests_per_minute" {
+  description = "Cloud Armor challenge requests per minute per source IP. Fleet shares its outbound IP across device enrollments, so size this for rollout and renewal bursts. Excess requests receive HTTP 429 without a timed ban; broker authentication remains required."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.scep_broker_requests_per_minute >= 1 && floor(var.scep_broker_requests_per_minute) == var.scep_broker_requests_per_minute
+    error_message = "scep_broker_requests_per_minute must be a positive integer."
+  }
+}
+
+# Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
+# not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
+variable "radius_vlan_policy" {
+  description = "Dynamic VLAN authorization. Null disables it. locations keys match radius_clients office names; each location has its own complete group/fallback mapping or dynamic_vlans=false to retain authorization without VLAN assignment. Empty locations uses the global mapping. Unknown locations fail closed."
+  type = object({
+    group_vlans           = optional(map(number), {})
+    fallback_vlan         = optional(number)
+    cache_max_age         = optional(number, 3600)
+    cache_file            = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
+    certificate_inventory = optional(bool, false)
+    certificate_max_age   = optional(number, 86400)
+    locations = optional(map(object({
+      dynamic_vlans = optional(bool, true)
+      group_vlans   = optional(map(number), {})
+      fallback_vlan = optional(number)
+    })), {})
+  })
+  default = null
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for location, policy in var.radius_vlan_policy.locations :
+      length(location) > 0 && location == trimspace(location) && alltrue([
+        for vlan in concat(values(policy.group_vlans), policy.fallback_vlan == null ? [] : [policy.fallback_vlan]) :
+        vlan != null && try(vlan >= 1 && vlan <= 4094 && floor(vlan) == vlan, false)
+      ])
+    ])
+    error_message = "Location names must be nonempty with no surrounding whitespace, and location VLAN IDs must be integers from 1 through 4094."
+  }
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for policy in values(var.radius_vlan_policy.locations) :
+      policy.dynamic_vlans || (length(policy.group_vlans) == 0 && policy.fallback_vlan == null)
+    ])
+    error_message = "Locations with dynamic_vlans=false must omit group_vlans and fallback_vlan (an empty group_vlans map is allowed)."
+  }
+
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : length(setsubtract(toset(keys(var.radius_vlan_policy.locations)), toset(keys(var.radius_clients)))) == 0
+    error_message = "Every VLAN location must match an office key in radius_clients."
+  }
+
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.certificate_max_age >= 7200 && floor(var.radius_vlan_policy.certificate_max_age) == var.radius_vlan_policy.certificate_max_age
+    error_message = "certificate_max_age must be an integer of at least 7200 seconds to allow two hourly certificate collection cycles."
+  }
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue([
+      for vlan in concat(values(var.radius_vlan_policy.group_vlans), var.radius_vlan_policy.fallback_vlan == null ? [] : [var.radius_vlan_policy.fallback_vlan]) :
+      vlan != null && try(vlan >= 1 && vlan <= 4094 && floor(vlan) == vlan, false)
+    ])
+    error_message = "VLAN IDs must be integers from 1 through 4094."
+  }
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.cache_max_age >= 60 && floor(var.radius_vlan_policy.cache_max_age) == var.radius_vlan_policy.cache_max_age
+    error_message = "cache_max_age must be an integer of at least 60 seconds."
+  }
+  validation {
+    condition = var.radius_vlan_policy == null ? true : (
+      var.radius_vlan_policy.cache_file != "/etc/freeradius/3.0/device-policy-cache.json" || var.radius_vlan_policy.cache_max_age >= 600
+    )
+    error_message = "The built-in inventory cache refreshes every five minutes; cache_max_age must be at least 600 seconds."
+  }
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : startswith(var.radius_vlan_policy.cache_file, "/")
+    error_message = "cache_file must be an absolute path to a trusted inventory snapshot."
+  }
 }

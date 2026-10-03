@@ -8,19 +8,20 @@
 <!--                                                                        -->
 <!-- Apple's com.apple.security.acme payload enrolls an EAP-TLS client       -->
 <!-- identity straight from the device against step-ca's ACME directory      -->
-<!-- (device-attest-01). No SCEP proxy is involved on Apple platforms.       -->
+<!-- (device-attest-01). No SCEP proxy is involved in this ACME flow.       -->
 <!--                                                                        -->
 <!-- Tokens:                                                                 -->
 <!--   ACME_DIRECTORY_URL  -> step-ca ACME directory for the Wi-Fi          -->
 <!--                          provisioner (e.g. https://ca.example.org/acme/-->
 <!--                          wifi-acme/directory)                           -->
+<!--   RADIUS_SERVER_CN    -> exact RADIUS server certificate name.          -->
 <!--   SSID                -> your network SSID                              -->
 <!--   CLIENT_IDENTIFIER   -> the device's permanent identifier (serial).    -->
 <!--                          On MDMs that template this, replace with the   -->
 <!--                          MDM's per-device serial variable. The Fleet    -->
 <!--                          variant (examples/fleet/) uses                 -->
 <!--                          $FLEET_VAR_HOST_HARDWARE_SERIAL here.          -->
-<!--   CA_CERT_PEM         -> base64 DER of your CA cert, inlined in the      -->
+<!--   CA_CERT_PEM         -> base64 DER of the RADIUS server trust root, inlined in the      -->
 <!--                          com.apple.security.root <data> below.          -->
 <!-- ===================================================================== -->
 <plist version="1">
@@ -116,7 +117,7 @@
         <string>root-ca.cer</string>
         <key>PayloadContent</key>
         <!-- Replace the CA_CERT_PEM token below with the base64 DER of your
-             root CA. A .cer file already contains the DER bytes; otherwise run:
+             RADIUS server trust root. For a PEM certificate run:
              openssl x509 -in ca.pem -outform DER | base64 -->
         <data>CA_CERT_PEM</data>
         <key>AllowAllAppsAccess</key>
@@ -162,7 +163,13 @@
           </array>
           <key>UserName</key>
           <string/>
-          <!-- Pins server trust to the root CA payload above. -->
+          <!-- Pin both the RADIUS server name and its trust root. -->
+          <key>TLSTrustedServerNames</key>
+          <array>
+            <string>RADIUS_SERVER_CN</string>
+          </array>
+          <key>TLSAllowTrustExceptions</key>
+          <false/>
           <key>PayloadCertificateAnchorUUID</key>
           <array>
             <string>964E450A-AFDD-4410-91C9-3529F5C92F76</string>

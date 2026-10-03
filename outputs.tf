@@ -3,6 +3,16 @@ output "project_id" {
   value       = google_project.this.project_id
 }
 
+output "startup_script_size_bytes" {
+  description = "UTF-8 byte count of the fully rendered startup script"
+  value       = nonsensitive(local.startup_script_size_bytes)
+}
+
+output "startup_script_transport" {
+  description = "GCE startup metadata key selected for both RADIUS instances"
+  value       = nonsensitive(local.startup_script_uses_gcs ? "startup-script-url" : "startup-script")
+}
+
 output "radius_primary_ip" {
   description = "Primary RADIUS server public IP"
   value       = google_compute_address.radius.address

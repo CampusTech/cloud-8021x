@@ -1,11 +1,17 @@
 package main
 
 import (
-	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/CampusTech/cloud-8021x/webhook/internal/authorize"
+	"github.com/CampusTech/cloud-8021x/webhook/internal/broker"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/config"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/fleet"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/server"
@@ -20,15 +26,20 @@ import (
 var version = "dev"
 
 func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		logrus.WithError(err).Fatal("command failed")
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "acme-authz-webhook",
-		Short: "step-ca AUTHORIZING webhook that allows ACME/SCEP issuance only for Fleet-enrolled device serials (fail-closed).",
+		Short: "step-ca authorizing webhook and optional Fleet SCEP challenge broker (fail-closed).",
 	}
 	root.AddCommand(serveCmd())
 	root.AddCommand(versionCmd())
-	if err := root.Execute(); err != nil {
-		logrus.WithError(err).Fatal("command failed")
-	}
+	root.AddCommand(challengeCmd())
+	return root
 }
 
 func versionCmd() *cobra.Command {
@@ -44,21 +55,54 @@ func versionCmd() *cobra.Command {
 func serveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
-		Short: "Run the authorizing webhook HTTP server.",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Short: "Run the mutual-TLS authorizing webhook server.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			var roots []byte
+			for _, name := range strings.Split(cfg.ClientCAFiles, ":") {
+				data, err := os.ReadFile(name)
+				if err != nil {
+					return fmt.Errorf("read webhook client CA: %w", err)
+				}
+				roots = append(roots, data...)
+				roots = append(roots, '\n')
+			}
+			tlsConfig, err := server.ClientTLSConfig(roots, strings.Split(cfg.ClientDNSNames, ","))
 			if err != nil {
 				return err
 			}
 			fc := fleet.New(cfg.FleetBaseURL, cfg.FleetToken, cfg.FleetTimeout)
 			authz := authorize.New(fc, cfg.AllowLabel)
-			h := server.New(cfg.SigningSecret, cfg.SCEPChallenge, server.DeciderFunc(func(serial string) bool {
-				return authz.Decide(context.Background(), serial)
-			}))
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			decider := server.DeciderFunc(func(identity string) bool { return authz.Decide(ctx, identity) })
+			h := server.NewMutualTLS(cfg.SCEPChallengeSigningKey, decider)
+			if cfg.SCEPCertificateInventory {
+				h = server.NewMutualTLSInventory(cfg.SCEPChallengeSigningKey, cfg.SCEPBrokerProvisioner, decider)
+			}
 			// Bind to loopback only — step-ca calls it over localhost on the
 			// same VM. Defense-in-depth in case host firewall rules ever drift.
 			logrus.WithField("port", cfg.Port).Info("authorizing webhook listening")
-			return http.ListenAndServe("127.0.0.1:"+cfg.Port, h)
+			srv := &http.Server{
+				Addr: "127.0.0.1:" + cfg.Port, Handler: h,
+				ReadHeaderTimeout: 5 * time.Second,
+				TLSConfig:         tlsConfig,
+			}
+			servers := []*http.Server{srv}
+			if cfg.SCEPCertificateInventory {
+				brokerHandler, err := broker.New(cfg.BrokerOptions())
+				if err != nil {
+					return err
+				}
+				logrus.WithField("port", cfg.SCEPBrokerPort).Info("Fleet SCEP challenge broker listening")
+				// GCLB terminates public TLS and connects by HTTPS. Firewall permits only
+				// GFE/health checks; this separate server deliberately has no mTLS or authorize route.
+				servers = append(servers, &http.Server{Addr: ":" + cfg.SCEPBrokerPort, Handler: brokerHandler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}})
+			}
+			return serveServers(ctx, servers, cfg.TLSCertFile, cfg.TLSKeyFile)
 		},
 	}
 }

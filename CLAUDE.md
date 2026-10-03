@@ -2,14 +2,16 @@
 
 ## Project Overview
 
-This repo deploys a standalone FreeRADIUS server on Google Cloud (GCE) via Terraform, providing RADIUS/802.1X authentication for Ubiquiti UniFi WiFi using certificate-based EAP-TLS.
+This repo deploys primary and secondary FreeRADIUS servers on Google Cloud (GCE) via Terraform, providing RADIUS/802.1X authentication for Ubiquiti UniFi WiFi using certificate-based EAP-TLS.
 
 ## Key Concepts
 
-- **EAP-TLS only** — no passwords. MacBooks present Okta SCEP certificates (enrolled via Jamf). FreeRADIUS validates them against the Okta Intermediate CA.
-- **Two CA chains**: Server cert signed by a self-signed RADIUS CA (org name from `server_cert_org` variable). Client certs signed by Okta Intermediate CA. These are independent.
-- **All secrets in GCP Secret Manager** — RADIUS shared secrets, Okta CA cert, Datadog API key, and all server certificates. No secrets in instance metadata or on disk at rest.
-- **Server certs persist across VM replacements** — generated on first boot, stored in Secret Manager, restored on subsequent boots.
+- **EAP-TLS only** — attested Apple ACME or Apple/Windows SCEP from self-hosted Smallstep; legacy Okta/Jamf remains supported.
+- **Client/server trust** — `radius_trust_mode` selects client trust. Smallstep/both also present an EC Smallstep-rooted server certificate; Okta mode uses the legacy RADIUS CA. Profiles pin the actual server root and name.
+- **Dynamic VLANs** — normalized inventory groups map globally or per authenticated RADIUS location; site opt-out retains authorization. Never trust NAS identifiers to select a location.
+- **Fingerprint authorization** — exact leaf DER observed through authenticated Fleet MDM or Windows SYSTEM scripts binds the host. Neutral SCEP challenges authorize issuance only. Do not add a CN fallback or remove the sticky downgrade guard.
+- **Secrets** — Secret Manager persists credentials and CA material. Protected runtime files may remain on disk; Terraform-managed secrets also appear in state.
+- **Verified logs** — device/owner fields use stable device IDs, including serial-free BYOD; signed Class binds accounting to the device, original VLAN, office and MAC.
 
 ## Tech Stack
 
@@ -20,7 +22,8 @@ This repo deploys a standalone FreeRADIUS server on Google Cloud (GCE) via Terra
 - **Debian 12** — VM OS
 - **Ubiquiti UniFi** — WiFi access points (RADIUS clients)
 - **Okta** — Identity provider (SCEP certificates via Managed Attestation)
-- **Jamf** — MDM (enrolls SCEP certs, deploys WiFi profiles)
+- **Fleet or Jamf** — MDM/inventory adapters; built-in exact certificate collection supports Fleet Apple identities and Windows machine identities only
+- **Smallstep + Go webhook** — EC ACME/RSA SCEP, KMS HSM signing, Cloud SQL Postgres state, loopback mTLS authorization and optional HTTPS challenge broker
 - **Datadog** — Infrastructure monitoring, log shipping to SIEM, FreeRADIUS metrics via Prometheus exporter
 - **[freeradius_exporter](https://github.com/bvantagelimited/freeradius_exporter)** — Prometheus exporter for FreeRADIUS status metrics
 
@@ -30,11 +33,14 @@ This repo deploys a standalone FreeRADIUS server on Google Cloud (GCE) via Terra
 - `variables.tf` — All input variables with defaults
 - `network.tf` — VPC, subnet, static IP, firewall rules
 - `compute.tf` — Service account, IAM bindings, GCE instance definition
+- `startup-transport.tf` — Rendered byte count, metadata selection, private startup-script storage
 - `outputs.tf` — Deployment outputs (IP, SSH command, RADIUS config)
 - `datadog.tf` — Optional Datadog FreeRADIUS dashboard (Terraform-managed, requires `datadog_app_key`)
 - `datadog-smallstep.tf` — Smallstep CA dashboard + monitors + log pipeline (requires `enable_smallstep_ca` + `datadog_app_key`)
 - `datadog-dashboard.json` — Static JSON export of the FreeRADIUS dashboard (importable via Datadog UI)
 - `datadog-smallstep-dashboard.json` — Static JSON export of the Smallstep CA dashboard
+- `scripts/device_policy.py`, `radius_vlan.py`, `radius_identity.py`, `fleet_certificates.py`, `radius_sources.py` — policy, verified identity, collection and source discovery
+- `examples/`, `docs/dynamic-vlans.md`, `docs/scep-identity-binding.md` — profile and rollout contracts
 - `scripts/startup.sh` — Idempotent bootstrap: installs FreeRADIUS + MariaDB, configures EAP-TLS, manages certs via Secret Manager
 
 ## Commands
@@ -70,7 +76,7 @@ terraform output        # Show outputs (IP, SSH command, etc.)
 - Static exports — regenerate after editing the HCL dashboard locals (run `grep '^"'` to skip any console warnings):
   - FreeRADIUS: `echo 'jsonencode(local.dashboard_json)' | terraform console 2>/dev/null | grep '^"' | head -1 | python3 -c 'import sys,json; data=json.loads(json.loads(sys.stdin.read().strip())); print(json.dumps(data, indent=2))' > datadog-dashboard.json`
   - Smallstep CA: `echo 'jsonencode(local.smallstep_dashboard_json)' | terraform console 2>/dev/null | grep '^"' | head -1 | python3 -c 'import sys,json; data=json.loads(json.loads(sys.stdin.read().strip())); print(json.dumps(data, indent=2))' > datadog-smallstep-dashboard.json`
-- Template variables: `$site` (filters by `@site_name` log facet) and `$host` (filters metrics + logs by host)
+- Template variables: `$site` (site log facet), `$host` (metrics/logs), and `$vlan` (VLAN Assignments section only; do not globally hide rejects or opted-out sites)
 - Metric queries use `{$host}` filter; FreeRADIUS counter metrics need `.count` suffix (Datadog OpenMetrics appends it automatically to Prometheus counters)
 - Log queries filter with `host:$host.value @site_name:$site.value`
 - Log-based widgets require facets declared in Datadog UI (see README for full list) — Terraform provider does not support facet creation

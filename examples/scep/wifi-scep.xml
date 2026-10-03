@@ -15,7 +15,7 @@
 <!--                                                                        -->
 <!-- Tokens:                                                                 -->
 <!--   SCEP_SERVER_URL  -> step-ca SCEP provisioner URL                       -->
-<!--   SCEP_CHALLENGE   -> the SCEP shared challenge secret                   -->
+<!--   SCEP_CHALLENGE   -> the signed challenge bound to this device                   -->
 <!--   CA_THUMBPRINT    -> SHA-1 (40 hex) of the cert step-ca's SCEP          -->
 <!--                       GetCACert returns. For a single-CA step-ca SCEP    -->
 <!--                       responder this is the INTERMEDIATE CA (NOT the     -->
@@ -136,11 +136,8 @@
   </Item>
 </Replace>
 <Replace>
-  <!-- SCEP challenge. A step-ca SCEP provisioner typically authenticates with -->
-  <!-- a single STATIC shared challenge (not a per-host secret). The SCEP path -->
-  <!-- is not webhook-gated, so there is no host-level authorization on        -->
-  <!-- Windows, unlike the macOS ACME path (gated by device-attest-01 + an     -->
-  <!-- authorizing webhook). Keep the challenge a secret in your MDM.          -->
+  <!-- Use a fresh signed, device-bound challenge from the trusted issuer. -->
+  <!-- Never put the server signing key or a shared password in this field. -->
   <Item>
     <Target>
       <LocURI>./User/Vendor/MSFT/ClientCertificateInstall/SCEP/CERT_ID_GUID/Install/Challenge</LocURI>

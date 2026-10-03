@@ -1,5 +1,10 @@
 # Design: RSA SCEP for Windows + EC SCEP for non-ADE/DEP Macs
 
+> Historical design/implementation record. Commands and configuration may have
+> been superseded. Use the current [README](../../../README.md),
+> [VLAN guide](../../dynamic-vlans.md), and
+> [SCEP deployment guide](../../scep-identity-binding.md) for deployment.
+
 **Date:** 2026-06-05
 **Status:** Design — pending review
 **Repo:** cloud-8021x (step-ca + FreeRADIUS), with companion changes in fleet-gitops

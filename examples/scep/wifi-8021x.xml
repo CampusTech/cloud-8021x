@@ -23,7 +23,8 @@
 <!--   SSID           -> your network SSID (used in 3 places below: the       -->
 <!--                     LocURI node name, <name>, and the human-readable     -->
 <!--                     <name> inside <SSID>).                               -->
-<!--   SSID_HEX       -> the SSID name as ASCII hex (no spaces). E.g. the     -->
+<!--   RADIUS_SERVER_CN -> exact RADIUS server certificate name.           -->
+<!--   SSID_HEX       -> the SSID name as UTF-8 hex (no spaces). E.g. the     -->
 <!--                     SSID "WiFi" -> 57694669. Compute per-byte:           -->
 <!--                       printf '%s' 'YourSSID' | xxd -p -u                 -->
 <!--   ROOT_CA_THUMBPRINT         -> SHA-1 of the ROOT CA, for RADIUS server  -->
@@ -40,8 +41,8 @@
 <!-- The WLANProfile is XML-escaped because the Wi-Fi CSP expects the profile -->
 <!-- blob as a string in the WlanXml node.                                    -->
 <!--                                                                        -->
-<!-- <Replace> (not <Add>) so re-enrollment / profile updates overwrite the   -->
-<!-- existing WlanXml node instead of erroring when it already exists.         -->
+<!-- Fleet accepts this Replace form. Other MDMs may require Add for first -->
+<!-- installation; see the WiFi CSP guidance in examples/README.md.          -->
 <!-- ===================================================================== -->
 <Replace>
   <Item>
@@ -96,12 +97,12 @@
 									&lt;/CredentialsSource&gt;
 									&lt;ServerValidation&gt;
 										&lt;DisableUserPromptForServerValidation&gt;true&lt;/DisableUserPromptForServerValidation&gt;
-										&lt;ServerNames&gt;&lt;/ServerNames&gt;
+										&lt;ServerNames&gt;RADIUS_SERVER_CN&lt;/ServerNames&gt;
 										&lt;TrustedRootCA&gt;ROOT_CA_THUMBPRINT&lt;/TrustedRootCA&gt;
 									&lt;/ServerValidation&gt;
 									&lt;DifferentUsername&gt;false&lt;/DifferentUsername&gt;
 									&lt;PerformServerValidation xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;true&lt;/PerformServerValidation&gt;
-									&lt;AcceptServerName xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;false&lt;/AcceptServerName&gt;
+									&lt;AcceptServerName xmlns="http://www.microsoft.com/provisioning/EapTlsConnectionPropertiesV2"&gt;true&lt;/AcceptServerName&gt;
 									&lt;!-- Suppress the "choose a certificate" prompt: auto-select the
 									     client cert issued by your intermediate CA. CAHashList pins the
 									     issuer by SHA-1 thumbprint (the same intermediate as the SCEP
@@ -124,9 +125,9 @@
 		&lt;/security&gt;
 	&lt;/MSM&gt;
 	&lt;!-- Disable Windows per-SSID MAC randomization on this network. EAP-TLS
-	     auth is cert-based (not MAC), but a randomized MAC defeats per-device
-	     tracking, DHCP reservations, and RADIUS accounting by hardware
-	     address. Pin the hardware MAC for this network only. --&gt;
+	     auth and verified device attribution work with private MACs. Disable
+	     randomization only when stable MAC-based DHCP reservations or
+	     operational tracking are required. --&gt;
 	&lt;MacRandomization xmlns="http://www.microsoft.com/networking/WLAN/profile/v3"&gt;
 		&lt;enableRandomization&gt;false&lt;/enableRandomization&gt;
 	&lt;/MacRandomization&gt;

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Reusable Fleet Smallstep profile. Requires fingerprint authorization in cloud-8021x. -->
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>org.example.wifi.byod.8AEBE0CF-20D6-4463-9D12-9E2DC6F88B40</string>
+	<key>PayloadUUID</key>
+	<string>8AEBE0CF-20D6-4463-9D12-9E2DC6F88B40</string>
+	<key>PayloadDisplayName</key>
+	<string>Wi-Fi (BYOD SCEP)</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.scep</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>org.example.wifi.byod.5F1D086B-E2EC-4B74-9C53-D35CA6253180</string>
+			<key>PayloadUUID</key>
+			<string>5F1D086B-E2EC-4B74-9C53-D35CA6253180</string>
+			<key>PayloadDisplayName</key>
+			<string>Wi-Fi device identity</string>
+			<key>PayloadContent</key>
+			<dict>
+				<key>URL</key>
+				<string>$FLEET_VAR_SMALLSTEP_SCEP_PROXY_URL_CANAME</string>
+				<key>Name</key>
+				<string>CANAME</string>
+				<key>Challenge</key>
+				<string>$FLEET_VAR_SMALLSTEP_SCEP_CHALLENGE_CANAME</string>
+				<key>Subject</key>
+				<array>
+					<array>
+						<array>
+							<string>CN</string>
+							<string>$FLEET_VAR_HOST_UUID</string>
+						</array>
+					</array>
+					<array>
+						<array>
+							<string>OU</string>
+							<string>$FLEET_VAR_CERTIFICATE_RENEWAL_ID</string>
+						</array>
+					</array>
+				</array>
+				<key>KeyType</key>
+				<string>RSA</string>
+				<key>Keysize</key>
+				<integer>2048</integer>
+				<key>Key Usage</key>
+				<integer>5</integer>
+				<key>KeyIsExtractable</key>
+				<false/>
+			</dict>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>org.example.wifi.byod.0243543A-C0B4-48BD-867C-CB9A48C7EDBE</string>
+			<key>PayloadUUID</key>
+			<string>0243543A-C0B4-48BD-867C-CB9A48C7EDBE</string>
+			<key>PayloadDisplayName</key>
+			<string>RADIUS server root CA</string>
+			<key>PayloadContent</key>
+			<data>
+			RADIUS_CA_CERT_BASE64_DER
+			</data>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.wifi.managed</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>org.example.wifi.byod.B8EA9378-F012-4DF6-914D-CB1C8EC993C7</string>
+			<key>PayloadUUID</key>
+			<string>B8EA9378-F012-4DF6-914D-CB1C8EC993C7</string>
+			<key>PayloadDisplayName</key>
+			<string>Wi-Fi (SSID)</string>
+			<key>SSID_STR</key>
+			<string>SSID</string>
+			<key>AutoJoin</key>
+			<true/>
+			<key>EncryptionType</key>
+			<string>WPA</string>
+			<key>PayloadCertificateUUID</key>
+			<string>5F1D086B-E2EC-4B74-9C53-D35CA6253180</string>
+			<key>EAPClientConfiguration</key>
+			<dict>
+				<key>AcceptEAPTypes</key>
+				<array>
+					<integer>13</integer>
+				</array>
+				<key>TLSAllowTrustExceptions</key>
+				<false/>
+				<key>TLSTrustedServerNames</key>
+				<array>
+					<string>RADIUS_SERVER_CN</string>
+				</array>
+				<key>PayloadCertificateAnchorUUID</key>
+				<array>
+					<string>0243543A-C0B4-48BD-867C-CB9A48C7EDBE</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

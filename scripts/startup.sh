@@ -17,6 +17,7 @@ SERVER_CERT_ORG="${server_cert_org}"
 HAS_ROOT_CA="${has_root_ca}"
 HAS_JAMF_LOOKUP="${has_jamf_lookup}"
 HAS_FLEET_LOOKUP="${has_fleet_lookup}"
+FLEET_CERTIFICATE_INVENTORY="${fleet_certificate_inventory}"
 FLEET_API_BASE_URL="${fleet_api_base_url}"
 HAS_UNIFI_LOOKUP="${has_unifi_lookup}"
 HAS_MERAKI_LOOKUP="${has_meraki_lookup}"
@@ -26,8 +27,22 @@ REWRITE_USERNAME_SEPARATOR="${rewrite_username_separator}"
 TLS_SESSION_CACHE="${tls_session_cache}"
 TLS_SESSION_CACHE_LIFETIME="${tls_session_cache_lifetime}"
 TLS_MAX_VERSION="${tls_max_version}"
+VLAN_POLICY_ENABLED="${vlan_policy_enabled}"
+CERTIFICATE_INVENTORY="${certificate_inventory_enabled}"
+DEVICE_CACHE_SCHEDULE="*/30"
+if [ "$VLAN_POLICY_ENABLED" = "true" ] || [ "$FLEET_CERTIFICATE_INVENTORY" = "true" ]; then
+    DEVICE_CACHE_SCHEDULE="*/5"
+fi
 RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
+
+# BEGIN CERTIFICATE DOWNGRADE GUARD
+# Do this before stopping services or rewriting their existing secure config.
+if [ -f /var/lib/cloud-8021x/fingerprint-enforced ] && [ "${certificate_inventory_enabled}" != "true" ]; then
+    echo "FATAL: fingerprint enforcement was previously enabled. Retire neutral SCEP certificates/issuer before removing the fingerprint-enforced marker and downgrading." >&2
+    exit 1
+fi
+# END CERTIFICATE DOWNGRADE GUARD
 
 # ---------------------------------------------------------------------------
 # Idempotency — skip only if FreeRADIUS is running AND this exact script has
@@ -85,9 +100,27 @@ echo "=== Installing FreeRADIUS and MariaDB ==="
 apt-get install -y freeradius freeradius-utils freeradius-mysql freeradius-python3 mariadb-server
 
 # Stop services while we configure them
+systemctl stop radius-source-refresh.timer radius-source-refresh.service 2>/dev/null || true
 systemctl stop freeradius 2>/dev/null || true
 
 RADDB="/etc/freeradius/3.0"
+
+# Shared identity/policy code is installed from repository files so it can be
+# tested without executing this bootstrap. Base64 avoids shell/template quoting.
+mkdir -p "$RADDB/mods-config/python3"
+printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/device_policy.py"
+printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
+printf '%s' '${radius_sources_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_sources.py"
+printf '%s' '${radius_identity_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_identity.py"
+printf '%s' '${radius_log_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_log.py"
+printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
+printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
+printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
+printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log,radius_sources}.py "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
+chmod 644 "$RADDB/mods-config/python3/windows_certificates.ps1"
+
 CERT_DIR="$RADDB/certs"
 
 # ---------------------------------------------------------------------------
@@ -120,6 +153,51 @@ fetch_secret() {
     gcloud secrets versions access latest \
         --secret="$1" --project="$PROJECT_ID" 2>/dev/null
 }
+
+%{ if certificate_inventory_enabled ~}
+# Restore the shared tmpfs key BEFORE FreeRADIUS on every boot, including when
+# the unchanged-script fast path skips bootstrap. Never embed its value in units.
+cat > /usr/local/bin/radius-accounting-key.sh << 'ACCOUNTKEYEOF'
+#!/bin/bash
+set -euo pipefail
+umask 077
+key_path=/run/radius-accounting-key
+temporary=$(mktemp /run/radius-accounting-key.XXXXXX)
+trap 'rm -f "$temporary"' EXIT
+gcloud secrets versions access latest --secret=radius-accounting-key --project="${project_id}" > "$temporary"
+[ "$(wc -c < "$temporary")" -ge 32 ] || { echo "Missing accounting identity key" >&2; exit 1; }
+chown freerad:freerad "$temporary"
+chmod 0600 "$temporary"
+mv -f "$temporary" "$key_path"
+ACCOUNTKEYEOF
+chmod 0700 /usr/local/bin/radius-accounting-key.sh
+cat > /etc/systemd/system/radius-accounting-key.service << 'ACCOUNTKEYUNITEOF'
+[Unit]
+Description=Restore the RADIUS accounting identity key
+Wants=network-online.target
+After=network-online.target
+Before=freeradius.service
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/radius-accounting-key.sh
+RemainAfterExit=yes
+ACCOUNTKEYUNITEOF
+mkdir -p /etc/systemd/system/freeradius.service.d
+cat > /etc/systemd/system/freeradius.service.d/accounting-key.conf << 'ACCOUNTKEYDEPEOF'
+[Unit]
+Requires=radius-accounting-key.service
+After=radius-accounting-key.service
+ACCOUNTKEYDEPEOF
+systemctl daemon-reload
+systemctl restart radius-accounting-key.service
+%{ else ~}
+systemctl stop radius-accounting-key.service 2>/dev/null || true
+rm -f /etc/systemd/system/freeradius.service.d/accounting-key.conf \
+    /etc/systemd/system/radius-accounting-key.service \
+    /usr/local/bin/radius-accounting-key.sh /run/radius-accounting-key
+systemctl daemon-reload
+%{ endif ~}
 
 CERTS_FROM_SM=false
 
@@ -244,18 +322,9 @@ if ! command -v step >/dev/null 2>&1 || ! command -v step-ca >/dev/null 2>&1 || 
   command -v step-kms-plugin >/dev/null 2>&1 || { echo "FATAL: step-kms-plugin install failed" >&2; exit 1; }
 fi
 
-# Fetch DB password + SCEP challenge from Secret Manager.
+# Fetch DB password from Secret Manager.
 SMALLSTEP_DB_PASSWORD="$(gcloud secrets versions access latest --secret=smallstep-db-password --project="${project_id}")"
-SMALLSTEP_SCEP_CHALLENGE="$(gcloud secrets versions access latest --secret=smallstep-scep-challenge --project="${project_id}")"
-%{ if acme_webhook_url != "" ~}
-# ACME authorizing webhook signing secret. step-ca's ca.json "secret" field is
-# base64; step-ca base64-DECODES it and HMACs the request body with the raw
-# bytes. The webhook service receives the SAME raw secret (via its env) and
-# HMACs with it directly — so both sides key on identical bytes. The Secret
-# Manager value `acme-webhook-signing-secret` holds the RAW secret; we base64
-# it only for ca.json here.
-ACME_WEBHOOK_SECRET_B64="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}" | base64 -w0)"
-%{ endif ~}
+
 
 # Reuse an existing CA if one was already published to Secret Manager;
 # otherwise initialize a new KMS-backed CA and publish BOTH certs.
@@ -649,18 +718,19 @@ cat > "$STEPPATH/config/ca.json" <<CAJSON
         "name": "${smallstep_acme_name}",
         "challenges": ["device-attest-01"],
         "attestationFormats": ["apple"],
+        "options": {
 %{ if acme_webhook_url != "" ~}
-        "webhooks": [
-          {
-            "name": "authorize",
-            "url": "${acme_webhook_url}",
-            "kind": "AUTHORIZING",
-            "certType": "X509",
-            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
-          }
-        ],
+          "webhooks": [
+            {
+              "name": "authorize",
+              "url": "${acme_webhook_url}",
+              "kind": "AUTHORIZING",
+              "certType": "X509"
+            }
+          ],
 %{ endif ~}
-        "options": { "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" } },
+          "x509": { "templateFile": "$STEPPATH/templates/x509/wifi-acme.tpl" }
+        },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -724,6 +794,26 @@ echo "step-ca started."
 # --- RSA step-ca (instance #2): ca.json, unit, log, probe -------------------
 RSA_SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < /etc/step-ca-rsa/certs/scep_decrypter.crt)"
 RSA_SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < /etc/step-ca-rsa/secrets/scep_decrypter_key)"
+# Legacy challenges bind the CN; inventory mode overrides it with a reserved CN.
+# The CSR's OU is renewal metadata only;
+# never copy requested SANs or grant serverAuth to a Wi-Fi client certificate.
+mkdir -p /etc/step-ca-rsa/templates/x509
+cat > /etc/step-ca-rsa/templates/x509/wifi-scep.tpl <<'SCEPTPLEOF'
+{
+  "subject": {
+%{ if scep_certificate_inventory }
+    "commonName": "cloud-8021x-inventory",
+%{ else }
+    "commonName": {{ toJson .Subject.CommonName }},
+%{ endif }
+    "organizationalUnit": {{ toJson .Insecure.CR.Subject.OrganizationalUnit }}
+  },
+  "sans": [],
+  "keyUsage": ["digitalSignature", "keyEncipherment"],
+  "extKeyUsage": ["clientAuth"]
+}
+SCEPTPLEOF
+
 cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
 {
   "root": "/etc/step-ca-rsa/certs/root_ca.crt",
@@ -742,21 +832,20 @@ cat > /etc/step-ca-rsa/config/ca.json <<CARSAJSON
       {
         "type": "SCEP",
         "name": "${smallstep_scep_rsa_name}",
-        "challenge": "$${SMALLSTEP_SCEP_CHALLENGE}",
         "minimumPublicKeyLength": 2048,
         "encryptionAlgorithmIdentifier": 2,
         "decrypterCertificate": "$${RSA_SCEP_DECRYPTER_CERT_B64}",
         "decrypterKeyPEM": "$${RSA_SCEP_DECRYPTER_KEY_B64}",
-%{ if acme_webhook_enabled ~}
-        "webhooks": [
-          {
-            "name": "scep-challenge",
-            "url": "http://127.0.0.1:${webhook_port}/scep-challenge",
-            "kind": "SCEPCHALLENGE",
-            "secret": "$${ACME_WEBHOOK_SECRET_B64}"
-          }
-        ],
-%{ endif ~}
+        "options": {
+          "webhooks": [
+            {
+              "name": "scep-challenge",
+              "url": "https://127.0.0.1:${webhook_port}/scep-challenge",
+              "kind": "SCEPCHALLENGE"
+            }
+          ],
+          "x509": { "templateFile": "/etc/step-ca-rsa/templates/x509/wifi-scep.tpl" }
+        },
         "claims": { "maxTLSCertDuration": "2160h", "defaultTLSCertDuration": "2160h" }
       }
     ]
@@ -824,7 +913,7 @@ echo "step-ca-rsa started."
 %{ if acme_webhook_enabled ~}
 # ---------------------------------------------------------------------------
 # ACME authorizing webhook — localhost systemd service (not Cloud Run).
-# step-ca calls http://127.0.0.1:${webhook_port}/authorize per ACME order and
+# step-ca calls https://127.0.0.1:${webhook_port}/authorize per ACME order and
 # refuses to sign unless it returns allow:true (fail-closed). The binary is a
 # static release asset built by the webhook-release GitHub Action.
 # ---------------------------------------------------------------------------
@@ -882,22 +971,95 @@ rm -f /tmp/acme-authz-webhook /tmp/acme-authz-webhook.sha256
 id acme-webhook >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin acme-webhook
 
 # Secrets from Secret Manager -> a root-owned EnvironmentFile (0600). The Fleet
-# token + HMAC signing secret never land in the unit file or process args.
+# token + challenge signing key never land in the unit file or process args.
 mkdir -p /etc/acme-authz-webhook
-WEBHOOK_SIGNING_SECRET="$(gcloud secrets versions access latest --secret=acme-webhook-signing-secret --project="${project_id}")"
 FLEET_API_TOKEN="$(gcloud secrets versions access latest --secret=fleet-api-token --project="${project_id}")"
-[ -n "$WEBHOOK_SIGNING_SECRET" ] && [ -n "$FLEET_API_TOKEN" ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
+SCEP_CHALLENGE_SIGNING_KEY="$(gcloud secrets versions access latest --secret=scep-challenge-signing-key --project="${project_id}")"
+[ -n "$FLEET_API_TOKEN" ] && [ "$${#SCEP_CHALLENGE_SIGNING_KEY}" -ge 32 ] || { echo "FATAL: webhook secrets missing" >&2; exit 1; }
 umask 077
 cat > /etc/acme-authz-webhook/env <<WEBHOOKENV
 PORT=${webhook_port}
 FLEET_API_BASE_URL=${fleet_api_base_url}
 ALLOW_LABEL=${webhook_allow_label}
-WEBHOOK_SIGNING_SECRET=$WEBHOOK_SIGNING_SECRET
+WEBHOOK_CLIENT_DNS_NAMES=${smallstep_ca_dns_name},${smallstep_ca_rsa_dns_name}
 FLEET_API_TOKEN=$FLEET_API_TOKEN
-SMALLSTEP_SCEP_CHALLENGE=$SMALLSTEP_SCEP_CHALLENGE
+SCEP_CHALLENGE_SIGNING_KEY=$SCEP_CHALLENGE_SIGNING_KEY
+SCEP_CERTIFICATE_INVENTORY=${scep_certificate_inventory}
 WEBHOOKENV
+%{ if scep_certificate_inventory }
+# Remember this before starting neutral issuance, including a partially failed bootstrap.
+install -d -m 0700 /var/lib/cloud-8021x
+touch /var/lib/cloud-8021x/fingerprint-enforced
+SCEP_BROKER_TOKEN="$(gcloud secrets versions access latest --secret=scep-broker-token --project="${project_id}")"
+[ "$${#SCEP_BROKER_TOKEN}" -ge 32 ] || { echo "FATAL: broker secret missing" >&2; exit 1; }
+cat >> /etc/acme-authz-webhook/env <<BROKERENV
+SCEP_BROKER_PORT=9081
+SCEP_BROKER_USERNAME=fleet
+SCEP_BROKER_TOKEN=$SCEP_BROKER_TOKEN
+SCEP_BROKER_SCEP_URL=https://${smallstep_ca_rsa_dns_name}/scep/${smallstep_scep_rsa_name}
+SCEP_BROKER_PROVISIONER=${smallstep_scep_rsa_name}
+BROKERENV
+unset SCEP_BROKER_TOKEN
+%{ endif }
 umask 022
 chmod 600 /etc/acme-authz-webhook/env
+# Public trust anchors readable by the unprivileged webhook even when step's
+# own directories/certificate files are created with restrictive permissions.
+cat "$STEPPATH/certs/root_ca.crt" /etc/step-ca-rsa/certs/root_ca.crt > /etc/acme-authz-webhook/client-cas.pem
+chmod 644 /etc/acme-authz-webhook/client-cas.pem
+
+# step-ca trusts this local HTTPS leaf through the system pool and presents
+# its own CA server certificate. Rotate before expiry even on long-lived VMs.
+cat > /usr/local/sbin/renew-webhook-tls <<'WEBHOOKTLSEOF'
+#!/bin/bash
+set -euo pipefail
+if [ -s /etc/acme-authz-webhook/server.key ] && \
+   openssl x509 -in /etc/acme-authz-webhook/server.crt -checkend 2592000 -noout >/dev/null 2>&1; then
+  exit 0
+fi
+umask 077
+work=$(mktemp -d /etc/acme-authz-webhook/tls.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+  -addext 'basicConstraints=critical,CA:FALSE' \
+  -addext 'keyUsage=critical,digitalSignature' \
+  -addext 'extendedKeyUsage=serverAuth' \
+  -keyout "$work/server.key" -out "$work/server.crt"
+install -o root -g acme-webhook -m 0640 "$work/server.key" /etc/acme-authz-webhook/server.key
+install -m 0644 "$work/server.crt" /etc/acme-authz-webhook/server.crt
+install -m 0644 "$work/server.crt" /usr/local/share/ca-certificates/acme-webhook.crt
+update-ca-certificates
+if [ "$${1:-}" != "--no-restart" ]; then
+  systemctl restart acme-authz-webhook step-ca step-ca-rsa
+fi
+WEBHOOKTLSEOF
+chmod 0750 /usr/local/sbin/renew-webhook-tls
+/usr/local/sbin/renew-webhook-tls --no-restart
+# Restore system trust if a previous bootstrap stopped between cert installation
+# and trust-store refresh; harmless when the certificate has not changed.
+install -m 0644 /etc/acme-authz-webhook/server.crt /usr/local/share/ca-certificates/acme-webhook.crt
+update-ca-certificates
+cat > /etc/systemd/system/renew-webhook-tls.service <<'WEBHOOKTLSUNIT'
+[Unit]
+Description=Renew local CA authorization webhook TLS certificate
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/renew-webhook-tls
+WEBHOOKTLSUNIT
+cat > /etc/systemd/system/renew-webhook-tls.timer <<'WEBHOOKTLSTIMER'
+[Unit]
+Description=Check local webhook TLS certificate daily
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+[Install]
+WantedBy=timers.target
+WEBHOOKTLSTIMER
+systemctl daemon-reload
+systemctl enable --now renew-webhook-tls.timer
 
 cat > /etc/systemd/system/acme-authz-webhook.service <<'WEBHOOKUNIT'
 [Unit]
@@ -922,11 +1084,9 @@ WantedBy=multi-user.target
 WEBHOOKUNIT
 systemctl daemon-reload
 systemctl enable --now acme-authz-webhook
-# Wait for it to answer before step-ca starts handing it ACME orders.
-for i in $(seq 1 15); do
-  curl -fsS -o /dev/null "http://127.0.0.1:${webhook_port}/healthz" 2>/dev/null && break
-  sleep 1
-done
+# Restart even when only credentials/TLS files changed on an existing VM.
+systemctl restart acme-authz-webhook
+systemctl is-active --quiet acme-authz-webhook
 echo "ACME authorizing webhook started on 127.0.0.1:${webhook_port}."
 # step-ca services were started before this block; restart them now that the
 # webhook is reachable so ACME orders / SCEP challenges arriving during the
@@ -936,6 +1096,16 @@ systemctl restart step-ca
 %{ if smallstep_enabled ~}
 systemctl restart step-ca-rsa
 %{ endif ~}
+%{ else ~}
+# Disabling the integration must also stop services left by an earlier boot.
+for unit in renew-webhook-tls.timer renew-webhook-tls.service acme-authz-webhook.service; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    systemctl stop "$unit"
+    if [ "$unit" != "renew-webhook-tls.service" ]; then
+      systemctl disable "$unit"
+    fi
+  fi
+done
 %{ endif ~}
 
 # Stage the Smallstep CA cert for RADIUS to validate client certs against.
@@ -1264,19 +1434,17 @@ emit_zero() {
 [ -s "$LOG" ] || emit_zero
 now=$(date +%s)
 
-# One line per distinct (serial, cert_expiration). cert_expiration is ASN.1
-# UTCTime: YYMMDDHHMMSSZ. Restricted to the Smallstep issuer so Okta-issued
-# certs (still trusted under radius_trust_mode=both) don't pollute the gauges.
+# Stable device IDs distinguish serial-free devices; legacy logs use serials.
+# Parse JSON so escaped metadata cannot corrupt the metrics input.
 pairs=$(tail -n "$SCAN_LINES" "$LOG" \
-  | grep -F "$ISSUER_MATCH" \
-  | sed -n 's/.*"serial":"\([^"]*\)".*"cert_expiration":"\([0-9]\{12\}\)Z".*/\1 \2/p' \
+  | python3 /etc/freeradius/3.0/mods-config/python3/radius_log.py "$ISSUER_MATCH" \
   | sort -u)
 [ -n "$pairs" ] || emit_zero
 
 declare -A epoch_of
 declare -A best
 
-# Keep the LATEST cert per serial: a device that renewed mid-window appears
+# Keep the LATEST cert per stable device key: a device that renewed mid-window appears
 # with both its old and new cert, and only the new one reflects its real state.
 while read -r serial exp; do
   [ -n "$serial" ] || continue
@@ -1366,6 +1534,16 @@ echo "Enabled radius-client-cert-metrics.timer (hourly client-cert expiry gauges
 #    validation — no post-start PEM file patching needed.
 # ---------------------------------------------------------------------------
 echo "=== Configuring EAP-TLS ==="
+%{ if certificate_inventory_enabled ~}
+# Handshake bindings are private, short-lived, and consumed before EAP-Success.
+install -d -o freerad -g freerad -m 0700 /run/radius-certificate-bindings
+install -d -m 0755 /etc/tmpfiles.d
+cat > /etc/tmpfiles.d/radius-certificate-bindings.conf <<'CERTTMPFILESEOF'
+d /run/radius-certificate-bindings 0700 freerad freerad 10m
+CERTTMPFILESEOF
+# FreeRADIUS 3.2 does not restore our exact-certificate handoff on TLS resumption.
+TLS_SESSION_CACHE=false
+%{ endif ~}
 
 cat > "$RADDB/mods-available/eap" << 'EAPEOF'
 eap {
@@ -1399,11 +1577,22 @@ eap {
         }
 
         verify {
+%{ if certificate_inventory_enabled ~}
+            tmpdir = /run/radius-certificate-bindings
+            # FreeRADIUS writes the verified leaf, invokes this hook, then deletes
+            # the PEM. Only server-generated session-state enters the command.
+            client = "/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/device_policy.py %%{TLS-Client-Cert-Filename} %%{session-state:Tmp-String-0}"
+%{ endif ~}
         }
     }
 
     tls {
         tls = tls-common
+%{ if vlan_policy_enabled ~}
+        # Check policy before eap builds EAP-Success / MPPE keys, including
+        # resumed sessions. This hook sees the verified certificate attributes.
+        virtual_server = check-device-vlan
+%{ endif ~}
     }
 }
 EAPEOF
@@ -1463,6 +1652,106 @@ CLIENTEOF
         CLIENT_INDEX=$((CLIENT_INDEX + 1))
     done
 done
+
+%{ if unifi_source_discovery_enabled ~}
+# Discovery is a trusted control-plane update, never a packet NAS-ID lookup.
+printf '%s' '${radius_sources_config_b64}' | base64 -d > "$RADDB/radius-sources.json"
+chown root:freerad "$RADDB/radius-sources.json"
+chmod 640 "$RADDB/radius-sources.json"
+install -d -m 0755 /var/lib/radius-sources
+touch /var/log/freeradius/source-discovery.log
+chown root:freerad /var/log/freeradius/source-discovery.log
+chmod 640 /var/log/freeradius/source-discovery.log
+cat > /etc/logrotate.d/radius-source-discovery << 'SOURCELOGROTATEEOF'
+/var/log/freeradius/source-discovery.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    create 0640 root freerad
+}
+SOURCELOGROTATEEOF
+# Bootstrap starts with no discovered clients. The timer restores a fresh set.
+install -o root -g freerad -m 0640 /dev/null "$RADDB/clients-discovered.conf"
+echo '$INCLUDE /etc/freeradius/3.0/clients-discovered.conf' >> "$RADDB/clients.conf"
+cat > /usr/local/bin/radius-source-secrets.py << 'SOURCESECRETSEOF'
+#!/usr/bin/python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+config = json.loads(Path('/etc/freeradius/3.0/radius-sources.json').read_text())
+def secret(name):
+    return subprocess.run(['gcloud', 'secrets', 'versions', 'access', 'latest',
+                           '--secret=' + name, '--project=' + config['project']],
+                          check=True, capture_output=True, text=True, timeout=30).stdout.strip()
+credentials = {'api_key': secret('unifi-api-key'), 'offices': {
+    office: secret('radius-shared-secret-' + office)
+    for office, client in config['clients'].items() if client.get('unifi_host_id')}}
+with tempfile.NamedTemporaryFile(mode='w', dir='/run', delete=False) as stream:
+    os.fchmod(stream.fileno(), 0o600)
+    json.dump(credentials, stream)
+    temporary = stream.name
+os.replace(temporary, '/run/radius-source-secrets.json')
+SOURCESECRETSEOF
+chmod 700 /usr/local/bin/radius-source-secrets.py
+cat > /etc/systemd/system/radius-source-secrets.service << 'SOURCESECRETSUNITEOF'
+[Unit]
+Description=Restore credentials for UniFi RADIUS source discovery
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/radius-source-secrets.py
+RemainAfterExit=yes
+SOURCESECRETSUNITEOF
+cat > /etc/systemd/system/radius-source-refresh.service << 'SOURCEREFRESHUNITEOF'
+[Unit]
+Description=Refresh trusted UniFi RADIUS sources
+Requires=radius-source-secrets.service
+After=radius-source-secrets.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/radius_sources.py refresh
+TimeoutStartSec=180
+StandardOutput=append:/var/log/freeradius/source-discovery.log
+StandardError=append:/var/log/freeradius/source-discovery.log
+SOURCEREFRESHUNITEOF
+cat > /etc/systemd/system/radius-source-refresh.timer << 'SOURCETIMEREOF'
+[Unit]
+Description=Discover UniFi WAN address changes every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+RandomizedDelaySec=15
+[Install]
+WantedBy=timers.target
+SOURCETIMEREOF
+# Discovery credentials must not block fixed-CIDR clients from starting.
+# Remove the dependency if an earlier bootstrap installed it.
+rm -f /etc/systemd/system/freeradius.service.d/source-secrets.conf
+cat > "$RADDB/mods-available/radius_source_check" << 'SOURCECHECKEOF'
+exec radius_source_check {
+    wait = yes
+    program = "/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/radius_sources.py check %%{Packet-Src-IP-Address} %%{client:shortname}"
+    timeout = 5
+}
+SOURCECHECKEOF
+ln -sf "$RADDB/mods-available/radius_source_check" "$RADDB/mods-enabled/radius_source_check"
+systemctl daemon-reload
+systemctl restart radius-source-secrets.service || echo "Source discovery credentials unavailable; fixed-CIDR clients remain available and discovery will retry."
+%{ else ~}
+systemctl disable --now radius-source-refresh.timer 2>/dev/null || true
+systemctl stop radius-source-refresh.service radius-source-secrets.service 2>/dev/null || true
+rm -f "$RADDB/mods-enabled/radius_source_check" \
+    /etc/systemd/system/freeradius.service.d/source-secrets.conf \
+    /etc/systemd/system/radius-source-refresh.{service,timer} \
+    /etc/systemd/system/radius-source-secrets.service /run/radius-source-secrets.json
+systemctl daemon-reload
+%{ endif ~}
 
 # ---------------------------------------------------------------------------
 # 7. Configure MariaDB for RADIUS accounting
@@ -1651,10 +1940,13 @@ TOKEN=$(get_token) || exit 0
 # Paginate through all inventory
 python3 << PYEOF
 import json, urllib.request, sys
+sys.path.insert(0, "/etc/freeradius/3.0/mods-config/python3")
+from inventory_policy import jamf_device, publish
 
 token = "$TOKEN"
 url = "$JAMF_URL"
 cache = {}
+policy_devices = []
 page = 0
 page_size = 100
 import time
@@ -1674,12 +1966,15 @@ while True:
         resp = urllib.request.urlopen(req, timeout=30)
     except Exception as e:
         print(f"API error on page {page}: {e}", file=sys.stderr)
-        break
+        sys.exit(1)
     data = json.loads(resp.read())
-    results = data.get("results", [])
+    results = data["results"]
+    if not isinstance(results, list):
+        raise ValueError("Jamf inventory response has no results list")
     if not results:
         break
     for device in results:
+        policy_devices.append(jamf_device(device))
         serial = (device.get("hardware") or {}).get("serialNumber") or ""
         if not serial:
             continue
@@ -1689,7 +1984,7 @@ while True:
             "device_model": (device.get("hardware") or {}).get("model") or "",
             "ts": now,
         }
-    total_count = data.get("totalCount", 0)
+    total_count = data["totalCount"]
     if (page + 1) * page_size >= total_count:
         break
     page += 1
@@ -1698,6 +1993,7 @@ with open("$${CACHE_FILE}.tmp", "w") as f:
     json.dump(cache, f)
 import os
 os.replace("$${CACHE_FILE}.tmp", "$CACHE_FILE")
+publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
 print(f"Jamf cache: {len(cache)} devices")
 PYEOF
 JAMFCACHEEOF
@@ -1707,7 +2003,7 @@ JAMFCACHEEOF
     /usr/local/bin/jamf-device-cache.sh || true
 
     # Set up cron to refresh cache every 30 minutes
-    echo "*/30 * * * * root /usr/local/bin/jamf-device-cache.sh" > /etc/cron.d/jamf-device-cache
+    echo "$DEVICE_CACHE_SCHEDULE * * * * root /usr/local/bin/jamf-device-cache.sh" > /etc/cron.d/jamf-device-cache
     chmod 644 /etc/cron.d/jamf-device-cache
 
     # Deploy single-device fetch script (for cache misses)
@@ -1821,11 +2117,19 @@ FLEETCREDEOF
     unset FLEET_API_TOKEN
 
     # Deploy the Fleet device cache script (bulk inventory pull).
+    install -d -m 0700 /var/lib/cloud-8021x
+    printf '%s' "$FLEET_CERTIFICATE_INVENTORY" > /var/lib/cloud-8021x/collect-certificates
+    # Match the RADIUS client trust bundle for certificate coverage reporting.
+    printf '%s' '%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }%{ if radius_trust_mode == "both" }trust-bundle.pem%{ else }okta-ca.pem%{ endif }%{ endif }%{ else }okta-ca.pem%{ endif }' > /var/lib/cloud-8021x/client-ca-file
     cat > /usr/local/bin/fleet-device-cache.sh << 'FLEETCACHEEOF'
 #!/bin/bash
 # Fetches all Fleet hosts, builds serial -> device info cache.
-# Called on boot and every 30 minutes via cron.
+# Called on boot and every 5 minutes with VLAN policy/certificate collection.
 set -uo pipefail
+
+# A slow API call must not overlap the next cron run and overwrite pending state.
+exec 9>/var/lib/cloud-8021x/fleet-cache.lock
+flock -n 9 || exit 0
 
 CRED_FILE="/run/fleet-credentials.json"
 CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
@@ -1834,6 +2138,8 @@ CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
 
 python3 << 'PYEOF'
 import json, urllib.request, urllib.error, sys, time, os
+sys.path.insert(0, "/etc/freeradius/3.0/mods-config/python3")
+from inventory_policy import fleet_device, publish
 
 with open("/run/fleet-credentials.json") as f:
     cred = json.load(f)
@@ -1843,6 +2149,8 @@ if not base or not token:
     sys.exit(0)
 
 cache = {}
+policy_devices = []
+all_hosts = []
 page = 0
 page_size = 100
 now = int(time.time())
@@ -1862,13 +2170,18 @@ while True:
         resp = urllib.request.urlopen(req, timeout=30)
     except Exception as e:
         print(f"Fleet API error on page {page}: {e}", file=sys.stderr)
-        break
+        sys.exit(1)
     data = json.loads(resp.read())
-    hosts = data.get("hosts") or []
+    hosts = data["hosts"]
+    if not isinstance(hosts, list):
+        raise ValueError("Fleet inventory response has no hosts list")
     if not hosts:
         break
     for h in hosts:
-        serial = (h.get("hardware_serial") or "").strip()
+        all_hosts.append(h)
+        device = fleet_device(h)
+        policy_devices.append(device)
+        serial = (h.get("hardware_serial") or h.get("uuid") or "").strip()
         if not serial:
             continue
         dm = h.get("device_mapping") or []
@@ -1879,16 +2192,70 @@ while True:
             "device_model": h.get("hardware_model") or "",
             "ts": now,
         }
+        for alias in device["identities"]:
+            cache[alias] = cache[serial]
     # Fleet returns fewer than page_size on the last page.
     if len(hosts) < page_size:
         break
     page += 1
 
+# Enrichment depends only on the complete host list, not certificate collection.
 cache_file = "/etc/freeradius/3.0/fleet-device-cache.json"
 tmp_file = cache_file + ".tmp"
 with open(tmp_file, "w") as f:
     json.dump(cache, f)
 os.replace(tmp_file, cache_file)  # atomic publish
+
+from pathlib import Path
+policy_ready = False
+try:
+    marker = Path("/var/lib/cloud-8021x/fingerprint-enforced").is_file()
+    collect_path = Path("/var/lib/cloud-8021x/collect-certificates")
+    collect = collect_path.is_file() and collect_path.read_text().strip() == "true"
+    policy_ready = not marker
+    if collect:
+        # An unreadable/invalid config cannot establish that legacy publication
+        # is safe. Preserve the prior authorization snapshot in that case.
+        policy_ready = False
+        with open("/etc/freeradius/3.0/vlan-policy.json") as stream:
+            vlan_config = json.load(stream)
+        # Terraform renders null while collecting certificates before policy
+        # enforcement. Other non-object values still indicate invalid config.
+        if vlan_config is None:
+            vlan_config = {}
+        if not isinstance(vlan_config, dict) or not isinstance(vlan_config.get("certificate_inventory", False), bool):
+            raise ValueError("invalid certificate inventory configuration")
+        policy_ready = not (marker or vlan_config.get("certificate_inventory", False))
+        from fleet_certificates import refresh
+        cert_max_age = vlan_config.get("certificate_max_age", 86400)
+        ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
+        observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+                               now=now, max_age=cert_max_age, ca_file=ca_file)
+        # Build separately so a malformed observation cannot publish a partial
+        # certificate snapshot when the legacy policy is still in use.
+        certificate_devices = [dict(device) for device in policy_devices]
+        for host, device in zip(all_hosts, certificate_devices):
+            observed = observations.get(host.get("uuid"), {})
+            device["certificate_fingerprints"] = observed.get("fingerprints", [])
+            device["certificates_observed_at"] = observed.get("observed_at", 0)
+        policy_devices = certificate_devices
+        policy_ready = True
+        try:
+            from inventory_policy import certificate_readiness
+            report = certificate_readiness(all_hosts, policy_devices, observations, vlan_config, now)
+            report_path = "/var/lib/cloud-8021x/certificate-readiness.json"
+            with open(report_path + ".tmp", "w") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                json.dump(report, stream)
+            os.replace(report_path + ".tmp", report_path)
+        except Exception as error:
+            print(f"Fleet certificate readiness report failed ({type(error).__name__})", file=sys.stderr)
+except Exception as error:
+    # Do not log exception text: upstream errors can contain credentials or
+    # command payloads. Failed fingerprint snapshots retain their original age.
+    print(f"Fleet certificate collection failed ({type(error).__name__})", file=sys.stderr)
+if policy_ready:
+    publish("/etc/freeradius/3.0/device-policy-cache.json", policy_devices, now)
 print(f"Fleet cache: {len(cache)} devices")
 PYEOF
 FLEETCACHEEOF
@@ -1898,7 +2265,7 @@ FLEETCACHEEOF
     /usr/local/bin/fleet-device-cache.sh || true
 
     # Refresh cache every 30 minutes.
-    echo "*/30 * * * * root /usr/local/bin/fleet-device-cache.sh" > /etc/cron.d/fleet-device-cache
+    echo "$DEVICE_CACHE_SCHEDULE * * * * root /usr/local/bin/fleet-device-cache.sh" > /etc/cron.d/fleet-device-cache
     chmod 644 /etc/cron.d/fleet-device-cache
 
     # Deploy single-device fetch script (for cache misses).
@@ -2199,7 +2566,7 @@ fi
 #      lookups in post-auth and accounting. Sets reply attributes directly —
 #      no exec output parsing.
 # ---------------------------------------------------------------------------
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     echo "=== Configuring Python lookup module ==="
 
     mkdir -p "$RADDB/mods-config/python3"
@@ -2211,6 +2578,7 @@ if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HA
     cat > "$RADDB/mods-config/python3/radius_lookups_config.py" << RLCFGEOF
 # Auto-generated by startup.sh — do not edit.
 REWRITE_USERNAME_SEPARATOR = "$REWRITE_USERNAME_SEPARATOR"
+CERTIFICATE_INVENTORY = "$CERTIFICATE_INVENTORY" == "true"
 RLCFGEOF
     chown freerad:freerad "$RADDB/mods-config/python3/radius_lookups_config.py"
 
@@ -2227,9 +2595,10 @@ import subprocess
 # accounting serial-recovery path matches whatever separator post-auth applied.
 # Falls back to the historical default if the config file is absent.
 try:
-    from radius_lookups_config import REWRITE_USERNAME_SEPARATOR
+    from radius_lookups_config import REWRITE_USERNAME_SEPARATOR, CERTIFICATE_INVENTORY
 except Exception:
     REWRITE_USERNAME_SEPARATOR = " - "
+    CERTIFICATE_INVENTORY = False
 
 # Device-owner enrichment source. Jamf and Fleet are mutually-exclusive MDM
 # back-ends that write the SAME serial-keyed schema
@@ -2525,30 +2894,34 @@ def post_auth(p):
 
         reply_attrs = []
 
-        # Device-owner lookup — read from local cache (instant, no API call).
-        # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
-        # bare serial the MDM cache is keyed on.
-        serial = _serial_from_username(user_name)
-        if serial:
-            # Expose the NORMALIZED bare serial to the JSON logger via
-            # reply:Login-LAT-Service (an unused STRING-typed attr, same family
-            # as Login-LAT-Node/-Port we already use). The accept log's "serial"
-            # field reads this instead of the raw User-Name, so it's a clean
-            # serial (FRAGAACPA74412000D) across macOS and Windows instead of
-            # "host/<serial> Campus WiFi". String-typed (not octets like Class)
-            # so linelog renders it as plain text, not hex.
-            reply_attrs.append(("Login-LAT-Service", serial))
-            try:
-                dev = _get_cached_device(serial)
-                if dev:
-                    if dev.get("device_name"):
-                        reply_attrs.append(("Filter-Id", dev["device_name"]))
-                    if dev.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
-                    if dev.get("email"):
-                        reply_attrs.append(("Reply-Message", dev["email"]))
-            except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
+        if CERTIFICATE_INVENTORY:
+            from radius_identity import enrich
+            reply_attrs.extend(enrich(p, accounting=False))
+        else:
+            # Device-owner lookup — read from local cache (instant, no API call).
+            # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
+            # bare serial the MDM cache is keyed on.
+            serial = _serial_from_username(_get_attr(p, "TLS-Client-Cert-Common-Name") or user_name)
+            if serial:
+                # Expose the NORMALIZED bare serial to the JSON logger via
+                # reply:Login-LAT-Service (an unused STRING-typed attr, same family
+                # as Login-LAT-Node/-Port we already use). The accept log's "serial"
+                # field reads this instead of the raw User-Name, so it's a clean
+                # serial (FRAGAACPA74412000D) across macOS and Windows instead of
+                # "host/<serial> Campus WiFi". String-typed (not octets like Class)
+                # so linelog renders it as plain text, not hex.
+                reply_attrs.append(("Login-LAT-Service", serial))
+                try:
+                    dev = _get_cached_device(serial)
+                    if dev:
+                        if dev.get("device_name"):
+                            reply_attrs.append(("Filter-Id", dev["device_name"]))
+                        if dev.get("device_model"):
+                            reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                        if dev.get("email"):
+                            reply_attrs.append(("Reply-Message", dev["email"]))
+                except Exception as e:
+                    radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
 
         # Extract SSID from Called-Station-Id ("<BSSID>:<SSID>"). Strips the
         # leading MAC regardless of dash/colon separators (a naive split(":")
@@ -2571,6 +2944,11 @@ def post_auth(p):
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"AP lookup failed: {e}")
 
+        if CERTIFICATE_INVENTORY:
+            from radius_log import record
+            # rlm_python3 parses string escapes once before linelog receives JSON.
+            reply_attrs.append(("Tmp-String-4", record(p, reply_attrs, accounting=False).replace(chr(92), chr(92) * 2)))
+
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
         return radiusd.RLM_MODULE_OK
@@ -2588,30 +2966,34 @@ def accounting(p):
 
         reply_attrs = []
 
-        # Extract serial from User-Name — may be "email - serial" if the AP
-        # cached the rewritten identity from post-auth, or just the EAP cert CN.
-        serial = user_name.strip()
-        if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
-            serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
-        # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
-        # the post-rewrite serial half) to the bare serial the cache is keyed on.
-        serial = _serial_from_username(serial)
+        if CERTIFICATE_INVENTORY:
+            from radius_identity import enrich
+            reply_attrs.extend(enrich(p, accounting=True))
+        else:
+            # Extract serial from User-Name — may be "email - serial" if the AP
+            # cached the rewritten identity from post-auth, or just the EAP cert CN.
+            serial = user_name.strip()
+            if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
+                serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
+            # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
+            # the post-rewrite serial half) to the bare serial the cache is keyed on.
+            serial = _serial_from_username(serial)
 
-        if serial:
-            # Mirror post_auth: surface the normalized bare serial via
-            # reply:Login-LAT-Service for consistent logging on accounting too.
-            reply_attrs.append(("Login-LAT-Service", serial))
-            try:
-                dev = _get_cached_device(serial)
-                if dev:
-                    if dev.get("device_name"):
-                        reply_attrs.append(("Filter-Id", dev["device_name"]))
-                    if dev.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
-                    if dev.get("email"):
-                        reply_attrs.append(("Reply-Message", dev["email"]))
-            except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
+            if serial:
+                # Mirror post_auth: surface the normalized bare serial via
+                # reply:Login-LAT-Service for consistent logging on accounting too.
+                reply_attrs.append(("Login-LAT-Service", serial))
+                try:
+                    dev = _get_cached_device(serial)
+                    if dev:
+                        if dev.get("device_name"):
+                            reply_attrs.append(("Filter-Id", dev["device_name"]))
+                        if dev.get("device_model"):
+                            reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                        if dev.get("email"):
+                            reply_attrs.append(("Reply-Message", dev["email"]))
+                except Exception as e:
+                    radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
 
         # AP lookup (UniFi or Meraki, by Called-Station-Id BSSID)
         if called_station:
@@ -2624,6 +3006,11 @@ def accounting(p):
                         reply_attrs.append(("Connect-Info", ap["site_name"]))
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"AP lookup in accounting failed: {e}")
+
+        if CERTIFICATE_INVENTORY:
+            from radius_log import record
+            # rlm_python3 parses string escapes once before linelog receives JSON.
+            reply_attrs.append(("Tmp-String-4", record(p, reply_attrs, accounting=True).replace(chr(92), chr(92) * 2)))
 
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
@@ -2643,6 +3030,13 @@ python3 radius_lookups {
     python_path = /etc/freeradius/3.0/mods-config/python3
     module = radius_lookups
     pass_all_vps_dict = yes
+
+    # One interpreter handles policy and enrichment. Debian's Python 3.11
+    # crashes when separate rlm_python3 instances initialize these modules.
+%{ if vlan_policy_enabled ~}
+    mod_authorize = radius_vlan
+    func_authorize = authorize
+%{ endif ~}
 
     mod_instantiate = $${.module}
     func_instantiate = instantiate
@@ -2678,9 +3072,21 @@ linelog json_log {
     reference = "messages.%%{%%{reply:Packet-Type}:-unknown}"
 
     messages {
-        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
-        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
+%{ if certificate_inventory_enabled ~}
+        Access-Accept = "%%{reply:Tmp-String-4}"
+%{ else ~}
+        Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Access-Reject = "%%{reply:Tmp-String-4}"
+%{ else ~}
+        Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        unknown = "%%{reply:Tmp-String-4}"
+%{ else ~}
         unknown = "{\"timestamp\":\"%S\",\"event\":\"unknown\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\"}"
+%{ endif ~}
     }
 }
 JSONLOGEOF
@@ -2701,9 +3107,21 @@ linelog acct_log {
     reference = "messages.%%{Acct-Status-Type}"
 
     messages {
+%{ if certificate_inventory_enabled ~}
+        Start = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Start = "{\"timestamp\":\"%S\",\"event\":\"Acct-Start\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Stop = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Stop = "{\"timestamp\":\"%S\",\"event\":\"Acct-Stop\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets},\"terminate_cause\":\"%%{%%{Acct-Terminate-Cause}:-Unknown}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Interim-Update = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Interim-Update = "{\"timestamp\":\"%S\",\"event\":\"Acct-Update\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets}\"}"
+%{ endif ~}
     }
 }
 ACCTLOGEOF
@@ -2722,7 +3140,7 @@ echo "=== Configuring default virtual server ==="
 
 # Build post-auth section — single Python module handles Jamf/Fleet + UniFi + Meraki
 POSTAUTH_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     POSTAUTH_MODULES="radius_lookups
         "
 fi
@@ -2734,10 +3152,51 @@ fi
 if [ "$REWRITE_USERNAME" = "true" ]; then
     POSTAUTH_MODULES="$${POSTAUTH_MODULES}if (&reply:Reply-Message) {
             update reply {
-                User-Name := \"%%{reply:Reply-Message}$${REWRITE_USERNAME_SEPARATOR}%%{User-Name}\"
+                User-Name := \"%%{reply:Reply-Message}$${REWRITE_USERNAME_SEPARATOR}%%{%%{reply:Tmp-String-2}:-%%{User-Name}}\"
             }
         }
         "
+fi
+if [ "$VLAN_POLICY_ENABLED" = "true" ]; then
+    # Policy and logging share the radius_lookups Python instance.
+    rm -f "$RADDB/mods-enabled/radius_vlan"
+    cat > "$RADDB/sites-available/check-device-vlan" << 'VLANSITEEOF'
+server check-device-vlan {
+    authorize {
+        # Authenticated RADIUS client's configured shortname, never a packet's
+        # NAS-Identifier/NAS-IP-Address or the device's EAP identity.
+        update request {
+            Tmp-String-1 !* ANY
+            Tmp-String-1 := &outer.control:Tmp-String-1
+        }
+%{ if certificate_inventory_enabled ~}
+        # This internal attribute is overwritten from server-owned state. It is
+        # never taken from a NAS packet or any client-chosen certificate field.
+        update request {
+            Tmp-String-0 !* ANY
+            Tmp-String-0 := &outer.session-state:Tmp-String-0
+            Calling-Station-Id !* ANY
+            Calling-Station-Id := &outer.request:Calling-Station-Id
+        }
+%{ endif ~}
+        radius_lookups {
+            reject = 1
+            fail = 1
+        }
+        if (updated) {
+            update control {
+                Auth-Type := Accept
+            }
+        }
+        else {
+            reject
+        }
+    }
+}
+VLANSITEEOF
+    ln -sf "$RADDB/sites-available/check-device-vlan" "$RADDB/sites-enabled/check-device-vlan"
+else
+    rm -f "$RADDB/mods-enabled/radius_vlan" "$RADDB/sites-enabled/check-device-vlan"
 fi
 POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 
@@ -2747,14 +3206,14 @@ POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 # (useful for "who got rejected"). When no lookup source is configured this is
 # empty and the serial field falls back to the raw User-Name.
 POSTAUTH_REJECT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     POSTAUTH_REJECT_MODULES="radius_lookups
             "
 fi
 
 # Build accounting section — enrichment + SQL + JSON log
 ACCT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     ACCT_MODULES="radius_lookups
         "
 fi
@@ -2777,6 +3236,26 @@ server default {
 
     authorize {
         filter_username
+        update control {
+            Tmp-String-1 := "%%{client:shortname}"
+            Tmp-String-6 := "%%{Packet-Src-IP-Address}"
+        }
+%{ if unifi_source_discovery_enabled ~}
+        radius_source_check {
+            reject = 1
+            fail = 1
+        }
+        if (reject || fail) {
+            reject
+        }
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        if (!&session-state:Tmp-String-0) {
+            update session-state {
+                Tmp-String-0 := "%%{randstr:hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh}"
+            }
+        }
+%{ endif ~}
         eap {
             ok = return
         }
@@ -2787,6 +3266,19 @@ server default {
     }
 
     preacct {
+%{ if unifi_source_discovery_enabled ~}
+        radius_source_check {
+            reject = 1
+            fail = 1
+        }
+        if (reject || fail) {
+            reject
+        }
+%{ endif ~}
+        update control {
+            Tmp-String-1 := "%%{client:shortname}"
+            Tmp-String-6 := "%%{Packet-Src-IP-Address}"
+        }
         acct_unique
     }
 
@@ -2795,10 +3287,21 @@ server default {
     }
 
     post-auth {
+        update control {
+            Tmp-String-5 := "Access-Accept"
+        }
         $POSTAUTH_MODULES
         Post-Auth-Type REJECT {
+            update control {
+                Tmp-String-5 := "Access-Reject"
+            }
             $POSTAUTH_REJECT_MODULES
             json_log
+            # A policy rejection can follow successful TLS authentication.
+            # Remove accept-only keys/attributes and replace EAP-Success.
+            attr_filter.access_reject
+            eap
+            remove_reply_message_if_eap
         }
     }
 }
@@ -2903,6 +3406,13 @@ logs:
     path: /var/log/freeradius/radius.log
     source: freeradius
     service: radius
+
+%{ if unifi_source_discovery_enabled ~}
+  - type: file
+    path: /var/log/freeradius/source-discovery.log
+    source: freeradius
+    service: radius-source-discovery
+%{ endif ~}
 
   - type: file
     path: /var/log/radius-bootstrap.log
@@ -3232,6 +3742,13 @@ WantedBy=timers.target
 STEPCATIMEREOF
 systemctl daemon-reload
 systemctl enable --now stepca-dd-metrics.timer
+%{ endif ~}
+
+%{ if unifi_source_discovery_enabled ~}
+# Start only after the complete FreeRADIUS configuration is installed.
+systemctl daemon-reload
+systemctl enable --now radius-source-refresh.timer
+systemctl start radius-source-refresh.service || echo "Source discovery unavailable; dynamic sources remain closed until a successful refresh."
 %{ endif ~}
 
 # Restart Datadog Agent to pick up all new config
