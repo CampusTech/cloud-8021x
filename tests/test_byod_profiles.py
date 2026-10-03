@@ -24,7 +24,7 @@ class BYODProfileTests(unittest.TestCase):
                 self.assertFalse(eap['TLSAllowTrustExceptions'])
                 self.assertNotIn('DisableAssociationMACRandomization', wifi)
                 if variant == 'fleet':
-                    for variable in ('$FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME', '$FLEET_VAR_CUSTOM_SCEP_CHALLENGE_CANAME'):
+                    for variable in ('$FLEET_VAR_SMALLSTEP_SCEP_PROXY_URL_CANAME', '$FLEET_VAR_SMALLSTEP_SCEP_CHALLENGE_CANAME'):
                         self.assertEqual(source.count(variable), 1)
 
 

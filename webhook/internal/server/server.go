@@ -32,10 +32,11 @@ type ResponseShape struct {
 }
 
 type handler struct {
-	secret         []byte
-	scepSigningKey []byte
-	decider        Decider
-	mutualTLS      bool
+	secret               []byte
+	scepSigningKey       []byte
+	decider              Decider
+	mutualTLS            bool
+	inventoryProvisioner string
 }
 
 // New returns an http.Handler serving POST /authorize, POST /scep-challenge,
@@ -130,6 +131,10 @@ func (h *handler) scepChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	if req.X509CertificateRequest == nil {
 		logrus.Warn("deny: missing CSR")
 		deny(w)
+		return
+	}
+	if h.inventoryProvisioner != "" && req.ProvisionerName == h.inventoryProvisioner && challenge.VerifyInventory(h.scepSigningKey, req.SCEPChallenge, h.inventoryProvisioner, time.Now()) {
+		allow(w)
 		return
 	}
 	identity := challenge.NormalizeIdentity(req.X509CertificateRequest.Subject.CommonName)

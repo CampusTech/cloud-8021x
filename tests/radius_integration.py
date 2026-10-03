@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--certificate-inventory', action='store_true', help='Exercise exact DER fingerprint mode')
     parser.add_argument('--container', help='Reuse a disposable test container with dependencies installed')
     args = parser.parse_args()
     container = args.container or ('cloud8021x-vlan-' + uuid.uuid4().hex[:8])
@@ -40,10 +41,10 @@ for pid in os.listdir('/proc'):
 ''')
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            (path / 'startup.sh').write_text(render())
+            (path / 'startup.sh').write_text(render(certificate_inventory=args.certificate_inventory))
             docker('cp', str(path / 'startup.sh'), container + ':/tmp/startup.sh')
         docker('cp', str(ROOT / 'tests' / 'radius_container.py'), container + ':/tmp/radius_container.py')
-        docker('exec', container, 'python3', '/tmp/radius_container.py')
+        docker('exec', container, 'python3', '/tmp/radius_container.py', *(['--certificate-inventory'] if args.certificate_inventory else []))
     finally:
         if not args.container:
             docker('rm', '-f', container, stdout=subprocess.DEVNULL)

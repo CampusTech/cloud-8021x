@@ -27,6 +27,9 @@ class TerraformPolicyTests(unittest.TestCase):
                 ({'group_vlans': {}, 'cache_max_age': 600}, True),
                 ({'group_vlans': {}, 'cache_max_age': 60, 'cache_file': '/run/custom.json'}, True),
                 ({'group_vlans': {}, 'cache_file': 'relative.json'}, False),
+                ({'group_vlans': {}, 'certificate_inventory': True, 'certificate_max_age': 86400}, True),
+                ({'group_vlans': {}, 'certificate_inventory': True, 'certificate_max_age': 0}, False),
+                ({'group_vlans': {}, 'certificate_max_age': 30.5}, False),
             ]:
                 with self.subTest(value=value):
                     (root / 'terraform.tfvars.json').write_text(json.dumps({'radius_vlan_policy': value}))

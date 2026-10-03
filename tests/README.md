@@ -21,6 +21,7 @@ Requires local Docker and Terraform:
 
 ```sh
 python3 tests/radius_integration.py
+python3 tests/radius_integration.py --certificate-inventory
 ```
 
 This creates a disposable Debian 12 container, installs FreeRADIUS 3.x and
@@ -39,6 +40,11 @@ cannot race the test's membership change.
 
 The fixture enables a temporary disk TLS cache solely to force actual resumed
 handshakes on Debian's OpenSSL 3 build. Deployment cache settings are preserved.
+The `--certificate-inventory` run uses SHA256 of the actual verified leaf DER.
+It rejects another CA-signed certificate copying a known staff CN, unknown,
+ambiguous and stale certificate observations, and a missing fingerprint hook.
+It verifies full handshakes on reauthentication (resumption is disabled in this
+mode), current group/enrollment changes, and removal of private handoff files.
 Accounting's SQL invocation is replaced by `noop` in the fixture; VLAN policy,
 EAP certificate authorization, post-auth and reject configuration come from the rendered startup script.
 This test does not simulate SCEP issuance or physical UniFi VLAN/trunk/DHCP setup.

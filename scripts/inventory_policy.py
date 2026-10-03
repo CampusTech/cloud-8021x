@@ -4,7 +4,31 @@ import os
 from pathlib import Path
 import tempfile
 
-from device_policy import snapshot
+from device_policy import select_vlan, snapshot
+
+
+def certificate_readiness(hosts, devices, observations, config, now):
+    """Report exact certificate coverage separately from a usable VLAN policy."""
+    from fleet_certificates import readiness
+    report = readiness(hosts, observations, now, config.get('certificate_max_age', 86400))
+    report['updated_at'] = now
+    report['policy_enforced'] = config.get('certificate_inventory') is True
+    inventory = snapshot(devices, now)
+    for row in report['hosts']:
+        row['certificate_reason'] = row['reason']
+        if row['reason'] != 'ready':
+            continue
+        try:
+            vlans = {select_vlan(fp, inventory, {**config, 'certificate_inventory': True}, now)
+                     for fp in observations[row['uuid']]['fingerprints']}
+            if len(vlans) != 1:
+                raise ValueError('ambiguous VLAN')
+            row['vlan'] = next(iter(vlans))
+        except (ValueError, KeyError, TypeError):
+            row['reason'] = 'no_vlan_assignment'
+    report['ready_count'] = sum(row['reason'] == 'ready' for row in report['hosts'])
+    report['ready'] = bool(report['hosts']) and report['ready_count'] == report['total']
+    return report
 
 
 def fleet_device(host):

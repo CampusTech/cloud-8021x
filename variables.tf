@@ -343,17 +343,34 @@ variable "webhook_port" {
   default     = 9444
 }
 
+variable "enable_fleet_certificate_inventory" {
+  description = "Collect Apple managed certificate fingerprints through Fleet MDM commands. Requires a Fleet API account allowed to run CertificateList. Can be enabled before enforcing fingerprint authorization."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.enable_fleet_certificate_inventory || var.enable_fleet_lookup
+    error_message = "Certificate collection requires enable_fleet_lookup=true."
+  }
+}
+
 # Optional MDM-independent VLAN policy. Group names belong to inventory adapters,
 # not to the RADIUS engine: fleet:<id>, jamf:site:<id>, or custom cache group keys.
 variable "radius_vlan_policy" {
   description = "Dynamic VLAN authorization. Null disables it. Enabled policies reject unknown/unenrolled devices, expired inventory, and conflicting groups. fallback_vlan applies only to known enrolled devices with no mapped group."
   type = object({
-    group_vlans   = map(number)
-    fallback_vlan = optional(number)
-    cache_max_age = optional(number, 3600)
-    cache_file    = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
+    group_vlans           = map(number)
+    fallback_vlan         = optional(number)
+    cache_max_age         = optional(number, 3600)
+    cache_file            = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
+    certificate_inventory = optional(bool, false)
+    certificate_max_age   = optional(number, 86400)
   })
   default = null
+
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : var.radius_vlan_policy.certificate_max_age >= 600 && floor(var.radius_vlan_policy.certificate_max_age) == var.radius_vlan_policy.certificate_max_age
+    error_message = "certificate_max_age must be an integer of at least 600 seconds."
+  }
 
   validation {
     condition = var.radius_vlan_policy == null ? true : alltrue([

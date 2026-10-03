@@ -58,3 +58,10 @@ func ClientTLSConfig(rootPEM []byte, allowedDNSNames []string) (*tls.Config, err
 		},
 	}, nil
 }
+
+// NewMutualTLSInventory adds neutral SCEP issuance for one exact provisioner.
+// Network access must be gated by MDM certificate inventory before enabling it.
+// Legacy identity-bound challenges and ACME retain their existing checks.
+func NewMutualTLSInventory(signingKey, provisioner string, d Decider) http.Handler {
+	return (&handler{scepSigningKey: []byte(signingKey), decider: d, mutualTLS: true, inventoryProvisioner: provisioner}).routes()
+}

@@ -4,22 +4,115 @@
 # The webhook runs as a LOCALHOST systemd service on each RADIUS VM (built from
 # webhook/, released via the webhook-release GitHub Action, downloaded by the VM
 # startup script), NOT as a separate Cloud Run service. step-ca calls it over
-# loopback (https://127.0.0.1:<port>/authorize), so there is no public hop, no
-# extra TLS, and no independent outage surface. This file therefore only manages
-# the secrets the webhook reads at runtime, granting access to the RADIUS VM
-# service account. Gated by var.enable_acme_webhook (needs enable_smallstep_ca).
+# loopback (https://127.0.0.1:<port>/authorize), with no public authorization hop.
+# Optional inventory mode adds a separate authenticated
+# HTTPS challenge broker through the existing RSA load balancer. This file manages
+# its backend, secrets, and IAM. Gated by var.enable_acme_webhook.
 # =============================================================================
 
 locals {
   acme_webhook_enabled = var.enable_acme_webhook ? 1 : 0
   # The fleet-api-token secret is read by the webhook AND by the device-owner
   # lookup; grant the VM SA access if either consumer is enabled.
-  fleet_token_needed = (var.enable_acme_webhook || var.enable_fleet_lookup) ? 1 : 0
+  fleet_token_needed     = (var.enable_acme_webhook || var.enable_fleet_lookup) ? 1 : 0
+  scep_inventory_enabled = try(var.radius_vlan_policy.certificate_inventory, false) && var.enable_acme_webhook
+}
+
+# These preconditions protect the issuance boundary: neutral challenges must
+# never be exposed while RADIUS still authorizes client-selected subject names.
+resource "terraform_data" "certificate_inventory_contract" {
+  lifecycle {
+    precondition {
+      condition     = !local.scep_inventory_enabled || (var.enable_smallstep_ca && var.enable_fleet_certificate_inventory && var.radius_trust_mode != "okta" && try(var.radius_vlan_policy.cache_file == "/etc/freeradius/3.0/device-policy-cache.json", false))
+      error_message = "Dynamic SCEP requires the self-hosted CA, Smallstep RADIUS trust, Fleet certificate collection, and the built-in fingerprint policy cache."
+    }
+  }
+}
+
+# Separate Fleet-to-broker credential. Never distribute the signing key to Fleet
+# or devices. Both nodes share these secrets for stateless challenge verification.
+resource "random_password" "scep_broker_token" {
+  count   = local.scep_inventory_enabled ? 1 : 0
+  length  = 48
+  special = false
+}
+
+resource "google_secret_manager_secret" "scep_broker_token" {
+  count     = local.scep_inventory_enabled ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = "scep-broker-token"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "scep_broker_token" {
+  count       = local.scep_inventory_enabled ? 1 : 0
+  secret      = google_secret_manager_secret.scep_broker_token[0].id
+  secret_data = random_password.scep_broker_token[0].result
+}
+
+resource "google_secret_manager_secret_iam_member" "scep_broker_token_radius" {
+  count     = local.scep_inventory_enabled ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = google_secret_manager_secret.scep_broker_token[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
+output "fleet_scep_challenge_url" {
+  description = "Fleet Smallstep challenge_url. Authenticate as fleet using the scep-broker-token secret; never use the signing key."
+  value       = local.scep_inventory_enabled ? "https://${var.smallstep_ca_rsa_dns_name}/fleet/scep-challenge" : ""
+}
+
+# Only the authenticated challenge route is public. CA authorization remains on
+# a separate loopback listener requiring mutual TLS. GFE-to-broker traffic also
+# uses TLS; the firewall prevents clients bypassing the HTTPS load balancer.
+resource "google_compute_firewall" "scep_broker" {
+  count   = local.scep_inventory_enabled ? 1 : 0
+  project = google_project.this.project_id
+  name    = "allow-scep-broker-lb"
+  network = google_compute_network.radius.id
+  allow {
+    protocol = "tcp"
+    ports    = ["9081"]
+  }
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+  target_tags   = ["radius-server"]
+}
+
+resource "google_compute_health_check" "scep_broker" {
+  count   = local.scep_inventory_enabled ? 1 : 0
+  project = google_project.this.project_id
+  name    = "scep-broker-hc"
+  https_health_check {
+    port         = 9081
+    request_path = "/healthz"
+  }
+}
+
+resource "google_compute_backend_service" "scep_broker" {
+  count                 = local.scep_inventory_enabled ? 1 : 0
+  project               = google_project.this.project_id
+  name                  = "scep-broker-backend"
+  protocol              = "HTTPS"
+  port_name             = "scep-broker"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = 15
+  health_checks         = [google_compute_health_check.scep_broker[0].id]
+  security_policy       = google_compute_security_policy.smallstep[0].id
+  backend {
+    group = google_compute_instance_group.smallstep_primary[0].id
+  }
+  backend {
+    group = google_compute_instance_group.smallstep_secondary[0].id
+  }
 }
 
 # Fleet API token — a standing credential created OUT-OF-BAND so it never passes
 # through tfvars/CI/CLI history. Create it (container + value) yourself from an
-# api-only observer user's token, BEFORE applying with the webhook enabled:
+# API-only account token, BEFORE applying with the webhook enabled. Collection
+# requires maintainer access; read-only issuance lookup can use observer access:
 #   ~/.fleetctl/fleetctl user create --name 'ACME Webhook' --api-only   # prints token
 #   printf '%s' '<token>' | gcloud secrets create fleet-api-token \
 #     --project=YOUR_PROJECT_ID --replication-policy=automatic --data-file=-

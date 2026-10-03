@@ -1,7 +1,10 @@
 """Test fixture executed only inside the disposable Debian container."""
+import hashlib
 import json
 from pathlib import Path
 import socket
+import ssl
+import sys
 import struct
 import subprocess
 import threading
@@ -9,6 +12,7 @@ import time
 
 RADDB = Path('/etc/freeradius/3.0')
 CACHE = RADDB / 'device-policy-cache.json'
+CERTIFICATE_MODE = '--certificate-inventory' in sys.argv
 
 
 def configure():
@@ -31,8 +35,11 @@ def configure():
     # Force real resumption in the test fixture. The deployed config retains its
     # existing cache settings; without persist_dir Debian 12 does full reauths.
     eap = RADDB / 'mods-available/eap'
-    eap.write_text(eap.read_text().replace('name = "eap-tls"',
-                                         'name = "eap-tls"\n            persist_dir = /tmp/tlscache'))
+    if not CERTIFICATE_MODE:
+        eap.write_text(eap.read_text().replace('name = "eap-tls"',
+                                             'name = "eap-tls"\n            persist_dir = /tmp/tlscache'))
+    else:
+        assert 'enable = no' in eap.read_text(), 'Fingerprint mode must disable session resumption'
     subprocess.run(['bash'], input=r'''
 set -euo pipefail
 mkdir -p /tmp/tlscache
@@ -43,8 +50,10 @@ openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr -subj
 printf 'extendedKeyUsage=serverAuth\nsubjectAltName=DNS:radius.test\n' > server.ext
 openssl x509 -req -in server.csr -CA okta-ca.pem -CAkey ca.key -CAcreateserial -out server-cert.pem -days 1 -extfile server.ext 2>/dev/null
 openssl genpkey -genparam -algorithm DH -pkeyopt group:ffdhe2048 -out dh.pem 2>/dev/null
-for identity in personal-enrollment-id STAFFSERIAL unknown; do
-    openssl req -newkey rsa:2048 -nodes -keyout "$identity.key" -out "$identity.csr" -subj "/CN=$identity" 2>/dev/null
+for identity in personal-enrollment-id STAFFSERIAL unknown forged-staff; do
+    subject="$identity"
+    if [ "$identity" = forged-staff ]; then subject=STAFFSERIAL; fi
+    openssl req -newkey rsa:2048 -nodes -keyout "$identity.key" -out "$identity.csr" -subj "/CN=$subject" 2>/dev/null
     printf 'extendedKeyUsage=clientAuth\n' > client.ext
     openssl x509 -req -in "$identity.csr" -CA okta-ca.pem -CAkey ca.key -CAcreateserial -out "$identity.pem" -days 1 -extfile client.ext 2>/dev/null
 done
@@ -57,10 +66,17 @@ chmod 640 server-key.pem
     print('PASS: rendered FreeRADIUS configuration validates', flush=True)
 
 
-def inventory(groups=None, enrolled=True, age=0):
+def inventory(groups=None, enrolled=True, age=0, certificate_age=0, ambiguous=False):
     data = {'version': 1, 'updated_at': time.time() - age, 'identities': {
         'personal-enrollment-id': {'device_id': '42', 'groups': groups if groups is not None else ['byod'], 'enrolled': enrolled},
         'STAFFSERIAL': {'device_id': '1', 'groups': ['staff'], 'enrolled': True}}}
+    if CERTIFICATE_MODE:
+        data['version'] = 2
+        data['certificates'] = {}
+        for identity, device in data['identities'].items():
+            der = ssl.PEM_cert_to_DER_cert((RADDB / 'certs' / (identity + '.pem')).read_text())
+            fingerprint = hashlib.sha256(der).hexdigest()
+            data['certificates'][fingerprint] = None if ambiguous else dict(device, observed_at=time.time() - certificate_age)
     temporary = CACHE.with_suffix('.tmp')
     temporary.write_text(json.dumps(data))
     temporary.replace(CACHE)
@@ -140,7 +156,10 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
     assert replies == want, (name, replies, want, result.stdout[-2000:])
     assert (result.returncode == 0) == (expected[-1] is not None), (name, result.returncode)
     if len(expected) > 1:
-        assert 'resumed=1' in result.stdout, 'Test did not exercise real TLS resumption'
+        if CERTIFICATE_MODE:
+            assert 'resumed=1' not in result.stdout, 'Fingerprint mode unexpectedly resumed TLS'
+        else:
+            assert 'resumed=1' in result.stdout, 'Test did not exercise real TLS resumption'
     print('PASS:', name, replies, flush=True)
 
 
@@ -161,15 +180,32 @@ def main():
             authenticate('byod-spoofed-username')
             authenticate('staff', certificate='STAFFSERIAL', expected=(100,))
             inventory()
-            authenticate('resume-changed-group', expected=(200, 100), after_accept=lambda: inventory(['staff']))
+            authenticate('reauth-changed-group' if CERTIFICATE_MODE else 'resume-changed-group', expected=(200, 100), after_accept=lambda: inventory(['staff']))
             inventory()
-            authenticate('resume-unenrolled', expected=(200, None), after_accept=lambda: inventory(enrolled=False))
+            authenticate('reauth-unenrolled' if CERTIFICATE_MODE else 'resume-unenrolled', expected=(200, None), after_accept=lambda: inventory(enrolled=False))
             inventory()
             authenticate('unknown', certificate='unknown', expected=(None,))
+            if CERTIFICATE_MODE:
+                inventory()
+                authenticate('forged-staff-cn', certificate='forged-staff', expected=(None,))
+                inventory(certificate_age=86401)
+                authenticate('expired-certificate-observation', expected=(None,))
+                inventory(ambiguous=True)
+                authenticate('ambiguous-certificate', expected=(None,))
             inventory(age=3601)
             authenticate('expired-cache', expected=(None,))
             inventory(groups=[])
             authenticate('unmapped-group', expected=(None,))
+            if CERTIFICATE_MODE:
+                inventory()
+                helper = RADDB / 'mods-config/python3/device_policy.py'
+                moved = helper.with_suffix('.disabled')
+                helper.rename(moved)
+                try:
+                    authenticate('missing-fingerprint-hook', expected=(None,))
+                finally:
+                    moved.rename(helper)
+                assert not list(Path('/run/radius-certificate-bindings').iterdir()), 'Handshake files leaked'
             CACHE.write_text('{')
             authenticate('corrupt-cache', expected=(None,))
         finally:

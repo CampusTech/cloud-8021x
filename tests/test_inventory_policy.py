@@ -10,6 +10,25 @@ import inventory_policy
 
 
 class InventoryTests(unittest.TestCase):
+    def test_certificate_coverage_does_not_imply_vlan_readiness(self):
+        host = {'id': 7, 'uuid': 'byod', 'platform': 'ios', 'team_id': 4,
+                'mdm': {'enrollment_status': 'On (personal)'}}
+        fp = 'ab' * 32
+        device = {**inventory_policy.fleet_device(host), 'certificate_fingerprints': [fp],
+                  'certificates_observed_at': 100}
+        obs = {'byod': {'fingerprints': [fp], 'observed_at': 100, 'trust_verified': True,
+                        'expires_at': {fp: 10000}}}
+        config = {'group_vlans': {}, 'cache_max_age': 3600, 'certificate_max_age': 86400,
+                  'certificate_inventory': True}
+        self.assertTrue(hasattr(inventory_policy, 'certificate_readiness'))
+        report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
+        self.assertFalse(report['ready'])
+        self.assertEqual(report['hosts'][0]['reason'], 'no_vlan_assignment')
+        config['group_vlans'] = {'fleet:4': 200}
+        report = inventory_policy.certificate_readiness([host], [device], obs, config, 101)
+        self.assertTrue(report['ready'])
+        self.assertEqual(report['hosts'][0]['vlan'], 200)
+
     def test_fleet_byod_without_serial(self):
         device = inventory_policy.fleet_device({'id': 7, 'hardware_serial': '',
             'uuid': '01234567-89AB-CDEF-0123-456789ABCDEF', 'team_id': 4,

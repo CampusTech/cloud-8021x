@@ -515,6 +515,13 @@ resource "google_compute_instance_group" "smallstep_primary" {
     name = "stepca-rsa"
     port = 8444
   }
+  dynamic "named_port" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name = "scep-broker"
+      port = 9081
+    }
+  }
 }
 
 resource "google_compute_instance_group" "smallstep_secondary" {
@@ -531,6 +538,13 @@ resource "google_compute_instance_group" "smallstep_secondary" {
   named_port {
     name = "stepca-rsa"
     port = 8444
+  }
+  dynamic "named_port" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name = "scep-broker"
+      port = 9081
+    }
   }
 }
 
@@ -695,6 +709,24 @@ resource "google_compute_url_map" "smallstep_rsa" {
   project         = google_project.this.project_id
   name            = "smallstep-ca-rsa-urlmap"
   default_service = google_compute_backend_service.smallstep_rsa[0].id
+  dynamic "host_rule" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      hosts        = [var.smallstep_ca_rsa_dns_name]
+      path_matcher = "scep-broker"
+    }
+  }
+  dynamic "path_matcher" {
+    for_each = local.scep_inventory_enabled ? [1] : []
+    content {
+      name            = "scep-broker"
+      default_service = google_compute_backend_service.smallstep_rsa[0].id
+      path_rule {
+        paths   = ["/fleet/scep-challenge"]
+        service = google_compute_backend_service.scep_broker[0].id
+      }
+    }
+  }
 }
 
 resource "google_compute_target_https_proxy" "smallstep_rsa" {

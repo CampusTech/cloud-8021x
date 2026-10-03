@@ -299,7 +299,8 @@ The cache is built on boot and refreshed every 30 minutes via cron. Cache misses
 
 Map inventory groups to VLAN IDs with `radius_vlan_policy`. Fleet fleets/teams,
 Jamf computer sites, and custom MDM inventory snapshots share the same RADIUS
-policy. Serial-free BYOD iOS/iPadOS certificates can use an enrollment ID.
+policy. Serial-free BYOD iOS/iPadOS uses one Fleet-managed SCEP profile and
+authorizes exact certificate fingerprints from authenticated MDM inventory.
 UniFi receives `Tunnel-Type = 13`, `Tunnel-Medium-Type = 6`, and the VLAN ID in
 `Tunnel-Private-Group-Id`.
 

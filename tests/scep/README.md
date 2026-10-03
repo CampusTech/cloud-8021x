@@ -29,6 +29,9 @@ Coverage includes:
 - Rejection after unenrollment despite a still-valid challenge.
 - Certificate verification, removal of unapproved SANs, clientAuth-only EKU,
   and preservation of the renewal OU.
+- Stock Fleet's Basic-authenticated raw challenge protocol and neutral v2 tokens.
+- Separate rendered inventory-mode CA, reserved issued CN despite arbitrary CSR
+  names, retry and renewal, and mode-disabled rejection of neutral tokens.
 
 `go test ./...` in the webhook directory does not run this suite. Directly
 running Go tests in this directory skips the integration unless the runner's

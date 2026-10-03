@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- External CA template only. For self-hosted v2 SCEP use scripts/byod_profile.py. -->
+<!-- Reusable Fleet Smallstep profile. Requires fingerprint authorization in cloud-8021x. -->
 <plist version="1.0">
 <dict>
 	<key>PayloadType</key>
@@ -29,11 +29,11 @@
 			<key>PayloadContent</key>
 			<dict>
 				<key>URL</key>
-				<string>$FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME</string>
+				<string>$FLEET_VAR_SMALLSTEP_SCEP_PROXY_URL_CANAME</string>
 				<key>Name</key>
 				<string>CANAME</string>
 				<key>Challenge</key>
-				<string>$FLEET_VAR_CUSTOM_SCEP_CHALLENGE_CANAME</string>
+				<string>$FLEET_VAR_SMALLSTEP_SCEP_CHALLENGE_CANAME</string>
 				<key>Subject</key>
 				<array>
 					<array>

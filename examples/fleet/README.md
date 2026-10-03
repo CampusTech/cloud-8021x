@@ -9,7 +9,7 @@ before use. See [`../README.md`](../README.md) for the token map.
 | File | Platform | Purpose |
 |------|----------|---------|
 | `wifi-acme.mobileconfig` | macOS / iOS | EAP-TLS identity via direct ACME |
-| `wifi-ios-byod.mobileconfig` | iOS / iPadOS User Enrollment | External custom-SCEP CA template only; not the self-hosted v2 issuer |
+| `wifi-ios-byod.mobileconfig` | iOS / iPadOS User Enrollment | Reusable native Smallstep profile with fingerprint authorization |
 | `wifi-scep.xml` | Windows | EAP-TLS identity via SCEP (Fleet SCEP proxy) |
 
 For the root CA trust and the WlanXml 802.1X profile on Windows, reuse
@@ -53,17 +53,29 @@ That is why this README and the profile comments write those variable names
 **without** the leading `$` (e.g. `FLEET_VAR_CUSTOM_SCEP_PROXY_URL_CANAME`).
 The single live occurrence of each is in its `<Data>` node.
 
-## Self-hosted SCEP v2 and BYOD iOS/iPadOS
+## Self-hosted SCEP and BYOD iOS/iPadOS
 
-The self-hosted CA no longer accepts Fleet's static custom-SCEP challenge.
-Use the [per-device generator and Fleet delivery instructions](../../docs/scep-identity-binding.md#generate-and-deliver-an-ios-profile).
-It signs a challenge for the host UUID/enrollment ID and generates a private
-InstallProfile request for that host only. Generate and deliver a fresh profile
-before certificate expiry; this direct-command workflow does not use Fleet's
-native certificate auto-renewal.
+Use `wifi-ios-byod.mobileconfig` as one reusable Fleet-managed profile with the
+self-hosted broker. Unlike the Windows custom-SCEP example, it uses the native
+Smallstep variables:
 
-The custom-SCEP templates in this directory remain examples for external CAs
-whose issuance integration provides device identity binding. Do not register
-the self-hosted signing key as a Fleet shared SCEP challenge. Native dynamic
-challenge support requires Fleet to include authenticated device context in
-its challenge request.
+- `$FLEET_VAR_SMALLSTEP_SCEP_PROXY_URL_CANAME`
+- `$FLEET_VAR_SMALLSTEP_SCEP_CHALLENGE_CANAME`
+- `$FLEET_VAR_CERTIFICATE_RENEWAL_ID` in the Subject OU for managed renewal.
+
+Register a Smallstep CA in Fleet with the SCEP URL, Terraform's
+`fleet_scep_challenge_url`, username `fleet`, and the `scep-broker-token` secret.
+Replace `CANAME`, SSID, RADIUS server name, and server trust root in the template
+once. The requested host UUID is replaced by a reserved CN at issuance; RADIUS
+authorizes the certificate fingerprint reported by that device's authenticated
+MDM channel.
+
+This requires `radius_vlan_policy.certificate_inventory = true` and the Fleet
+certificate collector on both RADIUS nodes. It does not require the per-device
+profile generator or an upstream Fleet change. See the [deployment and rollout
+guide](../../docs/scep-identity-binding.md).
+
+The Windows template remains a custom-SCEP example. Native Smallstep variables
+and the built-in MDM CertificateList collector currently support Apple devices.
+Do not enable fingerprint enforcement on existing Windows clients without a
+supported inventory adapter or a separate authentication path.

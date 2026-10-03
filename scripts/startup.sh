@@ -17,6 +17,7 @@ SERVER_CERT_ORG="${server_cert_org}"
 HAS_ROOT_CA="${has_root_ca}"
 HAS_JAMF_LOOKUP="${has_jamf_lookup}"
 HAS_FLEET_LOOKUP="${has_fleet_lookup}"
+FLEET_CERTIFICATE_INVENTORY="${fleet_certificate_inventory}"
 FLEET_API_BASE_URL="${fleet_api_base_url}"
 HAS_UNIFI_LOOKUP="${has_unifi_lookup}"
 HAS_MERAKI_LOOKUP="${has_meraki_lookup}"
@@ -28,11 +29,19 @@ TLS_SESSION_CACHE_LIFETIME="${tls_session_cache_lifetime}"
 TLS_MAX_VERSION="${tls_max_version}"
 VLAN_POLICY_ENABLED="${vlan_policy_enabled}"
 DEVICE_CACHE_SCHEDULE="*/30"
-if [ "$VLAN_POLICY_ENABLED" = "true" ]; then
+if [ "$VLAN_POLICY_ENABLED" = "true" ] || [ "$FLEET_CERTIFICATE_INVENTORY" = "true" ]; then
     DEVICE_CACHE_SCHEDULE="*/5"
 fi
 RADIUS_CLIENTS_JSON='${radius_clients_json}'
 DATADOG_SITE="${datadog_site}"
+
+# BEGIN CERTIFICATE DOWNGRADE GUARD
+# Do this before stopping services or rewriting their existing secure config.
+if [ -f /var/lib/cloud-8021x/fingerprint-enforced ] && [ "${certificate_inventory_enabled}" != "true" ]; then
+    echo "FATAL: fingerprint enforcement was previously enabled. Retire neutral SCEP certificates/issuer before removing the fingerprint-enforced marker and downgrading." >&2
+    exit 1
+fi
+# END CERTIFICATE DOWNGRADE GUARD
 
 # ---------------------------------------------------------------------------
 # Idempotency — skip only if FreeRADIUS is running AND this exact script has
@@ -100,8 +109,10 @@ mkdir -p "$RADDB/mods-config/python3"
 printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/device_policy.py"
 printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
+printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan}.py "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
 
 CERT_DIR="$RADDB/certs"
 
@@ -731,13 +742,18 @@ echo "step-ca started."
 # --- RSA step-ca (instance #2): ca.json, unit, log, probe -------------------
 RSA_SCEP_DECRYPTER_CERT_B64="$(base64 -w0 < /etc/step-ca-rsa/certs/scep_decrypter.crt)"
 RSA_SCEP_DECRYPTER_KEY_B64="$(base64 -w0 < /etc/step-ca-rsa/secrets/scep_decrypter_key)"
-# The challenge webhook binds the CN. The CSR's OU is renewal metadata only;
+# Legacy challenges bind the CN; inventory mode overrides it with a reserved CN.
+# The CSR's OU is renewal metadata only;
 # never copy requested SANs or grant serverAuth to a Wi-Fi client certificate.
 mkdir -p /etc/step-ca-rsa/templates/x509
 cat > /etc/step-ca-rsa/templates/x509/wifi-scep.tpl <<'SCEPTPLEOF'
 {
   "subject": {
+%{ if scep_certificate_inventory }
+    "commonName": "cloud-8021x-inventory",
+%{ else }
     "commonName": {{ toJson .Subject.CommonName }},
+%{ endif }
     "organizationalUnit": {{ toJson .Insecure.CR.Subject.OrganizationalUnit }}
   },
   "sans": [],
@@ -916,7 +932,23 @@ ALLOW_LABEL=${webhook_allow_label}
 WEBHOOK_CLIENT_DNS_NAMES=${smallstep_ca_dns_name},${smallstep_ca_rsa_dns_name}
 FLEET_API_TOKEN=$FLEET_API_TOKEN
 SCEP_CHALLENGE_SIGNING_KEY=$SCEP_CHALLENGE_SIGNING_KEY
+SCEP_CERTIFICATE_INVENTORY=${scep_certificate_inventory}
 WEBHOOKENV
+%{ if scep_certificate_inventory }
+# Remember this before starting neutral issuance, including a partially failed bootstrap.
+install -d -m 0700 /var/lib/cloud-8021x
+touch /var/lib/cloud-8021x/fingerprint-enforced
+SCEP_BROKER_TOKEN="$(gcloud secrets versions access latest --secret=scep-broker-token --project="${project_id}")"
+[ "$${#SCEP_BROKER_TOKEN}" -ge 32 ] || { echo "FATAL: broker secret missing" >&2; exit 1; }
+cat >> /etc/acme-authz-webhook/env <<BROKERENV
+SCEP_BROKER_PORT=9081
+SCEP_BROKER_USERNAME=fleet
+SCEP_BROKER_TOKEN=$SCEP_BROKER_TOKEN
+SCEP_BROKER_SCEP_URL=https://${smallstep_ca_rsa_dns_name}/scep/${smallstep_scep_rsa_name}
+SCEP_BROKER_PROVISIONER=${smallstep_scep_rsa_name}
+BROKERENV
+unset SCEP_BROKER_TOKEN
+%{ endif }
 umask 022
 chmod 600 /etc/acme-authz-webhook/env
 # Public trust anchors readable by the unprivileged webhook even when step's
@@ -1452,6 +1484,16 @@ echo "Enabled radius-client-cert-metrics.timer (hourly client-cert expiry gauges
 #    validation — no post-start PEM file patching needed.
 # ---------------------------------------------------------------------------
 echo "=== Configuring EAP-TLS ==="
+%{ if certificate_inventory_enabled ~}
+# Handshake bindings are private, short-lived, and consumed before EAP-Success.
+install -d -o freerad -g freerad -m 0700 /run/radius-certificate-bindings
+install -d -m 0755 /etc/tmpfiles.d
+cat > /etc/tmpfiles.d/radius-certificate-bindings.conf <<'CERTTMPFILESEOF'
+d /run/radius-certificate-bindings 0700 freerad freerad 10m
+CERTTMPFILESEOF
+# FreeRADIUS 3.2 does not restore our exact-certificate handoff on TLS resumption.
+TLS_SESSION_CACHE=false
+%{ endif ~}
 
 cat > "$RADDB/mods-available/eap" << 'EAPEOF'
 eap {
@@ -1485,6 +1527,12 @@ eap {
         }
 
         verify {
+%{ if certificate_inventory_enabled ~}
+            tmpdir = /run/radius-certificate-bindings
+            # FreeRADIUS writes the verified leaf, invokes this hook, then deletes
+            # the PEM. Only server-generated session-state enters the command.
+            client = "/usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/device_policy.py %%{TLS-Client-Cert-Filename} %%{session-state:Tmp-String-0}"
+%{ endif ~}
         }
     }
 
@@ -1919,11 +1967,19 @@ FLEETCREDEOF
     unset FLEET_API_TOKEN
 
     # Deploy the Fleet device cache script (bulk inventory pull).
+    install -d -m 0700 /var/lib/cloud-8021x
+    printf '%s' "$FLEET_CERTIFICATE_INVENTORY" > /var/lib/cloud-8021x/collect-certificates
+    # Match the RADIUS client trust bundle for certificate coverage reporting.
+    printf '%s' '%{ if smallstep_enabled }%{ if radius_trust_mode == "smallstep" }smallstep-ca.pem%{ else }%{ if radius_trust_mode == "both" }trust-bundle.pem%{ else }okta-ca.pem%{ endif }%{ endif }%{ else }okta-ca.pem%{ endif }' > /var/lib/cloud-8021x/client-ca-file
     cat > /usr/local/bin/fleet-device-cache.sh << 'FLEETCACHEEOF'
 #!/bin/bash
 # Fetches all Fleet hosts, builds serial -> device info cache.
-# Called on boot and every 30 minutes via cron.
+# Called on boot and every 5 minutes with VLAN policy/certificate collection.
 set -uo pipefail
+
+# A slow API call must not overlap the next cron run and overwrite pending state.
+exec 9>/var/lib/cloud-8021x/fleet-cache.lock
+flock -n 9 || exit 0
 
 CRED_FILE="/run/fleet-credentials.json"
 CACHE_FILE="/etc/freeradius/3.0/fleet-device-cache.json"
@@ -1944,6 +2000,7 @@ if not base or not token:
 
 cache = {}
 policy_devices = []
+all_hosts = []
 page = 0
 page_size = 100
 now = int(time.time())
@@ -1971,6 +2028,7 @@ while True:
     if not hosts:
         break
     for h in hosts:
+        all_hosts.append(h)
         device = fleet_device(h)
         policy_devices.append(device)
         serial = (h.get("hardware_serial") or h.get("uuid") or "").strip()
@@ -1990,6 +2048,27 @@ while True:
     if len(hosts) < page_size:
         break
     page += 1
+
+from pathlib import Path
+if Path("/var/lib/cloud-8021x/collect-certificates").is_file() and Path("/var/lib/cloud-8021x/collect-certificates").read_text().strip() == "true":
+    from fleet_certificates import refresh
+    from inventory_policy import certificate_readiness
+    with open("/etc/freeradius/3.0/vlan-policy.json") as stream:
+        vlan_config = json.load(stream) or {}
+    cert_max_age = vlan_config.get("certificate_max_age", 86400)
+    ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
+    observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+                           now=now, max_age=cert_max_age, ca_file=ca_file)
+    for host, device in zip(all_hosts, policy_devices):
+        observed = observations.get(host.get("uuid"), {})
+        device["certificate_fingerprints"] = observed.get("fingerprints", [])
+        device["certificates_observed_at"] = observed.get("observed_at", 0)
+    report = certificate_readiness(all_hosts, policy_devices, observations, vlan_config, now)
+    report_path = "/var/lib/cloud-8021x/certificate-readiness.json"
+    with open(report_path + ".tmp", "w") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        json.dump(report, stream)
+    os.replace(report_path + ".tmp", report_path)
 
 cache_file = "/etc/freeradius/3.0/fleet-device-cache.json"
 tmp_file = cache_file + ".tmp"
@@ -2861,6 +2940,14 @@ VLANMODULEEOF
     cat > "$RADDB/sites-available/check-device-vlan" << 'VLANSITEEOF'
 server check-device-vlan {
     authorize {
+%{ if certificate_inventory_enabled ~}
+        # This internal attribute is overwritten from server-owned state. It is
+        # never taken from a NAS packet or any client-chosen certificate field.
+        update request {
+            Tmp-String-0 !* ANY
+            Tmp-String-0 := &outer.session-state:Tmp-String-0
+        }
+%{ endif ~}
         radius_vlan {
             reject = 1
             fail = 1
@@ -2918,6 +3005,13 @@ server default {
 
     authorize {
         filter_username
+%{ if certificate_inventory_enabled ~}
+        if (!&session-state:Tmp-String-0) {
+            update session-state {
+                Tmp-String-0 := "%%{randstr:hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh}"
+            }
+        }
+%{ endif ~}
         eap {
             ok = return
         }

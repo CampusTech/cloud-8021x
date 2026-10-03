@@ -38,19 +38,24 @@ def main():
             member = next(item for item in tar.getmembers() if item.isfile() and Path(item.name).name == 'step-ca')
             binary.write_bytes(tar.extractfile(member).read())
         binary.chmod(0o700)
-        script = render(smallstep=True, webhook=True)
-        if f'STEP_CA_VERSION="{VERSION}"' not in script:
-            raise SystemExit('Runner version must match startup.sh pinned step-ca version')
-        config = json.loads(script.split('<<CARSAJSON\n', 1)[1].split('\nCARSAJSON', 1)[0])
-        templates = {}
-        for match in re.finditer(r"cat > ([^\n]+) <<'([A-Z]+)'\n(.*?)\n\2\n", script, re.S):
-            path = match[1].strip('"')
-            if '/templates/' in path:
-                templates[path] = match[3]
-        fixture = directory / 'rendered.json'
-        fixture.write_text(json.dumps({'config': config, 'templates': templates}))
+        fixtures = {}
+        for mode in ('legacy', 'inventory'):
+            script = render(smallstep=True, webhook=True, certificate_inventory=mode == 'inventory')
+            if f'STEP_CA_VERSION="{VERSION}"' not in script:
+                raise SystemExit('Runner version must match startup.sh pinned step-ca version')
+            config = json.loads(script.split('<<CARSAJSON\n', 1)[1].split('\nCARSAJSON', 1)[0])
+            templates = {}
+            for match in re.finditer(r"cat > ([^\n]+) <<'([A-Z]+)'\n(.*?)\n\2\n", script, re.S):
+                path = match[1].strip('"')
+                if '/templates/' in path:
+                    templates[path] = match[3]
+            fixture = directory / (mode + '.json')
+            fixture.write_text(json.dumps({'config': config, 'templates': templates}))
+            fixtures[mode] = str(fixture)
         subprocess.run(['go', 'test', '-v', '-count=1', './...'], cwd=HERE, check=True,
-                       env={**os.environ, 'STEP_CA_BINARY': str(binary), 'SCEP_RENDERED_CONFIG': str(fixture)})
+                       env={**os.environ, 'STEP_CA_BINARY': str(binary),
+                            'SCEP_RENDERED_CONFIG': fixtures['legacy'],
+                            'SCEP_INVENTORY_RENDERED_CONFIG': fixtures['inventory']})
 
 if __name__ == '__main__':
     main()

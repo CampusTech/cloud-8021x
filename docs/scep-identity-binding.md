@@ -1,145 +1,189 @@
-# Device-bound SCEP issuance
+# Fleet-managed SCEP with certificate inventory authorization
 
-VLAN policy trusts the certificate's device identity. A password shared by all
-devices cannot authorize that identity: someone holding it could request a CSR
-with another enrolled device's CN and inherit that device's VLAN.
+For Apple BYOD devices, use one reusable Fleet profile and its native Smallstep
+integration. cloud-8021x does not need a Fleet patch or a manually minted profile
+for each device. Each device still generates its own private key and receives
+its own certificate. Fleet delivers fresh challenges and manages renewal.
 
-Webhook v2.0.0 accepts only HMAC-SHA256 tokens containing an identity, provisioner,
-issue time, and expiration. It compares the authenticated claims to the CSR CN
-and provisioner before checking current enrollment and the optional Fleet label.
-The maximum enrollment window is 24 hours; the CLI defaults to 15 minutes.
-Renewal requires a new valid challenge. Retries for the same identity during the
-window are allowed, so these tokens must not be described as one-time passwords.
+## Authorization boundary
 
-The signing key lives in Secret Manager as `scep-challenge-signing-key`, shared
-by the two webhook instances and trusted issuers only. It is newly generated;
-the retired client-distributed SCEP password is not reused as a signing key.
-No signing key or VLAN is placed in the certificate or delivered to devices.
+In certificate inventory mode, RADIUS authorizes the exact SHA-256 fingerprint
+of the presented leaf certificate. Fleet's authenticated MDM `CertificateList`
+response binds that certificate to an enrolled host; the host's current fleet
+selects the VLAN. The CSR Common Name, renewal OU, outer EAP username, and MAC
+address cannot select a device or VLAN. There is no Common Name fallback.
 
-The CA configuration always invokes the SCEP challenge webhook, even if the
-service is disabled or unavailable. There is no shared-password fallback.
-The webhook uses mutual TLS: it verifies both CA roots, the configured CA DNS
-SANs, and clientAuth/serverAuth EKUs. step-ca sends its own automatically renewed
-service certificate; device certificates cannot substitute for it. The local
-webhook HTTPS certificate is trusted via the VM system store, with daily expiry
-checks and rotation 30 days before its one-year expiration.
+The collector requests managed identity certificates (`ManagedOnly=true`,
+`IsIdentity=true`), verifies their client-auth chain and dates against the RADIUS
+client trust bundle, and hashes their DER bytes. It checks the command, response
+host, enrollment generation, and original result time before publishing them.
+The certificate inventory API's subject/issuer/serial fields are insufficient;
+the collector uses raw MDM command results instead.
 
-Both ACME and SCEP webhooks are inside `options.webhooks`; top-level `webhooks`
-is ignored by step-ca 0.30.2. The SCEP certificate template allows clientAuth
-only, preserves the bound CN and untrusted renewal OU, and omits requested SANs.
-The OU is never an authorization identity.
+Unknown, ambiguous, unenrolled, or stale certificates fail closed. RADIUS still
+verifies the certificate chain and proof of private-key possession. A device
+claiming another device's UUID in its CSR cannot inherit that device's VLAN.
+This relies on authenticated MDM enrollment, not hardware attestation.
 
-## Dynamic SCEP and Fleet
+The dynamic challenge broker accepts Fleet's HTTP Basic credentials over HTTPS
+and returns a random, signed, 15-minute challenge scoped to the SCEP provisioner.
+Challenges allow retries until expiration; they are **not single-use**. They
+permit issuance but do not assert a device identity or authorize network access.
+The SCEP template issues clientAuth certificates without requested SANs and
+forces the reserved CN `cloud-8021x-inventory`, ignoring the requested CN.
+Legacy CN authorization explicitly rejects that reserved identity. Keep
+this CA dedicated to this Wi-Fi use: other services must not authorize these
+certificates using their untrusted subjects.
 
-Fleet supports dynamic SCEP with its Smallstep and NDES integrations. A dynamic
-password alone does not establish which device identity the password authorizes.
-Fleet's current Smallstep challenge request contains the CA URL, a random
-payload identifier, and payload types; it does not contain a host UUID or serial.
-The custom SCEP proxy validates its URL token but forwards an encrypted CSR, so
-the CA cannot infer the permitted CN from that token either.
+The public broker exposes only `/fleet/scep-challenge`. step-ca's authorization
+endpoint remains on loopback with mutual TLS. The load balancer also uses HTTPS
+to the broker, and the VM firewall allows that port only from Google's load
+balancer ranges. The broker credential (`scep-broker-token`) is separate from the
+server-only `scep-challenge-signing-key`; never give the signing key to Fleet or
+devices. Both RADIUS nodes share the signing key, so challenges survive backend
+switches.
 
-To use this verifier, the trusted issuer must select the identity from MDM
-inventory and deliver the bound token only to that device. The
-[`scep-challenge` command](../webhook/README.md#scep-and-serial-free-byod-v200)
-supports this contract for any MDM. A native Fleet dynamic challenge integration
-also needs Fleet to send authenticated host context to the challenge issuer;
-an anonymous or device-selected identity must never be accepted for minting.
-[Fleet PR #54717](https://github.com/fleetdm/fleet/pull/54717) adds that upstream
-context. This implementation works independently; native integration can follow
-after that change is available.
-Do not configure Fleet's static custom-SCEP challenge as the new signing key.
+## Configuration and staging
 
-## Generate and deliver an iOS profile
+Publish webhook **2.0.0** before applying its Terraform version pin. No cloud
+changes or profile delivery happen just by merging this PR.
 
-Choose the host UUID/enrollment ID from trusted Fleet inventory. The generator
-runs on a trusted admin/MDM machine; it is not a device self-service endpoint.
-Access the signing key from Secret Manager into a private file, and obtain the
-RADIUS server root certificate through your normal trusted configuration channel.
-Build the webhook CLI with `cd webhook && go build -o acme-authz-webhook .`.
+First enable collection to measure existing certificate coverage:
 
-```sh
-umask 077
-ENROLLMENT_DIR="$(mktemp -d)"
-# Use the project actually hosting this CA; keep the resulting key server-side.
-gcloud secrets versions access latest --secret=scep-challenge-signing-key \
-  --project=YOUR_PROJECT > "$ENROLLMENT_DIR"/signing-key
-
-python3 scripts/byod_profile.py \
-  --webhook-bin ./webhook/acme-authz-webhook \
-  --identity ENROLLMENT_UUID --provisioner wifi-scep \
-  --scep-url https://scep.example.com/scep/wifi-scep \
-  --ssid Campus --radius-server-name radius.example.com \
-  --radius-ca-cert /secure/radius-root.crt \
-  --signing-key-file "$ENROLLMENT_DIR"/signing-key \
-  --ttl 15m \
-  --out "$ENROLLMENT_DIR"/device.mobileconfig \
-  --fleet-command-out "$ENROLLMENT_DIR"/install.json
+```hcl
+enable_fleet_lookup                = true
+enable_fleet_certificate_inventory = true
+fleet_api_base_url                 = "https://fleet.example.com"
 ```
 
-The outputs are 0600 files. Existing files are never overwritten. `--dry-run`
-validates without minting a token or writing files; `--debug` logs no secrets.
-The certificate CN, token identity, and sole Fleet command target are identical.
-The profile installs the server trust root, SCEP identity and EAP-TLS Wi-Fi
-settings, with matching payload references and private keys marked nonextractable.
-Profile identifiers are stable per device/network so renewal replaces the old
-profile. The signing key never enters either output.
+The `fleet-api-token` service account needs permission to read hosts and command
+results and run `CertificateList`. Fleet's observer role cannot issue commands;
+a maintainer scoped to the managed fleets (or a global maintainer) supports both
+operations. Store the token directly in Secret Manager, not Terraform variables.
 
-Submit the generated request through Fleet's authenticated admin API:
+Then enable fingerprint authorization and the self-hosted dynamic broker:
 
-```sh
-curl --fail-with-body "$FLEET_URL/api/v1/fleet/commands/run" \
-  -H "Authorization: Bearer $FLEET_API_TOKEN" \
-  -H 'Content-Type: application/json' \
-  --data-binary @"$ENROLLMENT_DIR"/install.json
+```hcl
+enable_smallstep_ca = true
+enable_acme_webhook = true
+radius_trust_mode  = "smallstep" # "both" also supports migration from another CA
+
+radius_vlan_policy = {
+  certificate_inventory = true
+  certificate_max_age   = 86400
+  cache_max_age         = 3600
+  group_vlans = {
+    "fleet:1" = 100
+    "fleet:2" = 200
+  }
+}
 ```
 
-Check the returned command UUID using Fleet's command-results API before treating
-installation as complete. A queued command is not proof of installation. Deliver
-before the challenge expires; offline devices need newly generated files. Protect
-and remove the sensitive working files after delivery. Other MDMs can deliver
-the `.mobileconfig` through their equivalent per-device authenticated channel.
+Fingerprint mode applies to **every client using these RADIUS servers**, including
+existing ACME certificates. The built-in collector supports Apple macOS, iOS,
+and iPadOS; it does not yet collect Windows or Jamf certificates. Do not enable
+it on a mixed deployment until every required client has a supported binding or
+a separate authentication path. Do not solve missing bindings with a CN fallback.
 
-This self-contained path uses direct InstallProfile commands, not Fleet's
-managed profile renewal pipeline. Generate and deliver a new profile before the
-90-day certificate expires, with a fresh challenge and the same identity/network
-inputs. It can be invoked from your trusted enrollment and renewal automation.
-Do not deploy one generated profile or token to a fleet of devices.
+TLS session resumption is disabled in this mode so every authentication obtains
+the actual certificate fingerprint. Fleet membership refreshes every five
+minutes; certificate queries run hourly and results are polled during each
+refresh. Certificate freshness uses the MDM response time, never the time an old
+response is reread. Offline hosts have a bounded number of pending commands.
+Both VMs keep their own private collection state and must have coverage.
 
-## Upgrade sequence
+The broker is enabled only with fingerprint enforcement and the built-in Fleet
+collector; Terraform rejects an unsafe combination. Collection alone does not
+enable neutral challenge issuance.
 
-This is a breaking SCEP enrollment change. Existing static-challenge profiles
-will fail new enrollment and renewal after the upgrade.
+## Register the CA and deliver one profile
 
-1. Publish webhook **2.0.0** before applying the Terraform default that downloads
-   that release. Terraform creates the new signing key and retires the old
-   `smallstep-scep-challenge` and unused `acme-webhook-signing-secret` resources. Protect Terraform state as before.
-2. Update the trusted MDM issuance integration to mint challenges for the exact
-   identity and SCEP provisioner, and deliver them through each device's
-   authenticated enrollment channel. Keep the signing key on trusted servers.
-3. Replace any explicit `http://127.0.0.1:.../authorize` override with HTTPS,
-   or leave `acme_authorizing_webhook_url` empty to select the managed local
-   HTTPS endpoint when `enable_acme_webhook = true`.
-4. Roll out the webhook and CA configuration together on both nodes. Check that
-   valid enrollment works, cross-device CN changes fail, and an unavailable
-   webhook denies issuance. The ACME gate now also enforces its configured Fleet
-   enrollment/label policy because step-ca loads the corrected options field.
-5. Reissue or retire certificates from the old issuance path before treating
-   them as a BYOD isolation boundary. Fixing issuance does not revoke existing
-   certificates. If impersonated certificates may have been issued, remove the
-   old issuer from RADIUS trust after deploying a replacement chain, or enforce
-   revocation for all affected certificates; changing the shared password alone
-   is insufficient. Clear TLS session caches/restart RADIUS when withdrawing
-   that trust so a resumed session cannot retain it.
+In Fleet's certificate enrollment integrations, add a **Smallstep** CA named
+`CANAME` with:
 
-Key rotation invalidates outstanding enrollment tokens, not issued certificates.
-Devices offline past token expiry need a freshly delivered challenge. Certificate
-renewal must likewise request a fresh challenge through the trusted integration.
-The token authenticates the MDM-assigned identity; it does not add hardware
-attestation to User Enrollment.
+| Field | Value |
+| --- | --- |
+| SCEP URL | `https://YOUR_RSA_CA_HOST/scep/wifi-scep` (use your provisioner name) |
+| Challenge URL | Terraform output `fleet_scep_challenge_url` |
+| Username | `fleet` |
+| Password | Secret Manager secret `scep-broker-token` |
 
-## References
+Use the native Smallstep integration, not the static custom SCEP integration.
+Fleet tests the authenticated challenge endpoint when saving the configuration.
+The shared Cloud Armor policy limits requests per source IP; large bursts may
+receive HTTP 429 and need Fleet delivery retries.
+Keep the credential out of Git and command output.
 
-- [Fleet Smallstep challenge request](https://github.com/fleetdm/fleet/blob/main/ee/server/service/scep/scep_proxy.go)
-- [Fleet certificate authority integrations](https://fleetdm.com/docs/configuration/yaml-files#certificate-authorities)
-- [step-ca SCEP provisioner and webhook validation](https://github.com/smallstep/certificates/blob/v0.30.2/authority/provisioner/scep.go)
-- [step-ca provisioner options schema](https://github.com/smallstep/certificates/blob/v0.30.2/authority/provisioner/options.go)
+Customize [the reusable profile](../examples/fleet/wifi-ios-byod.mobileconfig)
+once: replace `CANAME`, `SSID`, `RADIUS_SERVER_CN`, and
+`RADIUS_CA_CERT_BASE64_DER`. The last value is the base64 DER of the **RADIUS
+server trust root**, which may differ from the client-issuing CA. Distribute
+through Fleet's normal managed configuration profile workflow.
+
+Leave the Fleet variables intact. Fleet replaces the dynamic SCEP proxy URL and
+challenge for each delivery. The requested host UUID is not an authorization input and is replaced by the
+reserved CN at issuance; the renewal ID in the OU lets Fleet track renewal. Private keys are nonextractable,
+and Wi-Fi server trust is restricted to the configured name and root.
+
+## Friday-to-Tuesday rollout checks
+
+1. Enable collection and check coverage on both RADIUS VMs. Existing managed
+   certificates can be used if they already chain to the configured client trust
+   bundle; a mass reissue is not inherently required for fingerprint binding.
+2. Enable fingerprint enforcement, register the broker in Fleet, and pilot the
+   reusable profile on a real User Enrollment iPhone and a managed Mac. Verify
+   installation, initial EAP-TLS, VLAN, DHCP, and profile replacement/renewal.
+3. Deliver the profile through Fleet. Devices need internet through home Wi-Fi,
+   cellular, or an onboarding network until their new certificate is observed.
+   A queued command or elapsed weekend is not proof that a device is ready.
+4. During Monday connectivity, refresh and inspect each VM's coverage report:
+
+   ```sh
+   sudo /usr/local/bin/fleet-device-cache.sh
+   sudo cat /var/lib/cloud-8021x/certificate-readiness.json
+   ```
+
+   Resolve missing, unsupported, ambiguous, stale, or unenrolled hosts. The
+   report distinguishes certificate coverage and VLAN policy readiness. A
+   certificate can be observed without a Wi-Fi profile selecting it, so confirm
+   Fleet's profile installation status as well. Validate an actual connection
+   before treating any cohort as complete.
+5. Keep an onboarding network available Tuesday for devices that remained offline
+   or whose certificate observations expired. The default 24-hour observation
+   lifetime requires recent contact; extending it increases the removal-detection
+   window for a certificate on a still-enrolled host. Current enrollment/group
+   data has a separate, shorter expiry.
+
+If rolling back broker/profile delivery, preserve fingerprint enforcement while
+neutral SCEP certificates remain trusted. The bootstrap records a persistent
+`/var/lib/cloud-8021x/fingerprint-enforced` marker and refuses to remove enforcement
+on subsequent runs. Withdraw the issuing CA or retire those certificates before
+manually removing the marker. The reserved CN also blocks those certificates in
+legacy VLAN policy, but disabling the VLAN policy entirely removes that check. Changing a challenge key does not revoke certificates.
+The `webhook_allow_label` setting continues to scope attested ACME and legacy
+identity-bound issuance; neutral SCEP issuance cannot evaluate a host label.
+Use VLAN group rules to scope network access.
+
+Existing active Wi-Fi sessions are not disconnected automatically; VLAN changes
+apply on authentication. This feature does not send CoA.
+
+## Other integrations and upstream Fleet work
+
+The normalized certificate cache remains MDM-independent. Another trusted MDM
+adapter can publish exact certificate fingerprints and device groups without
+embedding Fleet concepts in RADIUS.
+
+The older `webhook scep-challenge` CLI and `scripts/byod_profile.py` remain
+available for integrations that deliberately mint identity-bound profiles. They
+are not required for this Fleet-managed workflow. With fingerprint enforcement
+disabled, the webhook continues to reject neutral challenges and requires the
+older identity-bound token plus current enrollment.
+
+[Fleet PR #54717](https://github.com/fleetdm/fleet/pull/54717) adds trusted device
+context to dynamic challenge requests. It can simplify a future issuance-bound
+integration, but it is not required for this implementation.
+
+References: [Fleet built-in variables](https://fleetdm.com/guides/fleet-variables),
+[Fleet certificate inventory](https://fleetdm.com/guides/view-certificates-in-host-vitals),
+[Fleet MDM command APIs](https://fleetdm.com/docs/rest-api/rest-api#commands),
+[Apple CertificateList](https://developer.apple.com/documentation/devicemanagement/certificatelistcommand).

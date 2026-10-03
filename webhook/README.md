@@ -69,12 +69,13 @@ WEBHOOK_CLIENT_DNS_NAMES=ca.example.com,scep.example.com \
 ```
 
 Container image: `docker build -t acme-authz-webhook .` (see `Dockerfile`).
-Runs as a loopback-only systemd service on each RADIUS VM. `webhook.tf` manages
-its secrets and IAM (gated by `enable_acme_webhook`).
+Runs as a systemd service on each RADIUS VM. Authorization is loopback-only;
+optional inventory mode adds the HTTPS broker listener. `webhook.tf` manages
+its secrets, IAM, and broker backend (gated by `enable_acme_webhook`).
 
-## SCEP and serial-free BYOD (v2.0.0)
+## Legacy identity-bound SCEP (v2.0.0)
 
-SCEP challenges are signed tokens bound to the normalized CSR CN and exact
+With inventory mode disabled, SCEP challenges are signed tokens bound to the normalized CSR CN and exact
 step-ca provisioner, with an expiry of at most 24 hours. Static passwords,
 including the old `SMALLSTEP_SCEP_CHALLENGE`, are never accepted. The dedicated
 signing key is independent of both the retired password and the webhook HMAC.
@@ -106,3 +107,23 @@ falls back to a CSR CN. Both provisioners must place hooks in
 issues clientAuth-only certificates with no requester-supplied SANs.
 
 See [SCEP identity binding and migration](../docs/scep-identity-binding.md).
+
+## Native Fleet dynamic SCEP with certificate inventory
+
+For one reusable Apple profile and Fleet-managed renewal, use the optional
+broker instead of the per-device CLI. Set `SCEP_CERTIFICATE_INVENTORY=true` and
+configure `SCEP_BROKER_USERNAME`, `SCEP_BROKER_TOKEN` (32+ bytes),
+`SCEP_BROKER_SCEP_URL`, and `SCEP_BROKER_PROVISIONER`. The public HTTPS broker
+listens on `SCEP_BROKER_PORT` (9081) using the configured webhook TLS certificate.
+`POST /fleet/scep-challenge` implements Fleet's native HTTP Basic authentication
+and raw-string response protocol. The SCEP URL must match exactly, including
+trailing slash behavior. CA authorization remains a separate loopback mTLS
+listener.
+
+Neutral v2 challenges are provisioner-scoped, random, and expire after 15 minutes;
+they permit retries, not device identity claims. Never enable this mode with CN
+network authorization: enforce exact certificate fingerprints from authenticated
+MDM inventory. Terraform wires and validates these prerequisites. Existing v1
+identity-bound tokens continue to work in their separate legacy mode.
+
+See [deployment, shared profile, and rollout checks](../docs/scep-identity-binding.md).

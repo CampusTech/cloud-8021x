@@ -2,9 +2,9 @@
 
 `radius_vlan_policy` maps inventory groups to VLANs for EAP-TLS connections.
 The RADIUS policy is MDM-independent: it reads a local normalized inventory
-snapshot and identifies the device from the validated certificate Common Name.
-Existing serial CNs (including the Windows ` Campus WiFi` suffix) and opaque
-MDM enrollment identifiers are supported. Outer EAP `User-Name` and client MAC
+snapshot. Recommended Apple BYOD mode identifies devices by the SHA-256
+fingerprint of their verified certificate, as observed through authenticated MDM.
+Legacy deployments can still use a securely issued certificate Common Name. Outer EAP `User-Name` and client MAC
 addresses never select a VLAN.
 
 ## Configuration
@@ -54,10 +54,9 @@ sudo /usr/local/bin/fleet-device-cache.sh
 # Or, for Jamf: sudo /usr/local/bin/jamf-device-cache.sh
 ```
 
-Membership changes take effect on the next authentication after refresh. This
-also applies to TLS resumption: FreeRADIUS restores the certificate attributes,
-then the policy evaluates the current inventory. Missing restored identity
-fails closed. This feature does not disconnect existing sessions or send CoA.
+Membership changes take effect on the next authentication after refresh. Legacy CN mode also rechecks policy on TLS resumption using restored certificate
+attributes. Fingerprint mode disables resumption and obtains the actual leaf
+certificate on every authentication. Missing certificate bindings fail closed. This feature does not disconnect existing sessions or send CoA.
 The existing FreeRADIUS 3/OpenSSL session-cache limitations still apply.
 
 ## UniFi setup
@@ -93,38 +92,23 @@ Apple User Enrollment omits hardware serial and UDID from attestation. The
 existing ACME authorization path still requires an attested identifier; do not
 replace it with a self-asserted CSR identity. Use SCEP for these BYOD devices.
 
-Use the [per-device profile generator](scep-identity-binding.md#generate-and-deliver-an-ios-profile)
-for the self-hosted CA. Supply the device's Fleet host UUID/enrollment ID from
-trusted inventory. The generator binds the challenge and CSR CN to that value
-and can produce a Fleet InstallProfile request targeting exactly that host.
-RADIUS treats the value as an opaque identifier; the inventory adapter maps it
-to the host's fleet. Re-enrollment may change it and requires a new profile.
+Use the [reusable Fleet profile](../examples/fleet/wifi-ios-byod.mobileconfig)
+and [deployment guide](scep-identity-binding.md). Fleet's native Smallstep
+integration obtains a fresh dynamic challenge for delivery and renewal. No Fleet
+patch or individually generated profiles are required.
 
-The generator supports unsupervised iOS/iPadOS, keeps private Wi-Fi addresses,
-and configures explicit trust for the **RADIUS server root and name**. That root
-need not be the SCEP client-issuing CA. The RADIUS trust bundle must trust the
-client issuer. The [generic mobileconfig](../examples/scep/wifi-ios-byod.mobileconfig)
-is also available for trusted MDM integrations that supply their own per-device
-bound challenge.
+Enable `enable_fleet_certificate_inventory` to collect managed Apple identity
+certificates, and `radius_vlan_policy.certificate_inventory` to authorize only
+exact fingerprints. The collector maps authenticated MDM results to the enrolled
+host; the current fleet selects its VLAN. CSR CNs and renewal OUs cannot authorize
+a device. Unknown, ambiguous, and stale fingerprints fail closed.
 
-The self-hosted flow requires webhook **2.0.0**, which must be released before
-applying the Terraform version pin. Fleet's static custom-SCEP profile templates
-are not compatible with this protected issuer. Native dynamic SCEP support is
-planned once Fleet can send device identity in its challenge request; for now,
-use the per-device generator and deliver a fresh profile for renewal.
-
-### Issuance trust boundary
-
-The shared-password impersonation path is closed by signed, expiring challenges
-bound to the requested CN and provisioner. The issuer checks current enrollment,
-and the CA requires the authorization webhook over authenticated mutual TLS.
-An enrollment ID alone is still not proof of device ownership: the trusted MDM
-integration must deliver each token only to its assigned device. Keep the signing
-key server-side. The [migration guide](scep-identity-binding.md) covers existing
-certificates, which are not revoked by an issuance-code change.
-
-References: [Fleet variables](https://fleetdm.com/guides/fleet-variables),
-[Apple Managed Device Attestation](https://support.apple.com/en-us/guide/deployment/dep28afbde6a/web).
+This mode applies to all clients on these RADIUS servers. The built-in collector
+supports macOS, iOS, and iPadOS only; assess existing Windows or other MDM clients
+before enabling enforcement. The coverage report on each VM distinguishes trusted
+certificate observations from valid VLAN mappings. Initial enrollment and renewal
+require connectivity until MDM reports the new certificate. See the guide for
+staging, freshness limits, and Friday-to-Tuesday rollout checks.
 
 ## Other MDMs / inventory sources
 
@@ -152,6 +136,31 @@ Keep the file root-owned and readable by `freerad`; publish atomically with
 `rename`, only after a complete successful refresh. Provide the file on both
 RADIUS nodes. The built-in adapters write only their default cache path and do
 not overwrite a custom snapshot.
+
+For fingerprint mode use version 2 and a `certificates` map instead of subject
+identities. Set `certificate_inventory = true`; `certificate_max_age` limits
+how long a certificate observation remains usable, separately from `cache_max_age`:
+
+```json
+{
+  "version": 2,
+  "updated_at": 1790985600,
+  "identities": {},
+  "certificates": {
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": {
+      "device_id": "your-inventory-record-id",
+      "groups": ["employees"],
+      "enrolled": true,
+      "observed_at": 1790985500
+    }
+  }
+}
+```
+
+Keys are lowercase SHA-256 of exact leaf DER, not certificate serials or SHA-1.
+`observed_at` must be the original authenticated device report time; rereading a
+cached API result must never renew it. Publish ambiguous fingerprints as null or
+omit them. Bind observations to the current MDM enrollment generation.
 
 ## Validation
 

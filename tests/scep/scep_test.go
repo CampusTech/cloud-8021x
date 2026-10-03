@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CampusTech/cloud-8021x/webhook/internal/broker"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
 	"github.com/CampusTech/cloud-8021x/webhook/internal/server"
 	"github.com/smallstep/scep"
@@ -87,6 +88,15 @@ func TestActualStepCASCEP(t *testing.T) {
 	if binary == "" || fixturePath == "" {
 		t.Skip("run python3 run.py for real step-ca integration")
 	}
+	t.Run("legacy", func(t *testing.T) { testActualStepCASCEP(t, binary, fixturePath, false) })
+	inventoryFixture := os.Getenv("SCEP_INVENTORY_RENDERED_CONFIG")
+	if inventoryFixture == "" {
+		t.Fatal("missing inventory-mode rendered fixture")
+	}
+	t.Run("inventory", func(t *testing.T) { testActualStepCASCEP(t, binary, inventoryFixture, true) })
+}
+
+func testActualStepCASCEP(t *testing.T, binary, fixturePath string, certificateInventory bool) {
 	version, err := exec.Command(binary, "version").CombinedOutput()
 	if err != nil || !bytes.Contains(version, []byte("0.30.2")) {
 		t.Fatalf("unexpected step-ca binary: %s %v", version, err)
@@ -134,10 +144,16 @@ func TestActualStepCASCEP(t *testing.T) {
 	var enrolled atomic.Bool
 	enrolled.Store(true)
 	var hookCalls atomic.Int32
+	var inventoryMode atomic.Bool
 	realHandler := server.NewMutualTLS(signingKey, server.DeciderFunc(func(identity string) bool { return enrolled.Load() && (identity == byod || identity == staff) }))
+	inventoryHandler := server.NewMutualTLSInventory(signingKey, provisionerName, server.DeciderFunc(func(identity string) bool { return enrolled.Load() && (identity == byod || identity == staff) }))
 	webhook := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hookCalls.Add(1)
-		realHandler.ServeHTTP(w, r)
+		if inventoryMode.Load() {
+			inventoryHandler.ServeHTTP(w, r)
+		} else {
+			realHandler.ServeHTTP(w, r)
+		}
 	}))
 	webhookKey := key(t)
 	webhookCert := certificate(t, "127.0.0.1", webhookKey, root, rootKey, false)
@@ -235,6 +251,19 @@ func TestActualStepCASCEP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	brokerHandler, err := broker.New(broker.Options{Username: "fleet", Token: signingKey, SigningKey: signingKey, SCEPURL: "https://scep.example/scep/" + provisionerName, Provisioner: provisionerName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokerRequest := httptest.NewRequest("POST", "/fleet/scep-challenge", strings.NewReader(`{"webhook":{"webhookEvent":"SCEPChallenge","id":1,"eventTimestamp":1800000000,"name":"SCEPChallenge"},"event":{"scepServerUrl":"https://scep.example/scep/`+provisionerName+`","payloadIdentifier":"random-fleet-payload-id","payloadTypes":["com.apple.security.scep"]}}`))
+	brokerRequest.SetBasicAuth("fleet", signingKey)
+	brokerRequest.Header.Set("Content-Type", "application/json")
+	brokerResponse := httptest.NewRecorder()
+	brokerHandler.ServeHTTP(brokerResponse, brokerRequest)
+	if brokerResponse.Code != 200 {
+		t.Fatalf("native Fleet broker failed: %d", brokerResponse.Code)
+	}
+	inventoryToken := brokerResponse.Body.String()
 	clientKey := key(t)
 	self := certificate(t, byod, clientKey, nil, nil, false)
 	var issued *x509.Certificate
@@ -242,17 +271,31 @@ func TestActualStepCASCEP(t *testing.T) {
 		name, identity, token string
 		messageType           scep.MessageType
 		renewSigner, want     bool
+		inventory             bool
 	}{
-		{"bound BYOD issuance and constrained certificate", byod, token, scep.PKCSReq, false, true},
-		{"enrolled staff impersonation", staff, token, scep.PKCSReq, false, false},
-		{"shared password", staff, signingKey, scep.PKCSReq, false, false},
-		{"empty challenge", byod, "", scep.PKCSReq, false, false},
-		{"renewal with valid token", byod, token, scep.RenewalReq, true, true},
-		{"renewal without challenge", byod, "", scep.RenewalReq, true, false},
-		{"renewal staff impersonation", staff, token, scep.RenewalReq, true, false},
-		{"unenrolled device", byod, token, scep.PKCSReq, false, false},
+		{"bound BYOD issuance and constrained certificate", byod, token, scep.PKCSReq, false, true, false},
+		{"enrolled staff impersonation", staff, token, scep.PKCSReq, false, false, false},
+		{"shared password", staff, signingKey, scep.PKCSReq, false, false, false},
+		{"empty challenge", byod, "", scep.PKCSReq, false, false, false},
+		{"renewal with valid token", byod, token, scep.RenewalReq, true, true, false},
+		{"renewal without challenge", byod, "", scep.RenewalReq, true, false, false},
+		{"renewal staff impersonation", staff, token, scep.RenewalReq, true, false, false},
+		{"unenrolled device", byod, token, scep.PKCSReq, false, false, false},
+		{"inventory challenge rejected when mode disabled", staff, inventoryToken, scep.PKCSReq, false, false, false},
+		{"inventory neutral issuance ignores claimed staff CN and enrollment", staff, inventoryToken, scep.PKCSReq, false, true, true},
+		{"inventory challenge retry with different claimed CN", "attacker-selected", inventoryToken, scep.PKCSReq, false, true, true},
+		{"inventory renewal preserves neutral subject", staff, inventoryToken, scep.RenewalReq, true, true, true},
+		{"inventory renewal without challenge", staff, "", scep.RenewalReq, true, false, true},
+		{"inventory shared signing key rejected", staff, signingKey, scep.PKCSReq, false, false, true},
 	} {
+		if tc.inventory != certificateInventory {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
+			if certificateInventory {
+				enrolled.Store(false)
+			}
+			inventoryMode.Store(tc.inventory)
 			if tc.name == "unenrolled device" {
 				enrolled.Store(false)
 			}
@@ -308,7 +351,11 @@ func TestActualStepCASCEP(t *testing.T) {
 				t.Fatal(err)
 			}
 			cert := reply.Certificate
-			if cert.Subject.CommonName != byod {
+			expectedCN := tc.identity
+			if certificateInventory {
+				expectedCN = "cloud-8021x-inventory"
+			}
+			if cert.Subject.CommonName != expectedCN {
 				t.Fatalf("wrong issued identity: %s", cert.Subject.CommonName)
 			}
 			if len(cert.DNSNames) != 0 || len(cert.IPAddresses) != 0 || len(cert.URIs) != 0 || len(cert.EmailAddresses) != 0 {

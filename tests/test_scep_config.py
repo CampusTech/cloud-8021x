@@ -2,12 +2,31 @@
 import json
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 import unittest
 
 from render_startup import render
 
 
 class SCEPConfigTests(unittest.TestCase):
+    def test_bootstrap_blocks_removing_enforcement_after_neutral_issuance(self):
+        script = render()
+        self.assertTrue('# BEGIN CERTIFICATE DOWNGRADE GUARD' in script, 'missing downgrade guard')
+        guard = script.split('# BEGIN CERTIFICATE DOWNGRADE GUARD\n', 1)[1].split('# END CERTIFICATE DOWNGRADE GUARD', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'marker'
+            guard = guard.replace('/var/lib/cloud-8021x/fingerprint-enforced', str(marker))
+            self.assertEqual(subprocess.run(['bash'], input=guard, text=True, capture_output=True).returncode, 0)
+            marker.touch()
+            self.assertNotEqual(subprocess.run(['bash'], input=guard, text=True, capture_output=True).returncode, 0)
+
+    def test_inventory_template_replaces_untrusted_subject(self):
+        script = render(smallstep=True, webhook=True, certificate_inventory=True)
+        template = script.split("<<'SCEPTPLEOF'\n", 1)[1].split('\nSCEPTPLEOF', 1)[0]
+        self.assertIn('"commonName": "cloud-8021x-inventory"', template)
+        self.assertNotIn('.Subject.CommonName', template)
+
     def test_issuance_always_requires_identity_binding_webhook(self):
         for enabled in (False, True):
             with self.subTest(webhook_enabled=enabled):
