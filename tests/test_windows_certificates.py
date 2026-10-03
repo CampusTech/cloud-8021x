@@ -134,7 +134,7 @@ class WindowsCollectorTests(unittest.TestCase):
             command = json.loads(self.path.read_text())['commands'][0]
             with self.subTest(output=output[:80]), self.assertRaises(ValueError):
                 fleet_certificates._windows_observation(row, command, 7, 1600000000,
-                                                        self.now, 86400, self.ca)
+                    self.now, 86400, self.ca, fleet_certificates.WINDOWS_SCRIPT.read_text())
 
     def test_host_reenrollment_discards_cached_identity_and_old_execution(self):
         self.refresh()
@@ -190,6 +190,36 @@ class WindowsCollectorTests(unittest.TestCase):
         changed.write_text(fleet_certificates.WINDOWS_SCRIPT.read_text() + '\n# v2\n')
         with patch.object(fleet_certificates, 'WINDOWS_SCRIPT', changed):
             self.assertEqual(self.refresh(), {})
+
+    def test_script_replacement_during_refresh_uses_one_snapshot(self):
+        script = Path(self.tmp.name) / 'script.ps1'
+        original = fleet_certificates.WINDOWS_SCRIPT.read_text()
+        replacement = original + '\n# concurrent deployment\n'
+        script.write_text(original)
+
+        def replace_during_host_lookup(method, path, body=None):
+            if '/hosts/' in path:
+                script.write_text(replacement)
+            return self.api(method, path, body)
+
+        with patch.object(fleet_certificates, 'WINDOWS_SCRIPT', script):
+            self.refresh(request=replace_during_host_lookup)
+            state = json.loads(self.path.read_text())
+            command = state['commands'][0]
+            self.assertEqual(state['hosts']['win-A']['binding'][-1],
+                             hashlib.sha256(original.encode()).hexdigest())
+            self.assertEqual(self.posts[0]['script_contents'],
+                             original + '\n# Collection nonce: ' + command['uuid'] + '\n')
+
+            script.write_text(original)
+            self.results['exec-1'] = self.row()
+
+            def replace_during_result_lookup(method, path, body=None):
+                if '/scripts/results/' in path:
+                    script.write_text(replacement)
+                return self.api(method, path, body)
+
+            self.assertIn('win-A', self.refresh(request=replace_during_result_lookup))
 
     def test_second_precision_server_timestamp_accepts_fractional_client_clock(self):
         self.now += 0.125

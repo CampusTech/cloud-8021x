@@ -138,16 +138,17 @@ def _observation(row, command, host_uuid, enrolled_at, now, max_age, ca_file):
     return observation
 
 
-def _windows_script(nonce):
+def _windows_script(script_snapshot, nonce):
     # This nonce binds result content to the exact reserved request, even across
     # concurrent refreshes or execution-ID mixups. It is not an identity claim.
-    return WINDOWS_SCRIPT.read_text() + '\n# Collection nonce: ' + nonce + '\n'
+    return script_snapshot + '\n# Collection nonce: ' + nonce + '\n'
 
 
-def _windows_observation(row, command, host_id, enrolled_at, now, max_age, ca_file):
+def _windows_observation(row, command, host_id, enrolled_at, now, max_age, ca_file,
+                         script_snapshot):
     if (row.get('host_id') != host_id
             or row.get('execution_id') != command.get('execution_id')
-            or row.get('script_contents') != _windows_script(command['uuid'])
+            or row.get('script_contents') != _windows_script(script_snapshot, command['uuid'])
             or type(row.get('exit_code')) is not int or row['exit_code'] != 0):
         raise ValueError('script result does not match reserved request')
     # Fleet created_at is request creation, not completion time. Conservatively
@@ -228,6 +229,14 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
             cached.pop('observation', None)
     state['trust'] = trust
     counts = Counter(h.get('uuid') for h in hosts)
+    # Pin one copy before any API calls: a deployment during this pass must not
+    # change the content bound to state, submitted to Fleet, or checked in results.
+    windows_script_snapshot = None
+    windows_script_hash = None
+    if any(h.get('platform') == 'windows' and _enrolled(h) for h in hosts):
+        script_bytes = WINDOWS_SCRIPT.read_bytes()
+        windows_script_snapshot = script_bytes.decode('utf-8')
+        windows_script_hash = hashlib.sha256(script_bytes).hexdigest()
     current = {}
     for host in hosts:
         uid = host.get('uuid')
@@ -260,7 +269,7 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
             continue
         binding = [host['id'], enrolled_at, detail.get('last_enrolled_at')]
         if host['platform'] == 'windows':
-            binding.append(hashlib.sha256(WINDOWS_SCRIPT.read_bytes()).hexdigest())
+            binding.append(windows_script_hash)
         cached = state['hosts'].get(uid, {})
         if cached.get('binding') != binding:
             cached = {'binding': binding, 'last_attempt': 0}
@@ -295,7 +304,7 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
                 continue
             try:
                 observation = _windows_observation(row, command, current[uid]['binding'][0],
-                    current[uid]['binding'][1], now, max_age, ca_file)
+                    current[uid]['binding'][1], now, max_age, ca_file, windows_script_snapshot)
                 previous = current[uid].get('observation', {})
                 if observation['observed_at'] >= previous.get('observed_at', 0):
                     current[uid]['observation'] = observation
@@ -364,7 +373,8 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
                 _save(state_path, state)
                 result = request('POST', '/api/v1/fleet/scripts/run',
                                  {'host_id': current[uid]['binding'][0],
-                                  'script_contents': _windows_script(submitted_uuid)})
+                                  'script_contents': _windows_script(windows_script_snapshot,
+                                                                     submitted_uuid)})
                 execution_id = result.get('execution_id')
                 if (result.get('host_id') != current[uid]['binding'][0]
                         or not isinstance(execution_id, str) or not execution_id
