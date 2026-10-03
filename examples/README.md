@@ -16,6 +16,25 @@ valid, managed ACME identities when adding inventory authorization; changing VLA
 rules does not require new certificates. Generic MDM integrations must arrange
 renewal themselves. See [Fleet staging and renewal](../docs/scep-identity-binding.md).
 
+## macOS authentication mode
+
+Use **System mode** for this project's device-certificate EAP-TLS workflow.
+The ACME examples already set `PayloadScope = System` and Wi-Fi
+`SetupModes = [System]`, allowing computer authentication before macOS login.
+System profile scope and Wi-Fi authentication mode are separate settings.
+
+**System + Login Window mode** adds an automatic transition from device to user
+credentials at login. Add `Loginwindow` to `SetupModes` only when deliberately
+deploying that workflow. These examples do not provision a separate user
+identity, and cloud-8021x accepts EAP-TLS, not password-based PEAP/TTLS.
+Any additional certificate still needs a supported inventory binding when
+fingerprint enforcement is enabled.
+
+Pilot connectivity at the macOS login window, after login/logout, and after
+sleep/wake. This macOS setting does not apply to iPhone/iPad BYOD profiles.
+See [Apple's authentication modes](https://support.apple.com/guide/deployment/connect-to-8021x-networks-depabc994b84/web)
+and [Wi-Fi payload schema](https://github.com/apple/device-management/blob/release/mdm/profiles/com.apple.wifi.managed.yaml).
+
 ## Tokens
 
 | Token | Replacement |

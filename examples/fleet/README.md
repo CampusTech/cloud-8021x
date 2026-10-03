@@ -30,6 +30,10 @@ This System-scoped example is not the serial-free User Enrollment profile.
 Existing managed ACME certificates can be inventoried without reissuance; updating
 older profiles lacking the renewal OU is a separate lifecycle requirement.
 
+For macOS, keep **System mode** for device-certificate authentication before
+login. **System + Login Window** is only needed for a deliberate transition to
+user authentication; see [macOS authentication mode](../README.md#macos-authentication-mode).
+
 ## Apple BYOD
 
 Register a Smallstep CA named `CANAME` in Fleet using `terraform output -raw smallstep_scep_rsa_url`,

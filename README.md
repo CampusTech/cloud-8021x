@@ -77,6 +77,8 @@ inventory coverage on both RADIUS nodes for every supported client.
 
 See [example profiles](examples/README.md) and the
 [Fleet deployment guide](docs/scep-identity-binding.md).
+For managed Macs, use [System mode for device-certificate authentication before login](examples/README.md#macos-authentication-mode);
+System + Login Window mode additionally supports a transition to user credentials.
 
 
 ## Prerequisites
