@@ -10,6 +10,21 @@ import inventory_policy
 
 
 class InventoryTests(unittest.TestCase):
+    def test_fleet_nullable_enrollment_status_does_not_abort_inventory(self):
+        for mdm, expected in [(None, False), ({}, False),
+                              ({'enrollment_status': None}, False),
+                              ({'enrollment_status': ''}, False),
+                              ({'enrollment_status': 'Off'}, False),
+                              ({'enrollment_status': 'On (personal)'}, True),
+                              ({'enrollment_status': 'On (automatic)'}, True)]:
+            with self.subTest(mdm=mdm):
+                devices = [inventory_policy.fleet_device({'id': 1, 'uuid': 'first', 'mdm': mdm}),
+                           inventory_policy.fleet_device({'id': 2, 'uuid': 'second',
+                               'mdm': {'enrollment_status': 'On'}})]
+                identities = snapshot(devices, 100)['identities']
+                self.assertEqual(identities['first']['enrolled'], expected)
+                self.assertTrue(identities['second']['enrolled'])
+
     def test_certificate_coverage_does_not_imply_vlan_readiness(self):
         host = {'id': 7, 'uuid': 'byod', 'platform': 'ios', 'team_id': 4,
                 'mdm': {'enrollment_status': 'On (personal)'}}

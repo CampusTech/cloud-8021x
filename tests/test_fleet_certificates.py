@@ -3,6 +3,7 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import plistlib
@@ -18,6 +19,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 class CollectorTests(unittest.TestCase):
+    def test_host_deleted_during_refresh_drops_cached_identity_and_continues(self):
+        self.refresh()
+        self.results['cmd-1'] = [self.row()]
+        self.assertIn('host-A', self.refresh())
+        self.hosts.append({**self.hosts[0], 'id': 8, 'uuid': 'host-B'})
+        response = io.BytesIO(b'host removed')
+        original_api = self.api
+        def request(method, path, body=None):
+            if path == '/api/v1/fleet/hosts/7':
+                raise urllib.error.HTTPError(path, 404, 'Not Found', {}, response)
+            return original_api(method, path, body)
+        self.api = request
+        self.assertEqual(self.refresh(), {})
+        self.assertTrue(response.closed)
+        state = json.loads(self.path.read_text())
+        self.assertNotIn('host-A', state['hosts'])
+        self.assertIn('host-B', state['hosts'])
+        self.assertEqual(state['commands'][0]['hosts'].keys(), {'host-B'})
+
+    def test_host_detail_other_errors_remain_visible_and_preserve_state(self):
+        self.refresh()
+        before = self.path.read_bytes()
+        for code in (401, 403, 429, 500):
+            with self.subTest(code=code):
+                response = io.BytesIO(b'failure')
+                error = urllib.error.HTTPError('https://fleet.example', code, 'failure', {}, response)
+                with patch.object(self, 'api', side_effect=error):
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        self.refresh()
+                self.assertIs(raised.exception, error)
+                self.assertTrue(response.closed)
+                self.assertEqual(self.path.read_bytes(), before)
+        with patch.object(self, 'api', side_effect=OSError('connection failed')):
+            with self.assertRaises(OSError):
+                self.refresh()
+        self.assertEqual(self.path.read_bytes(), before)
+
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('fleet_certificates'),
                              'Fleet certificate collector must exist')

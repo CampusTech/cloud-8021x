@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,6 +9,25 @@ import unittest
 
 @unittest.skipUnless(shutil.which('terraform'), 'Terraform is required for configuration validation')
 class TerraformPolicyTests(unittest.TestCase):
+    def test_webhook_requires_smallstep_for_all_enablement_combinations(self):
+        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        declarations = '\n'.join(re.search(r'variable "' + name + r'" \{.*?\n\}', source, re.S)[0]
+                                 for name in ('enable_smallstep_ca', 'enable_acme_webhook'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'main.tf').write_text(declarations + '\noutput "enabled" { value = var.enable_acme_webhook }\n')
+            for smallstep in (False, True):
+                for webhook in (False, True):
+                    with self.subTest(smallstep=smallstep, webhook=webhook):
+                        (root / 'terraform.tfvars.json').write_text(json.dumps({
+                            'enable_smallstep_ca': smallstep, 'enable_acme_webhook': webhook}))
+                        result = subprocess.run(['terraform', '-chdir=' + directory, 'plan', '-input=false', '-no-color'],
+                                                capture_output=True, text=True)
+                        self.assertEqual(result.returncode == 0, not webhook or smallstep,
+                                         result.stdout + result.stderr)
+                        if webhook and not smallstep:
+                            self.assertIn('enable_acme_webhook requires enable_smallstep_ca', result.stdout + result.stderr)
+
     def test_policy_validation_and_disabled_default(self):
         source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
         declaration = 'variable "radius_vlan_policy"' + source.split('variable "radius_vlan_policy"', 1)[1]

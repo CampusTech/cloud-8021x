@@ -296,6 +296,11 @@ variable "enable_acme_webhook" {
   description = "Run the ACME authorizing webhook on the RADIUS VMs (localhost systemd service) and wire it into step-ca. Requires enable_smallstep_ca=true. MANDATORY before enrolling real devices over ACME."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.enable_acme_webhook || var.enable_smallstep_ca
+    error_message = "enable_acme_webhook requires enable_smallstep_ca = true."
+  }
 }
 
 variable "fleet_api_base_url" {

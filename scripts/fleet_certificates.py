@@ -234,7 +234,14 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
         if (not isinstance(uid, str) or not uid or counts[uid] != 1
                 or host.get('platform') not in SUPPORTED_PLATFORMS or not _enrolled(host)):
             continue
-        detail = request('GET', '/api/v1/fleet/hosts/' + str(int(host['id']))).get('host')
+        try:
+            detail = request('GET', '/api/v1/fleet/hosts/' + str(int(host['id']))).get('host')
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code != 404:
+                raise
+            # Hosts deleted after listing must lose their cached identity and commands.
+            continue
         if (not isinstance(detail, dict) or detail.get('id') != host['id']
                 or detail.get('uuid') != uid or not _enrolled(detail)):
             continue

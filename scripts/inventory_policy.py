@@ -47,7 +47,7 @@ def fleet_device(host):
         'device_id': 'fleet:' + str(host['id']),
         'identities': [v for v in (host.get('hardware_serial'), host.get('uuid')) if v],
         'groups': ['fleet:' + str(group_id)],
-        'enrolled': (host.get('mdm') or {}).get('enrollment_status', '').startswith('On'),
+        'enrolled': ((host.get('mdm') or {}).get('enrollment_status') or '').startswith('On'),
     }
 
 
