@@ -6,8 +6,8 @@ From the repository root:
 python3 tests/scep/run.py
 ```
 
-Requires Python 3, Terraform, Go, and internet access on macOS/Linux (arm64 or
-amd64). The runner downloads the official step-ca 0.30.2 release, verifies its
+Requires Python 3, Terraform, Go 1.27.1 or newer, and internet access on macOS/Linux
+(arm64 or amd64). The runner downloads the official step-ca 0.30.2 release, verifies its
 published SHA-256 checksum, and creates only temporary local certificates,
 keys, a database, and loopback listeners. It does not use cloud credentials or
 Docker. Its Go dependencies are isolated from the production webhook module.

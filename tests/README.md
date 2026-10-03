@@ -23,6 +23,20 @@ go test ./...
 golangci-lint run
 ```
 
+Both Go modules require Go 1.27.1 or newer. The `go-security` workflow tests
+and scans imported packages, including test dependencies, on PRs and in the
+merge queue. To run the same vulnerability check locally, run this command in
+both `webhook/` and `tests/scep/`:
+
+```sh
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
+```
+
+The SCEP harness uses `x/crypto/cryptobyte`; it does not import SSH or OpenPGP.
+Module-only scans can still report the unpatched, unused OpenPGP advisory
+GO-2026-5932. The release workflow separately scans the compiled webhook so
+standard-library findings use the actual build toolchain version.
+
 ## FreeRADIUS / UniFi packet integration
 
 Requires local Docker and Terraform:
