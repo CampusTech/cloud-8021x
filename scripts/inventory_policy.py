@@ -43,11 +43,31 @@ def certificate_readiness(hosts, devices, observations, config, now):
 
 def fleet_device(host):
     group_id = host.get('fleet_id', host.get('team_id')) or 0
+
+    def text(value):
+        return value if isinstance(value, str) else ''
+
+    owner = ''
+    for field, key in (('device_mapping', 'email'), ('end_users', 'idp_username')):
+        records = host.get(field)
+        if not isinstance(records, list):
+            continue
+        owner = next((text(record.get(key)) for record in records
+                      if isinstance(record, dict) and text(record.get(key))), '')
+        if owner:
+            break
     return {
         'device_id': 'fleet:' + str(host['id']),
         'identities': [v for v in (host.get('hardware_serial'), host.get('uuid')) if v],
         'groups': ['fleet:' + str(group_id)],
         'enrolled': ((host.get('mdm') or {}).get('enrollment_status') or '').startswith('On'),
+        'metadata': {
+            'serial': text(host.get('hardware_serial')),
+            'device_name': (text(host.get('display_name')) or text(host.get('computer_name'))
+                            or text(host.get('hostname'))),
+            'device_model': text(host.get('hardware_model')),
+            'device_owner': owner,
+        },
     }
 
 

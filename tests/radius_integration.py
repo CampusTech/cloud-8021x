@@ -1,6 +1,8 @@
-"""Run real EAP-TLS and VLAN packet tests in disposable Debian 12 FreeRADIUS.
+"""Run real EAP-TLS, VLAN, and JSON identity tests in Debian 12 FreeRADIUS.
 
 Requires Docker and Terraform. No cloud calls, host ports, or production secrets.
+Certificate inventory mode also replays Access-Accept Class attributes through
+real Accounting-Requests and checks that untrusted identities stay unattributed.
 """
 import argparse
 from pathlib import Path
@@ -15,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--certificate-inventory', action='store_true', help='Exercise exact DER fingerprint mode')
+    parser.add_argument('--certificate-inventory', action='store_true',
+                        help='Exercise exact DER fingerprints and authenticated accounting log identities')
     parser.add_argument('--container', help='Reuse a disposable test container with dependencies installed')
     args = parser.parse_args()
     container = args.container or ('cloud8021x-vlan-' + uuid.uuid4().hex[:8])

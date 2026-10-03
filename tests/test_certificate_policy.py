@@ -10,10 +10,12 @@ import tempfile
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 import device_policy
+import radius_identity
 
 sys.modules['radiusd'] = types.SimpleNamespace(RLM_MODULE_REJECT=0, RLM_MODULE_UPDATED=8,
                                               L_ERR=3, radlog=lambda *args: None)
@@ -142,9 +144,28 @@ class CertificatePolicyTests(unittest.TestCase):
             self.assertEqual(module.authorize(request), 0)
             token = 'b' * 64
             (root / token).write_text(self.fingerprint)
-            request['request'] += (('Tmp-String-0', token),)
-            self.assertEqual(module.authorize(request)[0], 8)
-            self.assertEqual(module.authorize(request), 0)
+            request['request'] += (('Tmp-String-0', token), ('Tmp-String-1', 'nyc'),
+                                   ('Calling-Station-Id', 'AA-BB-CC-DD-EE-FF'),
+                                   ('Class', 'client-selected-binding'))
+            key = root / 'accounting-key'
+            key.write_bytes(b'A' * 64)
+            with patch.object(radius_identity, 'KEY_FILE', str(key)):
+                result = module.authorize(request)
+                self.assertEqual(result[0], 8)
+                self.assertIn('Class', dict(result[1]['reply']))
+                self.assertTrue(dict(result[1]['reply'])['Class'].startswith('c8021x.1.'))
+                logged = dict(radius_identity.enrich(dict(request, reply=result[1]['reply'],
+                                                        config=(('Tmp-String-1', 'nyc'),))))
+                self.assertEqual(logged['Tmp-String-2'], 'fleet:1')
+                self.assertEqual(logged['Tmp-String-3'], self.fingerprint)
+                self.assertEqual(logged['Tunnel-Private-Group-Id'], '200')
+                self.assertEqual(module.authorize(request), 0)
+                (root / token).write_text(self.fingerprint)
+                key.unlink()
+                self.assertEqual(module.authorize(request), 0)
+                config.write_text(json.dumps(dict(self.config, certificate_inventory=False,
+                                                  cache_file=str(cache))))
+                self.assertEqual(module.authorize(request)[0], 8)
 
 
 if __name__ == '__main__':

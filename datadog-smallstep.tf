@@ -646,16 +646,11 @@ resource "datadog_monitor" "radius_client_cert_expired" {
   name  = "EAP-TLS client certificate expired (device locked out)"
   type  = "log alert"
 
-  # cardinality over @serial, not count: a locked-out Mac retries continuously
-  # (one device produced 445 rejects over two days), so a raw count measures
-  # retry rate, not how many people are affected.
-  #
-  # Aggregating over an attribute requires @serial to be a declared log facet,
-  # and the Datadog provider cannot create facets — see the required-facets
-  # table in README.md. On a fresh deployment, declare it before trusting this
-  # monitor.
-  query   = "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"cardinality\", \"@serial\").last(\"1h\") > 5"
-  message = "{{value}} device(s) were rejected by RADIUS in the last hour for presenting an EXPIRED client certificate — they have no Wi-Fi (warning >0, critical >5). Identify them with `@reject_reason:\"*certificate has expired*\"` grouped by `@serial`, then re-push the Campus Wi-Fi ACME profile from fleet-gitops to force a fresh cert. If this fires in numbers, cross-check `radius_client_cert_expiring` — a wave means the renewal path is broken fleet-wide, not that one device drifted.${local.dd_notify}"
+  # Expired TLS certificates cannot establish a verified device identity. In
+  # inventory mode count rejection events instead of silently dropping devices
+  # without serials; this measures retries, not unique affected devices.
+  query   = try(var.radius_vlan_policy.certificate_inventory, false) ? "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"count\").last(\"1h\") > 5" : "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"cardinality\", \"@serial\").last(\"1h\") > 5"
+  message = try(var.radius_vlan_policy.certificate_inventory, false) ? "{{value}} RADIUS rejection event(s) in the last hour presented an EXPIRED client certificate (warning >0, critical >5). This counts retries, not unique devices: expired TLS cannot establish a verified device identity. Inspect the matching logs by calling_station, src_ip and site_name; raw_identity and cert_cn are unverified diagnostic claims. Correlate with Fleet certificate inventory and re-deliver the affected Wi-Fi profile. Cross-check radius_client_cert_expiring for a renewal wave.${local.dd_notify}" : "{{value}} device(s) were rejected by RADIUS in the last hour for presenting an EXPIRED client certificate — they have no Wi-Fi (warning >0, critical >5). Identify them with `@reject_reason:\"*certificate has expired*\"` grouped by `@serial`, then re-push the Campus Wi-Fi ACME profile from fleet-gitops to force a fresh cert. If this fires in numbers, cross-check `radius_client_cert_expiring` — a wave means the renewal path is broken fleet-wide, not that one device drifted.${local.dd_notify}"
 
   monitor_thresholds {
     critical = 5

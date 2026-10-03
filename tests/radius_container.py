@@ -13,23 +13,47 @@ import time
 RADDB = Path('/etc/freeradius/3.0')
 CACHE = RADDB / 'device-policy-cache.json'
 CERTIFICATE_MODE = '--certificate-inventory' in sys.argv
+AUTH_LOG = Path('/var/log/freeradius/radius-auth.json')
+ACCT_LOG = Path('/var/log/freeradius/radius-acct.json')
+DEVICES = {
+    '42': {'serial': '', 'device_owner': 'byod"owner\n@example.com',
+           'device_name': 'Personal "Mac"\nLaptop', 'device_model': 'MacBook Air'},
+    '1': {'serial': 'STAFFSERIAL', 'device_owner': 'staff@example.com',
+          'device_name': 'Staff Mac', 'device_model': 'MacBook Pro'},
+}
 
 
 def configure():
     source = Path('/tmp/startup.sh').read_text()
     parts = ['#!/bin/bash', 'set -euo pipefail', 'RADDB=/etc/freeradius/3.0',
-             'HAS_JAMF_LOOKUP=false', 'HAS_FLEET_LOOKUP=false', 'HAS_UNIFI_LOOKUP=false',
+             'HAS_JAMF_LOOKUP=false', 'HAS_FLEET_LOOKUP=true', 'HAS_UNIFI_LOOKUP=false',
              'HAS_MERAKI_LOOKUP=false', 'REWRITE_USERNAME=false', 'VLAN_POLICY_ENABLED=true',
+             'REWRITE_USERNAME_SEPARATOR=" - "',
+             'CERTIFICATE_INVENTORY=' + str(CERTIFICATE_MODE).lower(),
              'TLS_SESSION_CACHE=true', 'TLS_SESSION_CACHE_LIFETIME=24', 'TLS_MAX_VERSION=1.2']
     start = source.index('# Shared identity/policy code')
     end = source.index('\n', source.index('\nchmod 644', start) + 1)
     parts.append(source[start:end])
     start = source.index('echo "=== Configuring EAP-TLS')
     parts.append(source[start:source.index('# 6. Configure RADIUS', start)])
+    # Install the real generated lookup module, without provisioning Fleet API
+    # credentials, cache refresh jobs, or network access to a Fleet instance.
+    start = source.rfind('if [ ', 0, source.index('echo "=== Configuring Python lookup module'))
+    parts.append(source[start:source.index('# 11. Configure FreeRADIUS JSON auth logging', start)])
     start = source.index('echo "=== Configuring JSON auth logging')
     parts.append(source[start:source.index('# 12. Configure status', start)])
     subprocess.run(['bash'], input='\n'.join(parts), text=True, check=True)
+    for log in (AUTH_LOG, ACCT_LOG):
+        log.write_text('')
+    # Disposable public fixture key. Both auth and accounting use this key.
+    key = Path('/run/radius-accounting-key')
+    key.write_text('0123456789abcdef' * 4)
+    subprocess.run(['chown', 'freerad:freerad', str(key)], check=True)
+    key.chmod(0o600)
     # Distinct authenticated clients simulate offices behind distinct NAT IPs.
+    # Rebuild only this disposable fixture's clients so --container is repeatable.
+    (RADDB / 'clients.conf').write_text(
+        'client localhost {\n ipaddr = 127.0.0.1\n secret = testing123\n shortname = localhost\n}\n')
     with (RADDB / 'clients.conf').open('a') as stream:
         for suffix, office in [(2, 'nyc'), (3, 'atl'), (4, 'unknown-office')]:
             stream.write(f'\nclient office{suffix} {{\n ipaddr = 127.0.0.{suffix}\n'
@@ -45,7 +69,7 @@ def configure():
                                              'name = "eap-tls"\n            persist_dir = /tmp/tlscache'))
     else:
         assert 'enable = no' in eap.read_text(), 'Fingerprint mode must disable session resumption'
-    subprocess.run(['bash'], input=r'''
+    subprocess.run(['bash'], input=('CERTIFICATE_MODE=' + str(CERTIFICATE_MODE).lower() + '\n') + r'''
 set -euo pipefail
 mkdir -p /tmp/tlscache
 chown freerad:freerad /tmp/tlscache
@@ -58,6 +82,9 @@ openssl genpkey -genparam -algorithm DH -pkeyopt group:ffdhe2048 -out dh.pem 2>/
 for identity in personal-enrollment-id STAFFSERIAL unknown forged-staff; do
     subject="$identity"
     if [ "$identity" = forged-staff ]; then subject=STAFFSERIAL; fi
+    if [ "$CERTIFICATE_MODE" = true ] && { [ "$identity" = personal-enrollment-id ] || [ "$identity" = STAFFSERIAL ]; }; then
+        subject=cloud-8021x-inventory
+    fi
     openssl req -newkey rsa:2048 -nodes -keyout "$identity.key" -out "$identity.csr" -subj "/CN=$subject" 2>/dev/null
     printf 'extendedKeyUsage=clientAuth\n' > client.ext
     openssl x509 -req -in "$identity.csr" -CA okta-ca.pem -CAkey ca.key -CAcreateserial -out "$identity.pem" -days 1 -extfile client.ext 2>/dev/null
@@ -77,6 +104,7 @@ def inventory(groups=None, enrolled=True, age=0, certificate_age=0, ambiguous=Fa
         'STAFFSERIAL': {'device_id': '1', 'groups': ['staff'], 'enrolled': True}}}
     if CERTIFICATE_MODE:
         data['version'] = 2
+        data['devices'] = DEVICES
         data['certificates'] = {}
         for identity, device in data['identities'].items():
             der = ssl.PEM_cert_to_DER_cert((RADDB / 'certs' / (identity + '.pem')).read_text())
@@ -105,6 +133,78 @@ def vlan_attributes(packet):
     return attrs
 
 
+def packet_attributes(packet):
+    """Keep octet-valued Class unchanged when relaying it into accounting."""
+    attrs = {}
+    pos = 20
+    while pos < len(packet):
+        kind, size = packet[pos:pos + 2]
+        assert size >= 2 and pos + size <= len(packet), 'Malformed RADIUS attribute'
+        attrs.setdefault(kind, []).append(packet[pos + 2:pos + size])
+        pos += size
+    return attrs
+
+
+def records(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def identity_log(record, device_id, certificate, vlan):
+    """These assertions exercise emitted JSON, including quote/newline escaping."""
+    der = ssl.PEM_cert_to_DER_cert((RADDB / 'certs' / (certificate + '.pem')).read_text())
+    expected = dict(DEVICES[device_id], device_id=device_id,
+                    certificate_fingerprint=hashlib.sha256(der).hexdigest(), vlan_id=str(vlan),
+                    identity_verified=True, raw_identity='STAFFSERIAL')
+    for key, value in expected.items():
+        assert record.get(key) == value, (key, record, value)
+
+
+def unattributed_log(record):
+    assert record.get('identity_verified') is False, record
+    for key in ('device_id', 'serial', 'device_owner', 'device_name', 'device_model'):
+        assert record.get(key) == '', (key, record)
+
+
+def accounting(name, binding, status=1, source_ip='127.0.0.1', station=None,
+               expected_device='42', expected_vlan=200):
+    """Send real Accounting-Requests with unchanged or deliberately bad Class."""
+    def attr(kind, value):
+        if isinstance(value, str):
+            value = value.encode()
+        elif isinstance(value, int):
+            value = struct.pack('!I', value)
+        return bytes((kind, len(value) + 2)) + value
+
+    offset = len(records(ACCT_LOG))
+    attrs = b''.join([attr(1, 'STAFFSERIAL'), attr(4, socket.inet_aton('192.0.2.1')),
+                      attr(31, station or binding['station']), attr(40, status),
+                      attr(44, 'wire-' + name), attr(46, 30), attr(42, 1234), attr(43, 5678)])
+    for value in binding.get('classes', []):
+        attrs += attr(25, value)
+    header = struct.pack('!BBH', 4, status, 20 + len(attrs))
+    secret = b'testing123'
+    authenticator = hashlib.md5(header + bytes(16) + attrs + secret).digest()
+    request = header + authenticator + attrs
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+        client.bind((source_ip, 0))
+        client.settimeout(5)
+        client.sendto(request, ('127.0.0.1', 1813))
+        response, _ = client.recvfrom(65535)
+    assert response[:2] == bytes((5, status)), (name, response)
+    assert response[4:20] == hashlib.md5(response[:4] + authenticator + response[20:] + secret).digest()
+    logged = records(ACCT_LOG)[offset:]
+    assert len(logged) == 1, (name, logged)
+    event = {1: 'Acct-Start', 2: 'Acct-Stop', 3: 'Acct-Update'}[status]
+    assert logged[0]['event'] == event, (name, logged)
+    assert logged[0]['src_ip'] == source_ip, (name, logged)
+    if expected_device:
+        certificate = 'personal-enrollment-id' if expected_device == '42' else 'STAFFSERIAL'
+        identity_log(logged[0], expected_device, certificate, expected_vlan)
+    else:
+        unattributed_log(logged[0])
+    print('PASS: accounting', name, event, flush=True)
+
+
 def authenticate(name, certificate='personal-enrollment-id', expected=(200,), after_accept=None,
                  source_ip='127.0.0.1', nas_identifier=None):
     """UDP relay records actual server replies and updates inventory BEFORE reauth."""
@@ -122,13 +222,15 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
 '''
     Path('/tmp/eap.conf').write_text(config)
     stop = threading.Event()
-    replies, errors = [], []
+    replies, errors, bindings = [], [], []
+    log_offset = len(records(AUTH_LOG)) if CERTIFICATE_MODE else 0
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as relay:
         relay.bind((source_ip, 18120))
         relay.settimeout(0.1)
 
         def forward():
             client = None
+            station = None
             try:
                 while not stop.is_set():
                     try:
@@ -138,11 +240,16 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
                     if address[1] == 1812:
                         if packet[0] in (2, 3):
                             replies.append((packet[0], vlan_attributes(packet)))
+                            if packet[0] == 2:
+                                bindings.append({'classes': packet_attributes(packet).get(25, []), 'station': station})
                             if packet[0] == 2 and after_accept:
                                 after_accept()
                         relay.sendto(packet, client)
                     else:
                         client = address
+                        stations = packet_attributes(packet).get(31, [])
+                        if stations:
+                            station = stations[0]
                         relay.sendto(packet, ('127.0.0.1', 1812))
             except Exception as exc:
                 errors.append(exc)
@@ -162,12 +269,27 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
     assert not errors, errors
     assert replies == want, (name, replies, want, result.stdout[-2000:])
     assert (result.returncode == 0) == (expected[-1] is not None), (name, result.returncode)
+    if CERTIFICATE_MODE:
+        logged = records(AUTH_LOG)[log_offset:]
+        assert len(logged) == len(expected), (name, logged, expected)
+        for record, vlan in zip(logged, expected):
+            assert record['event'] == ('Access-Reject' if vlan is None else 'Access-Accept'), (name, record)
+            assert record['src_ip'] == source_ip, (name, record)
+            if vlan is not None:
+                identity_log(record, '1' if certificate == 'STAFFSERIAL' else '42', certificate, vlan)
+                assert record['cert_cn'] == 'cloud-8021x-inventory', (name, record)
+            elif certificate in ('unknown', 'forged-staff'):
+                unattributed_log(record)
+        for binding in bindings:
+            assert len(binding['classes']) == 1 and binding['classes'][0], (name, binding)
+            assert binding['station'], 'EAP test must capture Calling-Station-Id for accounting binding'
     if len(expected) > 1:
         if CERTIFICATE_MODE:
             assert 'resumed=1' not in result.stdout, 'Fingerprint mode unexpectedly resumed TLS'
         else:
             assert 'resumed=1' in result.stdout, 'Test did not exercise real TLS resumption'
     print('PASS:', name, replies, flush=True)
+    return bindings[-1] if bindings else None
 
 
 def main():
@@ -184,8 +306,18 @@ def main():
             else:
                 raise AssertionError('RADIUS did not start')
             inventory()
-            authenticate('byod-spoofed-username')
-            authenticate('staff', certificate='STAFFSERIAL', expected=(100,))
+            byod = authenticate('byod-spoofed-username')
+            staff = authenticate('staff', certificate='STAFFSERIAL', expected=(100,))
+            if CERTIFICATE_MODE:
+                for status in (1, 3, 2):
+                    accounting('byod-' + str(status), byod, status=status)
+                accounting('staff', staff, expected_device='1', expected_vlan=100)
+                accounting('missing-class', dict(byod, classes=[]), expected_device=None)
+                token = byod['classes'][0]
+                forged = token[:-8] + (b'A' if token[-8:-7] != b'A' else b'B') + token[-7:]
+                accounting('forged-class', dict(byod, classes=[forged]), expected_device=None)
+                accounting('cross-station-class', byod, station='de-ad-be-ef-00-01', expected_device=None)
+                accounting('cross-office-class', byod, source_ip='127.0.0.2', expected_device=None)
             inventory()
             authenticate('reauth-changed-group' if CERTIFICATE_MODE else 'resume-changed-group', expected=(200, 100), after_accept=lambda: inventory(['staff']))
             inventory()

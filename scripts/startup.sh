@@ -28,6 +28,7 @@ TLS_SESSION_CACHE="${tls_session_cache}"
 TLS_SESSION_CACHE_LIFETIME="${tls_session_cache_lifetime}"
 TLS_MAX_VERSION="${tls_max_version}"
 VLAN_POLICY_ENABLED="${vlan_policy_enabled}"
+CERTIFICATE_INVENTORY="${certificate_inventory_enabled}"
 DEVICE_CACHE_SCHEDULE="*/30"
 if [ "$VLAN_POLICY_ENABLED" = "true" ] || [ "$FLEET_CERTIFICATE_INVENTORY" = "true" ]; then
     DEVICE_CACHE_SCHEDULE="*/5"
@@ -108,11 +109,13 @@ RADDB="/etc/freeradius/3.0"
 mkdir -p "$RADDB/mods-config/python3"
 printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/device_policy.py"
 printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
+printf '%s' '${radius_identity_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_identity.py"
+printf '%s' '${radius_log_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_log.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
 printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
 printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
-chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan}.py "$RADDB/vlan-policy.json"
+chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log}.py "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
 chmod 644 "$RADDB/mods-config/python3/windows_certificates.ps1"
 
@@ -148,6 +151,51 @@ fetch_secret() {
     gcloud secrets versions access latest \
         --secret="$1" --project="$PROJECT_ID" 2>/dev/null
 }
+
+%{ if certificate_inventory_enabled ~}
+# Restore the shared tmpfs key BEFORE FreeRADIUS on every boot, including when
+# the unchanged-script fast path skips bootstrap. Never embed its value in units.
+cat > /usr/local/bin/radius-accounting-key.sh << 'ACCOUNTKEYEOF'
+#!/bin/bash
+set -euo pipefail
+umask 077
+key_path=/run/radius-accounting-key
+temporary=$(mktemp /run/radius-accounting-key.XXXXXX)
+trap 'rm -f "$temporary"' EXIT
+gcloud secrets versions access latest --secret=radius-accounting-key --project="${project_id}" > "$temporary"
+[ "$(wc -c < "$temporary")" -ge 32 ] || { echo "Missing accounting identity key" >&2; exit 1; }
+chown freerad:freerad "$temporary"
+chmod 0600 "$temporary"
+mv -f "$temporary" "$key_path"
+ACCOUNTKEYEOF
+chmod 0700 /usr/local/bin/radius-accounting-key.sh
+cat > /etc/systemd/system/radius-accounting-key.service << 'ACCOUNTKEYUNITEOF'
+[Unit]
+Description=Restore the RADIUS accounting identity key
+Wants=network-online.target
+After=network-online.target
+Before=freeradius.service
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/radius-accounting-key.sh
+RemainAfterExit=yes
+ACCOUNTKEYUNITEOF
+mkdir -p /etc/systemd/system/freeradius.service.d
+cat > /etc/systemd/system/freeradius.service.d/accounting-key.conf << 'ACCOUNTKEYDEPEOF'
+[Unit]
+Requires=radius-accounting-key.service
+After=radius-accounting-key.service
+ACCOUNTKEYDEPEOF
+systemctl daemon-reload
+systemctl restart radius-accounting-key.service
+%{ else ~}
+systemctl stop radius-accounting-key.service 2>/dev/null || true
+rm -f /etc/systemd/system/freeradius.service.d/accounting-key.conf \
+    /etc/systemd/system/radius-accounting-key.service \
+    /usr/local/bin/radius-accounting-key.sh /run/radius-accounting-key
+systemctl daemon-reload
+%{ endif ~}
 
 CERTS_FROM_SM=false
 
@@ -1384,19 +1432,17 @@ emit_zero() {
 [ -s "$LOG" ] || emit_zero
 now=$(date +%s)
 
-# One line per distinct (serial, cert_expiration). cert_expiration is ASN.1
-# UTCTime: YYMMDDHHMMSSZ. Restricted to the Smallstep issuer so Okta-issued
-# certs (still trusted under radius_trust_mode=both) don't pollute the gauges.
+# Stable device IDs distinguish serial-free devices; legacy logs use serials.
+# Parse JSON so escaped metadata cannot corrupt the metrics input.
 pairs=$(tail -n "$SCAN_LINES" "$LOG" \
-  | grep -F "$ISSUER_MATCH" \
-  | sed -n 's/.*"serial":"\([^"]*\)".*"cert_expiration":"\([0-9]\{12\}\)Z".*/\1 \2/p' \
+  | python3 /etc/freeradius/3.0/mods-config/python3/radius_log.py "$ISSUER_MATCH" \
   | sort -u)
 [ -n "$pairs" ] || emit_zero
 
 declare -A epoch_of
 declare -A best
 
-# Keep the LATEST cert per serial: a device that renewed mid-window appears
+# Keep the LATEST cert per stable device key: a device that renewed mid-window appears
 # with both its old and new cert, and only the new one reflects its real state.
 while read -r serial exp; do
   [ -n "$serial" ] || continue
@@ -2388,7 +2434,7 @@ fi
 #      lookups in post-auth and accounting. Sets reply attributes directly —
 #      no exec output parsing.
 # ---------------------------------------------------------------------------
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     echo "=== Configuring Python lookup module ==="
 
     mkdir -p "$RADDB/mods-config/python3"
@@ -2400,6 +2446,7 @@ if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HA
     cat > "$RADDB/mods-config/python3/radius_lookups_config.py" << RLCFGEOF
 # Auto-generated by startup.sh — do not edit.
 REWRITE_USERNAME_SEPARATOR = "$REWRITE_USERNAME_SEPARATOR"
+CERTIFICATE_INVENTORY = "$CERTIFICATE_INVENTORY" == "true"
 RLCFGEOF
     chown freerad:freerad "$RADDB/mods-config/python3/radius_lookups_config.py"
 
@@ -2416,9 +2463,10 @@ import subprocess
 # accounting serial-recovery path matches whatever separator post-auth applied.
 # Falls back to the historical default if the config file is absent.
 try:
-    from radius_lookups_config import REWRITE_USERNAME_SEPARATOR
+    from radius_lookups_config import REWRITE_USERNAME_SEPARATOR, CERTIFICATE_INVENTORY
 except Exception:
     REWRITE_USERNAME_SEPARATOR = " - "
+    CERTIFICATE_INVENTORY = False
 
 # Device-owner enrichment source. Jamf and Fleet are mutually-exclusive MDM
 # back-ends that write the SAME serial-keyed schema
@@ -2714,30 +2762,34 @@ def post_auth(p):
 
         reply_attrs = []
 
-        # Device-owner lookup — read from local cache (instant, no API call).
-        # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
-        # bare serial the MDM cache is keyed on.
-        serial = _serial_from_username(_get_attr(p, "TLS-Client-Cert-Common-Name") or user_name)
-        if serial:
-            # Expose the NORMALIZED bare serial to the JSON logger via
-            # reply:Login-LAT-Service (an unused STRING-typed attr, same family
-            # as Login-LAT-Node/-Port we already use). The accept log's "serial"
-            # field reads this instead of the raw User-Name, so it's a clean
-            # serial (FRAGAACPA74412000D) across macOS and Windows instead of
-            # "host/<serial> Campus WiFi". String-typed (not octets like Class)
-            # so linelog renders it as plain text, not hex.
-            reply_attrs.append(("Login-LAT-Service", serial))
-            try:
-                dev = _get_cached_device(serial)
-                if dev:
-                    if dev.get("device_name"):
-                        reply_attrs.append(("Filter-Id", dev["device_name"]))
-                    if dev.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
-                    if dev.get("email"):
-                        reply_attrs.append(("Reply-Message", dev["email"]))
-            except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
+        if CERTIFICATE_INVENTORY:
+            from radius_identity import enrich
+            reply_attrs.extend(enrich(p, accounting=False))
+        else:
+            # Device-owner lookup — read from local cache (instant, no API call).
+            # Normalize the EAP identity (host/<serial> Campus WiFi, etc.) to the
+            # bare serial the MDM cache is keyed on.
+            serial = _serial_from_username(_get_attr(p, "TLS-Client-Cert-Common-Name") or user_name)
+            if serial:
+                # Expose the NORMALIZED bare serial to the JSON logger via
+                # reply:Login-LAT-Service (an unused STRING-typed attr, same family
+                # as Login-LAT-Node/-Port we already use). The accept log's "serial"
+                # field reads this instead of the raw User-Name, so it's a clean
+                # serial (FRAGAACPA74412000D) across macOS and Windows instead of
+                # "host/<serial> Campus WiFi". String-typed (not octets like Class)
+                # so linelog renders it as plain text, not hex.
+                reply_attrs.append(("Login-LAT-Service", serial))
+                try:
+                    dev = _get_cached_device(serial)
+                    if dev:
+                        if dev.get("device_name"):
+                            reply_attrs.append(("Filter-Id", dev["device_name"]))
+                        if dev.get("device_model"):
+                            reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                        if dev.get("email"):
+                            reply_attrs.append(("Reply-Message", dev["email"]))
+                except Exception as e:
+                    radiusd.radlog(radiusd.L_ERR, f"Device cache read failed: {e}")
 
         # Extract SSID from Called-Station-Id ("<BSSID>:<SSID>"). Strips the
         # leading MAC regardless of dash/colon separators (a naive split(":")
@@ -2760,6 +2812,11 @@ def post_auth(p):
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"AP lookup failed: {e}")
 
+        if CERTIFICATE_INVENTORY:
+            from radius_log import record
+            # rlm_python3 parses string escapes once before linelog receives JSON.
+            reply_attrs.append(("Tmp-String-4", record(p, reply_attrs, accounting=False).replace(chr(92), chr(92) * 2)))
+
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
         return radiusd.RLM_MODULE_OK
@@ -2777,30 +2834,34 @@ def accounting(p):
 
         reply_attrs = []
 
-        # Extract serial from User-Name — may be "email - serial" if the AP
-        # cached the rewritten identity from post-auth, or just the EAP cert CN.
-        serial = user_name.strip()
-        if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
-            serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
-        # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
-        # the post-rewrite serial half) to the bare serial the cache is keyed on.
-        serial = _serial_from_username(serial)
+        if CERTIFICATE_INVENTORY:
+            from radius_identity import enrich
+            reply_attrs.extend(enrich(p, accounting=True))
+        else:
+            # Extract serial from User-Name — may be "email - serial" if the AP
+            # cached the rewritten identity from post-auth, or just the EAP cert CN.
+            serial = user_name.strip()
+            if REWRITE_USERNAME_SEPARATOR and REWRITE_USERNAME_SEPARATOR in serial:
+                serial = serial.rsplit(REWRITE_USERNAME_SEPARATOR, 1)[1]
+            # Normalize whatever remains (host/<serial> Campus WiFi, bare serial, or
+            # the post-rewrite serial half) to the bare serial the cache is keyed on.
+            serial = _serial_from_username(serial)
 
-        if serial:
-            # Mirror post_auth: surface the normalized bare serial via
-            # reply:Login-LAT-Service for consistent logging on accounting too.
-            reply_attrs.append(("Login-LAT-Service", serial))
-            try:
-                dev = _get_cached_device(serial)
-                if dev:
-                    if dev.get("device_name"):
-                        reply_attrs.append(("Filter-Id", dev["device_name"]))
-                    if dev.get("device_model"):
-                        reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
-                    if dev.get("email"):
-                        reply_attrs.append(("Reply-Message", dev["email"]))
-            except Exception as e:
-                radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
+            if serial:
+                # Mirror post_auth: surface the normalized bare serial via
+                # reply:Login-LAT-Service for consistent logging on accounting too.
+                reply_attrs.append(("Login-LAT-Service", serial))
+                try:
+                    dev = _get_cached_device(serial)
+                    if dev:
+                        if dev.get("device_name"):
+                            reply_attrs.append(("Filter-Id", dev["device_name"]))
+                        if dev.get("device_model"):
+                            reply_attrs.append(("Login-LAT-Node", dev["device_model"]))
+                        if dev.get("email"):
+                            reply_attrs.append(("Reply-Message", dev["email"]))
+                except Exception as e:
+                    radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
 
         # AP lookup (UniFi or Meraki, by Called-Station-Id BSSID)
         if called_station:
@@ -2813,6 +2874,11 @@ def accounting(p):
                         reply_attrs.append(("Connect-Info", ap["site_name"]))
             except Exception as e:
                 radiusd.radlog(radiusd.L_ERR, f"AP lookup in accounting failed: {e}")
+
+        if CERTIFICATE_INVENTORY:
+            from radius_log import record
+            # rlm_python3 parses string escapes once before linelog receives JSON.
+            reply_attrs.append(("Tmp-String-4", record(p, reply_attrs, accounting=True).replace(chr(92), chr(92) * 2)))
 
         if reply_attrs:
             return radiusd.RLM_MODULE_UPDATED, {"reply": tuple(reply_attrs)}
@@ -2832,6 +2898,13 @@ python3 radius_lookups {
     python_path = /etc/freeradius/3.0/mods-config/python3
     module = radius_lookups
     pass_all_vps_dict = yes
+
+    # One interpreter handles policy and enrichment. Debian's Python 3.11
+    # crashes when separate rlm_python3 instances initialize these modules.
+%{ if vlan_policy_enabled ~}
+    mod_authorize = radius_vlan
+    func_authorize = authorize
+%{ endif ~}
 
     mod_instantiate = $${.module}
     func_instantiate = instantiate
@@ -2867,9 +2940,21 @@ linelog json_log {
     reference = "messages.%%{%%{reply:Packet-Type}:-unknown}"
 
     messages {
+%{ if certificate_inventory_enabled ~}
+        Access-Accept = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Access-Accept = "{\"timestamp\":\"%S\",\"event\":\"Access-Accept\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Access-Reject = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Access-Reject = "{\"timestamp\":\"%S\",\"event\":\"Access-Reject\",\"serial\":\"%%{%%{reply:Login-LAT-Service}:-%%{User-Name}}\",\"raw_identity\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"nas_port\":\"%%{NAS-Port}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"ssid\":\"%%{reply:Login-LAT-Port}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"vlan_id\":\"%%{reply:Tunnel-Private-Group-Id}\",\"cert_cn\":\"%%{TLS-Client-Cert-Common-Name}\",\"cert_issuer\":\"%%{TLS-Client-Cert-Issuer}\",\"cert_expiration\":\"%%{TLS-Client-Cert-Expiration}\",\"reject_reason\":\"%%{Module-Failure-Message}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        unknown = "%%{reply:Tmp-String-4}"
+%{ else ~}
         unknown = "{\"timestamp\":\"%S\",\"event\":\"unknown\",\"username\":\"%%{User-Name}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\"}"
+%{ endif ~}
     }
 }
 JSONLOGEOF
@@ -2890,9 +2975,21 @@ linelog acct_log {
     reference = "messages.%%{Acct-Status-Type}"
 
     messages {
+%{ if certificate_inventory_enabled ~}
+        Start = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Start = "{\"timestamp\":\"%S\",\"event\":\"Acct-Start\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Stop = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Stop = "{\"timestamp\":\"%S\",\"event\":\"Acct-Stop\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets},\"terminate_cause\":\"%%{%%{Acct-Terminate-Cause}:-Unknown}\"}"
+%{ endif ~}
+%{ if certificate_inventory_enabled ~}
+        Interim-Update = "%%{reply:Tmp-String-4}"
+%{ else ~}
         Interim-Update = "{\"timestamp\":\"%S\",\"event\":\"Acct-Update\",\"username\":\"%%{User-Name}\",\"device_owner\":\"%%{reply:Reply-Message}\",\"device_name\":\"%%{reply:Filter-Id}\",\"device_model\":\"%%{reply:Login-LAT-Node}\",\"src_ip\":\"%%{Packet-Src-IP-Address}\",\"nas_ip\":\"%%{NAS-IP-Address}\",\"calling_station\":\"%%{Calling-Station-Id}\",\"called_station\":\"%%{Called-Station-Id}\",\"site_name\":\"%%{reply:Connect-Info}\",\"ap_name\":\"%%{reply:Callback-Id}\",\"session_id\":\"%%{Acct-Session-Id}\",\"multi_session_id\":\"%%{Acct-Multi-Session-Id}\",\"session_time\":%%{Acct-Session-Time},\"input_bytes\":%%{Acct-Input-Octets},\"output_bytes\":%%{Acct-Output-Octets}\"}"
+%{ endif ~}
     }
 }
 ACCTLOGEOF
@@ -2911,7 +3008,7 @@ echo "=== Configuring default virtual server ==="
 
 # Build post-auth section — single Python module handles Jamf/Fleet + UniFi + Meraki
 POSTAUTH_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     POSTAUTH_MODULES="radius_lookups
         "
 fi
@@ -2923,22 +3020,14 @@ fi
 if [ "$REWRITE_USERNAME" = "true" ]; then
     POSTAUTH_MODULES="$${POSTAUTH_MODULES}if (&reply:Reply-Message) {
             update reply {
-                User-Name := \"%%{reply:Reply-Message}$${REWRITE_USERNAME_SEPARATOR}%%{User-Name}\"
+                User-Name := \"%%{reply:Reply-Message}$${REWRITE_USERNAME_SEPARATOR}%%{%%{reply:Tmp-String-2}:-%%{User-Name}}\"
             }
         }
         "
 fi
 if [ "$VLAN_POLICY_ENABLED" = "true" ]; then
-    cat > "$RADDB/mods-available/radius_vlan" << 'VLANMODULEEOF'
-python3 radius_vlan {
-    python_path = /etc/freeradius/3.0/mods-config/python3
-    module = radius_vlan
-    pass_all_vps_dict = yes
-    mod_authorize = $${.module}
-    func_authorize = authorize
-}
-VLANMODULEEOF
-    ln -sf "$RADDB/mods-available/radius_vlan" "$RADDB/mods-enabled/radius_vlan"
+    # Policy and logging share the radius_lookups Python instance.
+    rm -f "$RADDB/mods-enabled/radius_vlan"
     cat > "$RADDB/sites-available/check-device-vlan" << 'VLANSITEEOF'
 server check-device-vlan {
     authorize {
@@ -2954,9 +3043,11 @@ server check-device-vlan {
         update request {
             Tmp-String-0 !* ANY
             Tmp-String-0 := &outer.session-state:Tmp-String-0
+            Calling-Station-Id !* ANY
+            Calling-Station-Id := &outer.request:Calling-Station-Id
         }
 %{ endif ~}
-        radius_vlan {
+        radius_lookups {
             reject = 1
             fail = 1
         }
@@ -2983,14 +3074,14 @@ POSTAUTH_MODULES="$${POSTAUTH_MODULES}json_log"
 # (useful for "who got rejected"). When no lookup source is configured this is
 # empty and the serial field falls back to the raw User-Name.
 POSTAUTH_REJECT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     POSTAUTH_REJECT_MODULES="radius_lookups
             "
 fi
 
 # Build accounting section — enrichment + SQL + JSON log
 ACCT_MODULES=""
-if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
+if [ "$HAS_JAMF_LOOKUP" = "true" ] || [ "$HAS_FLEET_LOOKUP" = "true" ] || [ "$HAS_UNIFI_LOOKUP" = "true" ] || [ "$HAS_MERAKI_LOOKUP" = "true" ] || [ "$CERTIFICATE_INVENTORY" = "true" ] || [ "$VLAN_POLICY_ENABLED" = "true" ]; then
     ACCT_MODULES="radius_lookups
         "
 fi
@@ -3015,6 +3106,7 @@ server default {
         filter_username
         update control {
             Tmp-String-1 := "%%{client:shortname}"
+            Tmp-String-6 := "%%{Packet-Src-IP-Address}"
         }
 %{ if certificate_inventory_enabled ~}
         if (!&session-state:Tmp-String-0) {
@@ -3033,6 +3125,10 @@ server default {
     }
 
     preacct {
+        update control {
+            Tmp-String-1 := "%%{client:shortname}"
+            Tmp-String-6 := "%%{Packet-Src-IP-Address}"
+        }
         acct_unique
     }
 
@@ -3041,8 +3137,14 @@ server default {
     }
 
     post-auth {
+        update control {
+            Tmp-String-5 := "Access-Accept"
+        }
         $POSTAUTH_MODULES
         Post-Auth-Type REJECT {
+            update control {
+                Tmp-String-5 := "Access-Reject"
+            }
             $POSTAUTH_REJECT_MODULES
             json_log
             # A policy rejection can follow successful TLS authentication.

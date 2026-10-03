@@ -339,7 +339,10 @@
               "columns": [
                 "@timestamp",
                 "@event",
+                "@device_id",
                 "@serial",
+                "@certificate_fingerprint",
+                "@vlan_id",
                 "@device_owner",
                 "@device_name",
                 "@ssid",

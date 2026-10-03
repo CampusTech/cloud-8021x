@@ -28,8 +28,22 @@ def normalize_identity(value):
 def snapshot(devices, now):
     identities = {}
     certificates = {}
+    metadata_by_device = {}
     certificate_mode = False
     for device in devices:
+        if 'metadata' in device:
+            metadata = device['metadata']
+            keys = {'serial', 'device_name', 'device_model', 'device_owner'}
+            if (not isinstance(metadata, dict) or set(metadata) != keys
+                    or any(not isinstance(value, str) or len(value) > 1024
+                           for value in metadata.values())):
+                metadata = None
+            device_id = device['device_id']
+            if device_id in metadata_by_device and metadata_by_device[device_id] != metadata:
+                # Ambiguous display metadata must never select one device's owner.
+                metadata_by_device[device_id] = None
+            else:
+                metadata_by_device[device_id] = metadata
         for alias in device['identities']:
             alias = normalize_identity(alias)
             if not alias:
@@ -53,6 +67,8 @@ def snapshot(devices, now):
     result = {'version': 2 if certificate_mode else 1, 'updated_at': now, 'identities': identities}
     if certificate_mode:
         result['certificates'] = certificates
+    if metadata_by_device:
+        result['devices'] = metadata_by_device
     return result
 
 

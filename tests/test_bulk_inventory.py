@@ -43,6 +43,8 @@ class BulkInventoryTests(unittest.TestCase):
                 '/var/lib/cloud-8021x', str(base)).replace('/etc/freeradius/3.0/vlan-policy.json', str(base / 'config.json'))
             hosts = [{'id': i, 'hardware_serial': '', 'uuid': 'enrollment-' + str(i),
                       'team_id': 4, 'platform': 'ios', 'mdm': {'enrollment_status': 'On (manual)'}} for i in range(100)]
+            hosts[0].update({'display_name': 'Personal phone', 'hardware_model': 'iPhone',
+                             'device_mapping': [{'email': 'owner@example.com'}]})
 
             def respond(req, timeout):
                 self.assertEqual(req.get_header('Authorization'), 'Bearer test-token')
@@ -67,6 +69,11 @@ class BulkInventoryTests(unittest.TestCase):
                     self.assertEqual(data['identities']['enrollment-0'],
                                      {'device_id': 'fleet:0', 'groups': ['fleet:4'], 'enrolled': True})
                     self.assertEqual(len(data['identities']), 100)
+                    self.assertEqual(data['devices']['fleet:0'], {
+                        'serial': '', 'device_name': 'Personal phone',
+                        'device_model': 'iPhone', 'device_owner': 'owner@example.com'})
+                    self.assertEqual(data['devices']['fleet:1'], {
+                        'serial': '', 'device_name': '', 'device_model': '', 'device_owner': ''})
                     if certificates:
                         refresh.assert_called_once()
                         self.assertEqual(data['version'], 2)

@@ -225,7 +225,7 @@ locals {
                   type    = "log_stream"
                   indexes = ["*"]
                   query   = "service:radius-auth host:$host.value @site_name:$site.value"
-                  columns = ["@timestamp", "@event", "@serial", "@device_owner", "@device_name", "@ssid", "@site_name", "@ap_name"]
+                  columns = ["@timestamp", "@event", "@device_id", "@serial", "@certificate_fingerprint", "@vlan_id", "@device_owner", "@device_name", "@ssid", "@site_name", "@ap_name"]
                   sort = {
                     column = "@timestamp"
                     order  = "desc"

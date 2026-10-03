@@ -27,7 +27,7 @@ Self-hosted CA (when enable_smallstep_ca = true), co-located on the RADIUS VMs:
 - **Accounting**: FreeRADIUS native SQL module writes to local MariaDB (`radacct` table).
 - **Secrets**: All managed via GCP Secret Manager (RADIUS shared secrets, server + CA certs, Datadog API key, Fleet token). No secrets on disk at rest.
 - **Observability**: Datadog Agent for infrastructure metrics + log shipping to SIEM. Prometheus exporters for FreeRADIUS and step-ca metrics. Structured JSON auth/accounting logs via FreeRADIUS `linelog`, plus step-ca request logs (with real client IP via `X-Forwarded-For`).
-- **Log enrichment**: Optional MDM (Fleet **or** Jamf) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs, resolved by serial from a local cache (no API calls on the auth path).
+- **Log enrichment**: Optional MDM (Fleet **or** Jamf) and UniFi integrations add device owner, device name, model, AP name, and site name to both auth and accounting JSON logs, resolved from a local cache (no API calls on the auth path). Certificate inventory mode uses verified certificate bindings and stable device IDs, including serial-free BYOD; legacy mode uses serials.
 
 ## Client Certificate Issuance: Two Trust Modes
 
@@ -230,6 +230,14 @@ To obtain the Root CA from your Okta admin console ([source](https://andrewdoeri
 
 ### Fleet Device Lookup (Optional)
 
+With `radius_vlan_policy.certificate_inventory = true`, authentication logs resolve the exact authenticated certificate fingerprint to a stable `device_id` and Fleet's device name, model, and assigned owner. `serial` contains only an actual inventory serial and remains empty when unavailable. `raw_identity` and `cert_cn` are diagnostic claims, never owner lookup keys. Owner/name fields remain empty if Fleet has no corresponding metadata or its cache is stale.
+
+Accounting carries the verified device ID, certificate fingerprint, and original VLAN in a signed RADIUS `Class` value, bound to the configured office and client MAC. Both RADIUS nodes share a Secret Manager signing key, restored before FreeRADIUS on every boot. The NAS must supply `Calling-Station-Id` at authentication and echo `Class` in accounting. Missing, modified, wrong-office, wrong-client, or expired bindings are logged with `identity_verified: false` and empty device/owner fields. Bindings last 30 days; key rotation also invalidates existing bindings until devices reconnect. Confirm Class echo on a physical UniFi AP during rollout.
+
+Datadog's recent-auth table includes `device_id`, fingerprint, VLAN, and owner. Expiry gauges count stable device IDs so serial-free devices are included. An expired certificate rejected before authentication cannot establish a verified owner: the expired-certificate monitor counts rejection events in inventory mode, including repeated attempts, rather than unique devices.
+
+The following serial-based behavior applies to **legacy mode**:
+
 The Fleet-managed counterpart of the Jamf lookup below — use this if Fleet is your MDM. When EAP-TLS authenticates a device, the outer identity is the serial number (e.g. `H176YHQ9XV`). With `enable_fleet_lookup`, a background cache script bulk-fetches all Fleet hosts (`GET /api/v1/fleet/hosts?device_mapping=true`) and stores them locally, keyed by serial. FreeRADIUS reads from this cache (no API calls on the auth path) to resolve the serial to device details. This adds the following fields to both auth and accounting JSON logs:
 
 - `device_owner` — assigned user's email from Fleet (`device_mapping`/`end_users`)
@@ -361,7 +369,11 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | `@device_owner` | `@device_owner` | String | Top Device Owners |
 | `@device_model` | `@device_model` | String | Device Model Distribution |
 | `@reject_reason` | `@reject_reason` | String | Reject Reasons, expired client certificate monitor |
-| `@serial` | `@serial` | String | Expired client certificate monitor (device cardinality) |
+| `@serial` | `@serial` | String | Legacy expired client certificate monitor (device cardinality) |
+| `@device_id` | `@device_id` | String | Stable device identity, including serial-free BYOD |
+| `@certificate_fingerprint` | `@certificate_fingerprint` | String | Exact authenticated certificate |
+| `@vlan_id` | `@vlan_id` | String | Assigned VLAN |
+| `@identity_verified` | `@identity_verified` | Boolean | Verified attribution versus diagnostic claims |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |
 | `@session_time` | `@session_time` | Measure (seconds) | Avg Session Duration |
 | `@input_bytes` | `@input_bytes` | Measure (bytes) | Bandwidth widgets |
