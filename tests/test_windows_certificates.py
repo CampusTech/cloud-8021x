@@ -66,6 +66,27 @@ class WindowsCollectorTests(unittest.TestCase):
         self.assertEqual(observed['observed_at'], 1700000000)
         self.assertTrue(observed['trust_verified'])
 
+    def test_readiness_uses_verified_collection_when_list_omits_script_status(self):
+        # Fleet's list endpoint returns null; only host detail reports this flag.
+        self.hosts[0]['scripts_enabled'] = None
+        detail = {**self.hosts[0], 'scripts_enabled': True}
+
+        def api(method, path, body=None):
+            if method == 'GET' and path == '/api/v1/fleet/hosts/7':
+                return {'host': detail}
+            return self.api(method, path, body)
+
+        self.refresh(request=api)
+        report = fleet_certificates.readiness(self.hosts, {}, self.now)
+        self.assertEqual(report['hosts'][0]['reason'], 'no_certificate_observation')
+        self.results['exec-1'] = self.row()
+        observations = self.refresh(request=api)
+        self.assertTrue(fleet_certificates.readiness(self.hosts, observations, self.now)['ready'])
+
+        # Disabling scripts in authenticated detail still drops cached identity.
+        detail['scripts_enabled'] = False
+        self.assertEqual(self.refresh(request=api), {})
+
     def test_wrong_host_script_execution_output_or_time_never_authorizes(self):
         for changes in ({'host_id': 8}, {'execution_id': 'other'}, {'script_contents': 'forged'},
                         {'exit_code': 1}, {'exit_code': False}, {'output': '{truncated'},

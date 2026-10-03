@@ -292,7 +292,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(self.refresh(), {})
 
     def test_readiness_requires_enrollment_supported_platform_and_fresh_identity(self):
-        self.hosts += [{**self.hosts[0], 'id': 8, 'uuid': 'windows', 'platform': 'windows'},
+        self.hosts += [{**self.hosts[0], 'id': 8, 'uuid': 'windows', 'platform': 'windows',
+                       'scripts_enabled': False},
                        {**self.hosts[0], 'id': 9, 'uuid': 'missing'}]
         observations = {'host-A': {'fingerprints': ['a' * 64], 'observed_at': self.now, 'trust_verified': True,
                                     'expires_at': {'a' * 64: self.now + 1000}}}

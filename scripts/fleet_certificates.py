@@ -431,7 +431,9 @@ def readiness(hosts, observations, now=None, max_age=86400):
             reason = 'unsupported_platform'
         elif not _enrolled(host):
             reason = 'not_enrolled'
-        elif host.get('platform') == 'windows' and host.get('scripts_enabled') is not True:
+        # ListHosts can omit this flag (null). refresh() requires true from
+        # authenticated host detail before accepting any Windows observation.
+        elif host.get('platform') == 'windows' and host.get('scripts_enabled') is False:
             reason = 'fleet_scripts_unavailable'
         elif not observation:
             reason = 'no_certificate_observation'
