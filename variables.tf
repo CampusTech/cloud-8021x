@@ -361,7 +361,7 @@ variable "webhook_allow_label" {
 variable "webhook_release_version" {
   description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
   type        = string
-  default     = "2.0.0"
+  default     = "2.0.1"
 }
 
 variable "webhook_port" {

@@ -60,7 +60,7 @@ switches.
 
 ## Configuration and staging
 
-Ensure the **webhook-v2.0.0** release and checksum assets exist before applying
+Ensure the **webhook-v2.0.1** release and checksum assets exist before applying
 the `webhook_release_version` pin. The release workflow runs on relevant merges
 to main (or manual dispatch); wait for it to succeed. Merging alone does not
 apply Terraform or deliver profiles.

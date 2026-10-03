@@ -67,6 +67,10 @@ jobs:
             go build -ldflags="-s -w -X main.version=${VERSION}" -o acme-authz-webhook-linux-amd64 .
           sha256sum acme-authz-webhook-linux-amd64 > acme-authz-webhook-linux-amd64.sha256
 
+      - name: Scan release binary
+        if: steps.exists.outputs.exists == 'false'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary acme-authz-webhook-linux-amd64
+
       - name: Create release
         if: steps.exists.outputs.exists == 'false'
         env:

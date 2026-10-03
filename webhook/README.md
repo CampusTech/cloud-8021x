@@ -61,6 +61,12 @@ why the deployed service uses certificate authentication.
 
 ## Build & run
 
+Requires Go 1.27.1 or newer. The release workflow reads this minimum from
+`go.mod` and scans the compiled Linux binary with `govulncheck` before publishing.
+PR and merge-queue checks scan imported packages in both Go modules, including
+test dependencies. Updating source does not patch an already deployed binary;
+deploy the new `webhook_release_version` after its release assets are available.
+
 ```bash
 go test ./...
 go build -o acme-authz-webhook .
@@ -69,7 +75,7 @@ WEBHOOK_CLIENT_DNS_NAMES=ca.example.com,scep.example.com \
   FLEET_API_BASE_URL=https://fleet.example FLEET_API_TOKEN=... ./acme-authz-webhook serve
 ```
 
-Container image: `docker build -t acme-authz-webhook .` (see `Dockerfile`).
+The release workflow produces a static Linux/amd64 executable.
 Runs as a systemd service on each RADIUS VM. Authorization is loopback-only;
 optional inventory mode adds the HTTPS broker listener. `webhook.tf` manages
 its secrets, IAM, and broker backend (gated by `enable_acme_webhook`).
