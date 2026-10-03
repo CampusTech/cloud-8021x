@@ -49,6 +49,29 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(self.module.discover(self.clients, self.hosts, self.now)['nyc'],
                          ['8.8.4.4/32'])
 
+    def test_malformed_optional_wan_shapes_raise_value_error(self):
+        for state in (None, [], 'unexpected', 7, {'wans': None}, {'wans': {}},
+                      {'wans': 'unexpected'}, {'wans': [None]}, {'wans': [[]]},
+                      {'wans': ['unexpected']}, {'wans': [{'ipv4': 134744072}]},
+                      {'wans': [{'ipv4': False}]}, {'wans': [{'ipv4': None}]}):
+            with self.subTest(state=state), self.assertRaises(ValueError):
+                self.module.discover(self.clients,
+                    [dict(self.hosts[0], reportedState=state), self.hosts[1]], self.now)
+
+    def test_non_string_primary_ip_cannot_be_coerced_or_hidden_by_valid_wan(self):
+        for address in (134744072, False, 0, ['8.8.8.8'], {'ipv4': '8.8.8.8'}):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                self.module.discover(self.clients,
+                    [dict(self.hosts[0], ipAddress=address,
+                          reportedState={'wans': [{'ipv4': '8.8.8.8'}]}), self.hosts[1]], self.now)
+
+    def test_omitted_optional_wan_fields_remain_supported(self):
+        for state in ({}, {'wans': []}, {'wans': [{}]}):
+            with self.subTest(state=state):
+                sources = self.module.discover(self.clients,
+                    [dict(self.hosts[0], reportedState=state), self.hosts[1]], self.now)
+                self.assertEqual(sources['nyc'], ['8.8.4.4/32'])
+
     def test_site_overlap_is_rejected_including_static_cidr(self):
         for mutation in ('dynamic', 'static', 'duplicate_id'):
             clients = json.loads(json.dumps(self.clients))

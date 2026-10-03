@@ -98,13 +98,24 @@ def discover(clients, hosts, now):
         # Freshness is measured from this successful authenticated API fetch.
         if host.get('isBlocked') is True:
             raise ValueError('configured UniFi host is blocked')
-        addresses = [host.get('ipAddress')]
+        addresses = [host['ipAddress']] if 'ipAddress' in host else []
         # Multi-WAN is version-dependent. Only public, observed IPv4s are used;
         # private WANs behind upstream NAT are not public RADIUS egress addresses.
-        for wan in (host.get('reportedState') or {}).get('wans', []):
-            addresses.append(wan.get('ipv4'))
+        reported_state = host.get('reportedState', {})
+        if not isinstance(reported_state, dict):
+            raise ValueError('invalid UniFi reportedState')
+        wans = reported_state.get('wans', [])
+        if not isinstance(wans, list):
+            raise ValueError('invalid UniFi WAN list')
+        for wan in wans:
+            if not isinstance(wan, dict):
+                raise ValueError('invalid UniFi WAN entry')
+            if 'ipv4' in wan:
+                addresses.append(wan['ipv4'])
         public = set()
         for raw in addresses:
+            if not isinstance(raw, str):
+                raise ValueError('invalid UniFi IP address type')
             if not raw:
                 continue
             address = ipaddress.ip_address(raw)
