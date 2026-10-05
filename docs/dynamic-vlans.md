@@ -252,6 +252,7 @@ radius_vlan_policy = {
   attested_acme         = true
   group_vlans           = { "fleet:6" = 100, "fleet:5" = 200 }
 }
+enable_fleet_certificate_inventory = true
 # Fleet's configuration profile UUIDs, not the mobileconfig PayloadUUIDs.
 # Apple profile IDs are "a" + a UUID (37 characters); preserve the prefix.
 fleet_acme_profile_uuids = ["a00000000-0000-0000-0000-000000000000"]
