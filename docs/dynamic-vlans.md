@@ -253,8 +253,14 @@ radius_vlan_policy = {
   group_vlans           = { "fleet:6" = 100, "fleet:5" = 200 }
 }
 # Fleet's configuration profile UUIDs, not the mobileconfig PayloadUUIDs.
+# Apple profile IDs are "a" + a UUID (37 characters); preserve the prefix.
 fleet_acme_profile_uuids = ["a00000000-0000-0000-0000-000000000000"]
 ```
+
+Replace the placeholder with the exact `profile_uuid` returned by Fleet.
+[Fleet prefixes Apple profile UUIDs with `a` and Windows profile UUIDs with `w`](https://github.com/fleetdm/fleet/blob/main/server/datastore/mysql/migrations/tables/20231204155427_AlterMacOSProfilesPrimaryKeyToUUID.go).
+These API identifiers are not bare UUIDs; removing a character prevents the
+collector from matching the installed profile.
 
 This opt-in requires the built-in Smallstep CA and `smallstep` or `both` client
 trust. It pins the EC signing certificate and the configured ACME provisioner
