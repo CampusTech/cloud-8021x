@@ -19,6 +19,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 class CollectorTests(unittest.TestCase):
+    def test_scep_allowlist_limits_polling_and_overrides_acme_exemption(self):
+        self.hosts[0]['mdm']['profiles'] = [{'profile_uuid': 'acme-wifi',
+            'status': 'verified', 'operation_type': 'install'}]
+        self.refresh(scep_profile_uuids=['scep-wifi'])
+        self.assertFalse(any(call[0] == 'POST' for call in self.calls))
+        self.hosts[0]['mdm']['profiles'].append({'profile_uuid': 'scep-wifi',
+            'status': 'pending', 'operation_type': 'install'})
+        self.refresh(acme_profile_uuids=['acme-wifi'], scep_profile_uuids=['scep-wifi'])
+        self.assertEqual(len([call for call in self.calls if call[0] == 'POST']), 1)
+
+    def test_verified_acme_skips_commands_without_discarding_pending_budget(self):
+        self.refresh()
+        self.hosts[0]['mdm']['profiles'] = [{'profile_uuid': 'acme-wifi',
+            'status': 'verified', 'operation_type': 'install'}]
+        self.now += 3700
+        self.refresh(acme_profile_uuids=['acme-wifi'])
+        self.assertEqual(len([call for call in self.calls if call[0] == 'POST']), 1)
+        self.assertEqual(len(json.loads(self.path.read_text())['commands']), 1)
+        # Losing verified installation status must re-enable bounded collection.
+        self.hosts[0]['mdm']['profiles'][0]['status'] = 'pending'
+        self.refresh(acme_profile_uuids=['acme-wifi'])
+        self.assertEqual(len([call for call in self.calls if call[0] == 'POST']), 2)
+
+    def test_only_verified_configured_apple_acme_profiles_are_exempt(self):
+        from fleet_certificates import uses_attested_acme
+        profile = {'profile_uuid': 'acme-wifi', 'status': 'verified', 'operation_type': 'install'}
+        host = {'platform': 'darwin', 'mdm': {'enrollment_status': 'On (automatic)', 'profiles': [profile]}}
+        self.assertTrue(uses_attested_acme(host, ['acme-wifi']))
+        for change in [{'profile_uuid': 'scep-wifi'}, {'status': 'failed'},
+                       {'status': 'pending'}, {'operation_type': 'remove'}]:
+            self.assertFalse(uses_attested_acme({**host, 'mdm': {**host['mdm'], 'profiles': [{**profile, **change}]}}, ['acme-wifi']))
+        self.assertFalse(uses_attested_acme({**host, 'platform': 'windows'}, ['acme-wifi']))
+        self.assertFalse(uses_attested_acme(host, []))
+
     def test_host_deleted_during_refresh_drops_cached_identity_and_continues(self):
         self.refresh()
         self.results['cmd-1'] = [self.row()]

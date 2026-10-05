@@ -191,6 +191,8 @@ See [terraform.tfvars.example](terraform.tfvars.example) for common settings and
 | `rewrite_username_separator` | No | Separator between email and serial in rewritten User-Name (default: ` - `) |
 | `tls_session_cache` | No | Enable faster re-auth (default: `true`); fingerprint enforcement always disables resumption |
 | `enable_fleet_certificate_inventory` | No | Collect exact managed Apple and Windows machine certificate fingerprints; requires Fleet lookup and command/script permissions |
+| `fleet_acme_profile_uuids` | No | Skip new certificate commands for verified ACME Wi-Fi profiles when `radius_vlan_policy.attested_acme` is enabled |
+| `fleet_scep_profile_uuids` | No | Optional Wi-Fi SCEP profile allowlist for polling; `null` keeps all non-exempt hosts eligible, `[]` queues none |
 | `scep_broker_requests_per_minute` | No | Challenge broker requests per source IP per minute (default: `1000`); excess requests receive HTTP 429 without a timed ban |
 | `radius_vlan_policy` | No | Global or per-location group mappings, site opt-out, and optional exact certificate enforcement |
 | `tls_session_cache_lifetime` | No | TLS session cache lifetime in hours (default: `24`) |
@@ -260,6 +262,12 @@ To obtain the Root CA from your Okta admin console ([source](https://andrewdoeri
 ### Fleet Device Lookup (Optional)
 
 With `radius_vlan_policy.certificate_inventory = true`, authentication logs resolve the exact authenticated certificate fingerprint to a stable `device_id` and Fleet's device name, model, and assigned owner. `serial` contains only an actual inventory serial and remains empty when unavailable. `raw_identity` and `cert_cn` are diagnostic claims, never owner lookup keys. Owner/name fields remain empty if Fleet has no corresponding metadata or its cache is stale.
+
+For hardware-attested Apple ACME, enable `radius_vlan_policy.attested_acme` to
+bind the verified certificate directly to Fleet's hardware serial inventory.
+This path checks the pinned Smallstep ACME signer, its CA-controlled provisioner
+marker, and matching permanent-identifier SAN/CN. It needs no certificate polling;
+BYOD/SCEP retains exact fingerprint authorization. See [polling scope and rollout](docs/dynamic-vlans.md#attested-acme-without-certificate-polling).
 
 Accounting carries the verified device ID, certificate fingerprint, and original VLAN in a signed RADIUS `Class` value, bound to the configured office and client MAC. Both RADIUS nodes share a Secret Manager signing key, restored before FreeRADIUS on every boot. The NAS must supply `Calling-Station-Id` at authentication and echo `Class` in accounting. Missing, modified, wrong-office, wrong-client, or expired bindings are logged with `identity_verified: false` and empty device/owner fields. Bindings last 30 days; key rotation also invalidates existing bindings until devices reconnect. Confirm Class echo on a physical UniFi AP during rollout.
 

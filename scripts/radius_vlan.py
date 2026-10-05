@@ -4,7 +4,7 @@ import time
 
 import radiusd
 import radius_identity
-from device_policy import CERTIFICATE_DIRECTORY, consume_certificate, select_vlan
+from device_policy import CERTIFICATE_DIRECTORY, consume_certificate, resolve_device, select_vlan
 
 CONFIG_FILE = '/etc/freeradius/3.0/vlan-policy.json'
 
@@ -19,7 +19,7 @@ def authorize(request):
             names = [value for key, value in request.get('request', ()) if key == 'Tmp-String-0']
             if len(names) != 1:
                 raise ValueError('missing or ambiguous server certificate session')
-            identity = consume_certificate(names[0], CERTIFICATE_DIRECTORY)
+            identity = consume_certificate(names[0], CERTIFICATE_DIRECTORY, include_attestation=True)
         else:
             names = [value for key, value in request.get('request', ())
                      if key == 'TLS-Client-Cert-Common-Name']
@@ -43,14 +43,15 @@ def authorize(request):
             ('Tunnel-Private-Group-Id', str(vlan)),
         )
         if config.get('certificate_inventory', False):
-            # Only an accepted exact leaf fingerprint can mint a log binding.
+            # Both paths bind the exact TLS leaf to a verified device identity.
             # A request Class or an outer username never supplies this identity.
             stations = [value for key, value in request.get('request', ())
                         if key == 'Calling-Station-Id']
             if len(stations) != 1:
                 raise ValueError('missing or ambiguous calling station')
-            device_id = inventory['certificates'][identity]['device_id']
-            binding = radius_identity.issue(radius_identity.read_key(), device_id, identity,
+            device_id = resolve_device(identity, inventory, config, time.time())['device_id']
+            fingerprint = identity['fingerprint'] if isinstance(identity, dict) else identity
+            binding = radius_identity.issue(radius_identity.read_key(), device_id, fingerprint,
                                             vlan, location, stations[0], time.time())
             reply += (('Class', binding),)
         return radiusd.RLM_MODULE_UPDATED, {'reply': reply}

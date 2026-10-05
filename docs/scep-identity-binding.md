@@ -7,6 +7,11 @@ its own certificate. Fleet delivers fresh challenges and manages renewal.
 
 ## Authorization boundary
 
+Hardware-attested ACME can opt into a separate verified-serial path that requires
+the pinned ACME signing certificate and CA-controlled provisioner marker. See
+[attested ACME](dynamic-vlans.md#attested-acme-without-certificate-polling).
+The fingerprint requirements below continue to apply to all SCEP certificates.
+
 In certificate inventory mode, RADIUS authorizes the exact SHA-256 fingerprint
 of the presented leaf certificate. Authenticated Fleet MDM results (Apple) or
 Fleet script results (Windows) bind it to an enrolled host; the host's current

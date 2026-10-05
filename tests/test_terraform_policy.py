@@ -9,6 +9,33 @@ import unittest
 
 @unittest.skipUnless(shutil.which('terraform'), 'Terraform is required for configuration validation')
 class TerraformPolicyTests(unittest.TestCase):
+    def test_attested_identity_and_polling_exclusions_require_trusted_auth_path(self):
+        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        names = ('enable_smallstep_ca', 'radius_trust_mode', 'enable_fleet_certificate_inventory',
+                 'fleet_acme_profile_uuids', 'radius_vlan_policy')
+        declarations = '\n'.join(re.search(r'variable "' + name + r'" \{.*?\n\}', source, re.S)[0] for name in names)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'main.tf').write_text('variable "radius_clients" { default = {} }\n'
+                'variable "enable_fleet_lookup" { default = true }\n' + declarations +
+                '\noutput "policy" { value = var.radius_vlan_policy }\n')
+            for smallstep, mode, inventory, attested, excluded, valid in [
+                (True, 'both', True, True, ['acme'], True),
+                (True, 'smallstep', True, True, ['acme'], True),
+                (False, 'okta', True, True, [], False),
+                (True, 'okta', True, True, [], False),
+                (True, 'both', False, True, [], False),
+                (True, 'both', True, False, ['acme'], False),
+                (True, 'both', True, False, [], True),
+            ]:
+                with self.subTest(smallstep=smallstep, mode=mode, inventory=inventory, attested=attested, excluded=excluded):
+                    (root / 'terraform.tfvars.json').write_text(json.dumps({
+                        'enable_smallstep_ca': smallstep, 'radius_trust_mode': mode,
+                        'enable_fleet_certificate_inventory': True, 'fleet_acme_profile_uuids': excluded,
+                        'radius_vlan_policy': {'certificate_inventory': inventory, 'attested_acme': attested}}))
+                    result = subprocess.run(['terraform', '-chdir=' + directory, 'plan', '-input=false', '-no-color'], capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+
     def test_broker_rate_limit_is_configurable_and_positive(self):
         source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
         match = re.search(r'variable "scep_broker_requests_per_minute" \{.*?\n\}', source, re.S)
@@ -47,7 +74,7 @@ class TerraformPolicyTests(unittest.TestCase):
                                  for name in ('enable_smallstep_ca', 'enable_acme_webhook'))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'main.tf').write_text(declarations + '\noutput "enabled" { value = var.enable_acme_webhook }\n')
+            (root / 'main.tf').write_text('variable "radius_vlan_policy" { default = null }\n' + declarations + '\noutput "enabled" { value = var.enable_acme_webhook }\n')
             for smallstep in (False, True):
                 for webhook in (False, True):
                     with self.subTest(smallstep=smallstep, webhook=webhook):

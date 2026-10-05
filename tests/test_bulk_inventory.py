@@ -68,6 +68,7 @@ class BulkInventoryTests(unittest.TestCase):
             policy.write_text(previous)
             (base / 'collect-certificates').write_text(str(certificates).lower())
             (base / 'client-ca-file').write_text('smallstep-ca.pem')
+            (base / 'fleet-scep-profiles.json').write_text('null')
             (base / 'config.json').write_text(json.dumps({'certificate_inventory': enforced,
                 'certificate_max_age': 86400, 'cache_max_age': 3600, 'group_vlans': {'fleet:4': 200}}))
             if config_text is not None:
@@ -75,6 +76,7 @@ class BulkInventoryTests(unittest.TestCase):
             if marker:
                 (base / 'fingerprint-enforced').touch()
             body = body.replace('/run/fleet-credentials.json', str(credentials)).replace(
+                '/etc/freeradius/3.0/fleet-scep-profiles.json', str(base / 'fleet-scep-profiles.json')).replace(
                 '/etc/freeradius/3.0/fleet-device-cache.json', str(base / 'enrichment.json')).replace(
                 '/etc/freeradius/3.0/device-policy-cache.json', str(policy)).replace(
                 '/var/lib/cloud-8021x', str(base)).replace('/etc/freeradius/3.0/vlan-policy.json', str(base / 'config.json'))

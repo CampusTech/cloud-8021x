@@ -1,6 +1,6 @@
 # Tests
 
-The policy/profile tests use Python's standard library. The full suite also
+Certificate tests require Python's `cryptography` package (Debian: `python3-cryptography`). The full suite also
 invokes OpenSSL and Go for certificate fixtures and the profile-generator CLI:
 
 ```sh
@@ -44,6 +44,7 @@ Requires local Docker and Terraform:
 ```sh
 python3 tests/radius_integration.py
 python3 tests/radius_integration.py --certificate-inventory
+python3 tests/radius_integration.py --certificate-inventory --attested-acme
 python3 tests/radius_integration.py --certificate-inventory --source-discovery
 ```
 

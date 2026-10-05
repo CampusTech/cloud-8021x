@@ -196,7 +196,8 @@ def _windows_observation(row, command, host_id, enrolled_at, now, max_age, ca_fi
 
 
 def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=86400,
-            pending_ttl=3600, batch_size=100, max_batches=1, request=None, ca_file=None):
+            pending_ttl=3600, batch_size=100, max_batches=1, request=None, ca_file=None,
+            acme_profile_uuids=(), scep_profile_uuids=None):
     """Return UUID -> fingerprints/observed_at after one nonblocking collection pass.
 
     ``request(method,path,body=None)`` is the injectable authenticated API boundary.
@@ -238,6 +239,7 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
         windows_script_snapshot = script_bytes.decode('utf-8')
         windows_script_hash = hashlib.sha256(script_bytes).hexdigest()
     current = {}
+    exempt = set()
     for host in hosts:
         uid = host.get('uuid')
         if (not isinstance(uid, str) or not uid or counts[uid] != 1
@@ -256,6 +258,10 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
             continue
         if host['platform'] == 'windows' and detail.get('scripts_enabled') is not True:
             continue
+        scep = has_installed_profile(detail, scep_profile_uuids or ())
+        if ((scep_profile_uuids is not None and not scep)
+                or (uses_attested_acme(detail, acme_profile_uuids) and not scep)):
+            exempt.add(uid)
         # Fleet only exposes last_mdm_enrolled_at for Apple. Script transport
         # is authenticated by fleetd, so Windows uses host enrollment instead.
         # This is the osquery enrollment timestamp, not an Orbit-only key reset.
@@ -273,7 +279,7 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
         cached = state['hosts'].get(uid, {})
         if cached.get('binding') != binding:
             cached = {'binding': binding, 'last_attempt': 0}
-        current[uid] = {**cached, 'platform': host['platform']}
+        current[uid] = {**cached, 'platform': host['platform'], 'polling_exempt': uid in exempt}
     state['hosts'] = current
     pending = []
     for command in state['commands']:
@@ -350,7 +356,7 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
     state['commands'] = pending
     pending_by_host = Counter(uid for command in pending for uid in command['hosts'])
     due = [uid for uid, cached in current.items()
-           if pending_by_host[uid] < 2
+           if uid not in exempt and pending_by_host[uid] < 2
            and now - cached['last_attempt'] >= (pending_ttl if pending_by_host[uid] else cadence)
            and now - cached.get('observation', {}).get('observed_at', 0) >= cadence]
     due.sort(key=lambda uid: (current[uid]['last_attempt'], uid))
@@ -414,6 +420,27 @@ def refresh(base, token, hosts, state_path, now=None, *, cadence=3600, max_age=8
             cached.pop('observation', None)
     _save(state_path, state)
     return observations
+
+
+def uses_attested_acme(host, profile_uuids):
+    """Polling exemption only; a profile assignment never authorizes a certificate.
+
+    Use administrator-selected ACME Wi-Fi profile IDs, not names, supervision,
+    or unrelated Okta SCEP profiles. Unknown/failed/pending installs still poll.
+    """
+    if host.get('platform') not in APPLE_PLATFORMS or not _enrolled(host):
+        return False
+    profiles = (host.get('mdm') or {}).get('profiles') or []
+    return any(isinstance(p, dict) and p.get('profile_uuid') in profile_uuids
+               and p.get('status') == 'verified' and p.get('operation_type') == 'install'
+               for p in profiles)
+
+
+def has_installed_profile(host, profile_uuids):
+    """Pending/failed SCEP installs still collect for enrollment and renewal."""
+    return any(isinstance(p, dict) and p.get('profile_uuid') in profile_uuids
+               and p.get('operation_type') == 'install'
+               for p in ((host.get('mdm') or {}).get('profiles') or []))
 
 
 def readiness(hosts, observations, now=None, max_age=86400):

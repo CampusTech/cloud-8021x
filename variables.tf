@@ -228,12 +228,20 @@ variable "enable_smallstep_ca" {
   description = "Stand up a self-hosted Smallstep step-ca on the RADIUS VMs (KMS-backed CA, ACME + SCEP, Cloud SQL for ACME HA, GCLB front door). Off by default; existing BYO-CA deployments are unaffected."
   type        = bool
   default     = false
+  validation {
+    condition     = !try(var.radius_vlan_policy.attested_acme, false) || var.enable_smallstep_ca
+    error_message = "Attested ACME authorization requires the built-in Smallstep CA."
+  }
 }
 
 variable "radius_trust_mode" {
   description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'both' = transitional dual-trust (Okta + Smallstep intermediates concatenated) so devices can migrate without a flag-day cutover. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'both' or 'smallstep'."
   type        = string
   default     = "okta"
+  validation {
+    condition     = !try(var.radius_vlan_policy.attested_acme, false) || var.radius_trust_mode != "okta"
+    error_message = "Attested ACME authorization requires Smallstep client trust (smallstep or both)."
+  }
   validation {
     condition     = contains(["okta", "both", "smallstep"], var.radius_trust_mode)
     error_message = "radius_trust_mode must be one of \"okta\", \"both\", or \"smallstep\"."
@@ -380,6 +388,23 @@ variable "enable_fleet_certificate_inventory" {
   }
 }
 
+variable "fleet_acme_profile_uuids" {
+  description = "Fleet configuration profile UUIDs for hardware-attested ACME Wi-Fi. Hosts with a verified installation skip new certificate commands; Windows and unknown/pending/failed profiles still collect. Requires attested_acme authorization. These are Fleet profile UUIDs, not mobileconfig PayloadUUIDs."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition     = length(var.fleet_acme_profile_uuids) == 0 || (var.enable_fleet_certificate_inventory && try(var.radius_vlan_policy.attested_acme, false))
+    error_message = "ACME polling exclusions require Fleet certificate inventory and radius_vlan_policy.attested_acme."
+  }
+}
+
+variable "fleet_scep_profile_uuids" {
+  description = "Optional Fleet Wi-Fi SCEP configuration profile UUID allowlist for polling. Null keeps all non-exempt hosts eligible; an empty set queues nothing. Any selected install (including pending/failed) remains eligible, even when an ACME profile is also installed. This affects collection only, never authorization."
+  type        = set(string)
+  default     = null
+}
+
 variable "scep_broker_requests_per_minute" {
   description = "Cloud Armor challenge requests per minute per source IP. Fleet shares its outbound IP across device enrollments, so size this for rollout and renewal bursts. Excess requests receive HTTP 429 without a timed ban; broker authentication remains required."
   type        = number
@@ -401,6 +426,7 @@ variable "radius_vlan_policy" {
     cache_max_age         = optional(number, 3600)
     cache_file            = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
     certificate_inventory = optional(bool, false)
+    attested_acme         = optional(bool, false)
     certificate_max_age   = optional(number, 86400)
     locations = optional(map(object({
       dynamic_vlans = optional(bool, true)
@@ -409,6 +435,11 @@ variable "radius_vlan_policy" {
     })), {})
   })
   default = null
+
+  validation {
+    condition     = var.radius_vlan_policy == null ? true : (!var.radius_vlan_policy.attested_acme || var.radius_vlan_policy.certificate_inventory)
+    error_message = "attested_acme requires certificate_inventory for all non-attested certificates."
+  }
 
   validation {
     condition = var.radius_vlan_policy == null ? true : alltrue([

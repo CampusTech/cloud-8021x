@@ -13,6 +13,7 @@ import time
 RADDB = Path('/etc/freeradius/3.0')
 CACHE = RADDB / 'device-policy-cache.json'
 CERTIFICATE_MODE = '--certificate-inventory' in sys.argv
+ATTESTED_ACME = '--attested-acme' in sys.argv
 SOURCE_DISCOVERY = '--source-discovery' in sys.argv
 SOURCE_STATE = Path('/var/lib/radius-sources/state.json')
 AUTH_LOG = Path('/var/log/freeradius/radius-auth.json')
@@ -116,6 +117,33 @@ done
 chown freerad:freerad *.pem server-key.pem
 chmod 640 server-key.pem
 ''', text=True, check=True)
+    if ATTESTED_ACME:
+        assert CERTIFICATE_MODE
+        subprocess.run(['bash'], input=r'''
+set -euo pipefail
+cd /etc/freeradius/3.0/certs
+openssl ecparam -name prime256v1 -genkey -noout -out attested-ca.key
+openssl req -x509 -new -key attested-ca.key -out attested-acme-issuer.pem -days 1 -subj /CN=AttestedCA 2>/dev/null
+cat attested-acme-issuer.pem >> okta-ca.pem
+for identity in STAFFSERIAL forged-staff; do
+    kind=06
+    if [ "$identity" = forged-staff ]; then kind=08; fi
+    openssl req -new -key "$identity.key" -out "$identity.csr" -subj /CN=STAFFSERIAL 2>/dev/null
+    cat > attested.ext <<EOF
+extendedKeyUsage=clientAuth
+1.3.6.1.4.1.37476.9000.64.1=DER:30:10:02:01:$kind:04:09:77:69:66:69:2d:61:63:6d:65:04:00
+subjectAltName=otherName:1.3.6.1.5.5.7.8.3;SEQUENCE:permanent
+[permanent]
+identifier=UTF8:STAFFSERIAL
+EOF
+    openssl x509 -req -in "$identity.csr" -CA attested-acme-issuer.pem -CAkey attested-ca.key -CAcreateserial -out "$identity.pem" -days 1 -extfile attested.ext 2>/dev/null
+done
+chmod 644 attested-acme-issuer.pem
+''', text=True, check=True)
+        policy_file = RADDB / 'vlan-policy.json'
+        policy = json.loads(policy_file.read_text())
+        policy['attested_acme'] = True
+        policy_file.write_text(json.dumps(policy))
     result = subprocess.run(['freeradius', '-XC'], text=True, capture_output=True)
     if result.returncode:
         raise AssertionError(result.stdout + result.stderr)
@@ -137,7 +165,11 @@ def inventory(groups=None, enrolled=True, age=0, certificate_age=0, ambiguous=Fa
         data['version'] = 2
         data['devices'] = DEVICES
         data['certificates'] = {}
+        if ATTESTED_ACME:
+            data['hardware_serials'] = {'STAFFSERIAL': data['identities']['STAFFSERIAL']}
         for identity, device in data['identities'].items():
+            if ATTESTED_ACME and identity == 'STAFFSERIAL':
+                continue  # No fingerprint observation exists for the ACME device.
             der = ssl.PEM_cert_to_DER_cert((RADDB / 'certs' / (identity + '.pem')).read_text())
             fingerprint = hashlib.sha256(der).hexdigest()
             data['certificates'][fingerprint] = None if ambiguous else dict(device, observed_at=time.time() - certificate_age)
@@ -320,7 +352,7 @@ def authenticate(name, certificate='personal-enrollment-id', expected=(200,), af
             assert record['src_ip'] == source_ip, (name, record)
             if vlan is not None:
                 identity_log(record, '1' if certificate == 'STAFFSERIAL' else '42', certificate, vlan)
-                assert record['cert_cn'] == 'cloud-8021x-inventory', (name, record)
+                assert record['cert_cn'] == ('STAFFSERIAL' if ATTESTED_ACME and certificate == 'STAFFSERIAL' else 'cloud-8021x-inventory'), (name, record)
             elif certificate in ('unknown', 'forged-staff'):
                 unattributed_log(record)
         for binding in bindings:

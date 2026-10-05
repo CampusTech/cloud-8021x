@@ -146,6 +146,10 @@ locals {
     radius_log_module_b64           = filebase64("${path.module}/scripts/radius_log.py")
     radius_vlan_module_b64          = filebase64("${path.module}/scripts/radius_vlan.py")
     fleet_certificates_module_b64   = filebase64("${path.module}/scripts/fleet_certificates.py")
+    attested_acme_module_b64        = filebase64("${path.module}/scripts/attested_acme.py")
+    attested_acme_config_b64        = base64encode(jsonencode({ issuer_file = "/etc/freeradius/3.0/certs/attested-acme-issuer.pem", provisioner = var.smallstep_acme_provisioner_name }))
+    fleet_acme_profile_uuids_b64    = base64encode(jsonencode(var.fleet_acme_profile_uuids))
+    fleet_scep_profile_uuids_b64    = base64encode(jsonencode(var.fleet_scep_profile_uuids))
     windows_certificates_script_b64 = filebase64("${path.module}/scripts/windows_certificates.ps1")
     fleet_certificate_inventory     = var.enable_fleet_certificate_inventory
     scep_certificate_inventory      = local.scep_inventory_enabled
