@@ -10,6 +10,7 @@ This repo deploys primary and secondary FreeRADIUS servers on Google Cloud (GCE)
 - **Client/server trust** — `radius_trust_mode` selects client trust. Smallstep/both also present an EC Smallstep-rooted server certificate; Okta mode uses the legacy RADIUS CA. Profiles pin the actual server root and name.
 - **Dynamic VLANs** — normalized inventory groups map globally or per authenticated RADIUS location; site opt-out retains authorization. Never trust NAS identifiers to select a location.
 - **Fingerprint authorization** — exact leaf DER observed through authenticated Fleet MDM or Windows SYSTEM scripts binds the host. Neutral SCEP challenges authorize issuance only. Do not add a CN fallback or remove the sticky downgrade guard.
+- **Attested ACME** — opt-in verified-serial authorization pins the ACME signer and CA-controlled provisioner marker and checks permanentIdentifier/CN agreement. Fresh hardware-serial inventory still gates enrollment and VLANs. This path alone may skip certificate polling; SCEP keeps exact fingerprints.
 - **Secrets** — Secret Manager persists credentials and CA material. Protected runtime files may remain on disk; Terraform-managed secrets also appear in state.
 - **Verified logs** — device/owner fields use stable device IDs, including serial-free BYOD; signed Class binds accounting to the device, original VLAN, office and MAC.
 

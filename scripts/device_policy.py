@@ -1,6 +1,7 @@
 """MDM-independent device identity and VLAN policy over an atomic inventory snapshot."""
 import fcntl
 import hashlib
+import json
 import math
 import os
 from pathlib import Path
@@ -27,10 +28,18 @@ def normalize_identity(value):
 
 def snapshot(devices, now):
     identities = {}
+    hardware_serials = {}
     certificates = {}
     metadata_by_device = {}
     certificate_mode = False
     for device in devices:
+        serial = device.get('hardware_serial')
+        if isinstance(serial, str) and serial:
+            entry = {key: device[key] for key in ('device_id', 'groups', 'enrolled')}
+            if serial in hardware_serials and hardware_serials[serial] != entry:
+                hardware_serials[serial] = None
+            else:
+                hardware_serials[serial] = entry
         if 'metadata' in device:
             metadata = device['metadata']
             keys = {'serial', 'device_name', 'device_model', 'device_owner'}
@@ -67,6 +76,7 @@ def snapshot(devices, now):
     result = {'version': 2 if certificate_mode else 1, 'updated_at': now, 'identities': identities}
     if certificate_mode:
         result['certificates'] = certificates
+        result['hardware_serials'] = hardware_serials
     if metadata_by_device:
         result['devices'] = metadata_by_device
     return result
@@ -94,19 +104,27 @@ def certificate_path(token, directory):
     return Path(directory) / token
 
 
-def record_certificate(filename, token, directory=CERTIFICATE_DIRECTORY):
+def record_certificate(filename, token, directory=CERTIFICATE_DIRECTORY, attested_config=None):
     """Called only by TLS verify with its verified leaf PEM and server session token."""
     destination = certificate_path(token, directory)
     with open(filename) as stream:
-        der = ssl.PEM_cert_to_DER_cert(stream.read())
+        pem = stream.read()
+        der = ssl.PEM_cert_to_DER_cert(pem)
     fingerprint = hashlib.sha256(der).hexdigest()
+    binding = fingerprint
+    if attested_config:
+        from attested_acme import identity
+        serial = identity(pem.encode(), Path(attested_config['issuer_file']).read_bytes(),
+                          attested_config['provisioner'])
+        if serial:
+            binding = json.dumps({'fingerprint': fingerprint, 'attested_serial': serial})
     # Exclusive creation prevents replacing another authentication's binding.
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as stream:
-        stream.write(fingerprint)
+        stream.write(binding)
 
 
-def consume_certificate(token, directory=CERTIFICATE_DIRECTORY):
+def consume_certificate(token, directory=CERTIFICATE_DIRECTORY, *, include_attestation=False):
     """Consume the private handshake binding. Missing/expired/replayed bindings deny."""
     filename = certificate_path(token, directory)
     fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW)
@@ -117,22 +135,36 @@ def consume_certificate(token, directory=CERTIFICATE_DIRECTORY):
             raise ValueError('invalid or consumed certificate binding')
         os.unlink(filename)
         require_fresh(metadata.st_mtime, time.time(), CERTIFICATE_HANDOFF_TTL)
-        return normalize_fingerprint(stream.read(65))
+        value = stream.read(1025)
+        if value.startswith('{') and include_attestation:
+            binding = json.loads(value)
+            if (set(binding) != {'fingerprint', 'attested_serial'}
+                    or not isinstance(binding['attested_serial'], str)
+                    or not re.fullmatch(r'[A-Za-z0-9]{1,64}', binding['attested_serial'])):
+                raise ValueError('invalid attested certificate binding')
+            normalize_fingerprint(binding['fingerprint'])
+            return binding
+        return normalize_fingerprint(value)
 
 
 def valid_vlan(value):
     return type(value) is int and 1 <= value <= 4094
 
 
-def select_vlan(identity, inventory, config, now, location=None):
-    """Authorize identity, then select VLAN; None means explicit location opt-out."""
+def resolve_device(identity, inventory, config, now):
+    """Resolve only a server-verified handshake identity against fresh inventory."""
     certificate_mode = config.get('certificate_inventory', False)
     if type(certificate_mode) is not bool:
         raise ValueError('invalid certificate inventory mode')
     if inventory['version'] not in ((2,) if certificate_mode else (1, 2)):
         raise ValueError('unsupported inventory version')
     require_fresh(inventory['updated_at'], now, config['cache_max_age'])
-    if certificate_mode:
+    if certificate_mode and isinstance(identity, dict):
+        if config.get('attested_acme') is not True:
+            raise ValueError('attested ACME identity disabled')
+        normalize_fingerprint(identity['fingerprint'])
+        device = inventory.get('hardware_serials', {}).get(identity['attested_serial'])
+    elif certificate_mode:
         identity = normalize_fingerprint(identity)
         device = inventory['certificates'].get(identity)
         if device:
@@ -147,6 +179,12 @@ def select_vlan(identity, inventory, config, now, location=None):
         device = inventory['identities'].get(identity)
     if not device or device['enrolled'] is not True:
         raise ValueError('device unknown, ambiguous, or unenrolled')
+    return device
+
+
+def select_vlan(identity, inventory, config, now, location=None):
+    """Authorize identity, then select VLAN; None means explicit location opt-out."""
+    device = resolve_device(identity, inventory, config, now)
     groups = device['groups']
     if not isinstance(groups, list) or any(not isinstance(g, str) for g in groups):
         raise ValueError('invalid device groups')
@@ -186,7 +224,11 @@ if __name__ == '__main__':
     try:
         if len(sys.argv) != 3:
             raise ValueError('expected verified certificate filename and server session token')
-        record_certificate(sys.argv[1], sys.argv[2])
+        config = json.loads(Path('/etc/freeradius/3.0/vlan-policy.json').read_text())
+        attested = None
+        if config.get('attested_acme') is True:
+            attested = json.loads(Path('/etc/freeradius/3.0/attested-acme.json').read_text())
+        record_certificate(sys.argv[1], sys.argv[2], attested_config=attested)
     except Exception as exc:
         print('certificate binding failed: ' + str(exc), file=sys.stderr)
         sys.exit(1)

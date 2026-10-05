@@ -242,6 +242,60 @@ supplies the same attributes from the external server. Accepted auth logs includ
 References: [UniFi RADIUS setup](https://help.ui.com/hc/en-us/articles/360015268353-Configuring-a-RADIUS-Server-in-UniFi),
 [RFC 3580 section 3.31](https://www.rfc-editor.org/rfc/rfc3580#section-3.31).
 
+## Attested ACME without certificate polling
+
+Hardware-attested ACME certificates can use their verified serial directly:
+
+```hcl
+radius_vlan_policy = {
+  certificate_inventory = true
+  attested_acme         = true
+  group_vlans           = { "fleet:6" = 100, "fleet:5" = 200 }
+}
+enable_fleet_certificate_inventory = true
+# Fleet's configuration profile UUIDs, not the mobileconfig PayloadUUIDs.
+# Apple profile IDs are "a" + a UUID (37 characters); preserve the prefix.
+fleet_acme_profile_uuids = ["a00000000-0000-0000-0000-000000000000"]
+```
+
+Replace the placeholder with the exact `profile_uuid` returned by Fleet.
+[Fleet prefixes Apple profile UUIDs with `a` and Windows profile UUIDs with `w`](https://github.com/fleetdm/fleet/blob/main/server/datastore/mysql/migrations/tables/20231204155427_AlterMacOSProfilesPrimaryKeyToUUID.go).
+These API identifiers are not bare UUIDs; removing a character prevents the
+collector from matching the installed profile.
+
+This opt-in requires the built-in Smallstep CA and `smallstep` or `both` client
+trust. It pins the EC signing certificate and the configured ACME provisioner
+name/type; the provisioner must remain restricted to `device-attest-01`. The TLS
+hook verifies the leaf signature, validity, clientAuth use, and a permanent
+identifier SAN matching its CN. Only then can the hardware serial resolve a
+currently enrolled device from fresh inventory. Duplicate serials and UUID/name
+aliases cannot authorize this path. Certificate renewal needs no new fingerprint
+observation. Exact leaf fingerprints still appear in logs and signed accounting
+bindings. Non-attested certificates retain fingerprint enforcement, including
+SCEP certificates containing a copied serial. There is no general CN fallback.
+
+The collector skips new commands for a verified installation of one of the
+selected ACME Wi-Fi profiles. Supervision alone does not exempt a device.
+Optionally set `fleet_scep_profile_uuids` to the Wi-Fi SCEP profiles whose devices
+should be polled; `null` retains all non-exempt hosts and `[]` queues nothing.
+Pending or failed selected SCEP installs still collect, and a selected SCEP
+profile takes precedence when the same device also has ACME. Keep these lists
+updated when profiles are replaced or new fleets are enabled. Do not include
+unrelated identity-provider SCEP profiles. Profile selection affects polling
+only and cannot authorize a certificate.
+
+Pending commands remain tracked and may still run; exclusions do not cancel
+commands already queued in Fleet. Stored observations retain their original
+timestamps and expire normally. Collector state records `polling_exempt` for
+diagnostics. The existing readiness report measures exact fingerprint coverage;
+an exempt ACME device without an observation still needs a real authentication
+test before rollout, rather than being declared fingerprint-ready.
+
+Deploy and test attested authorization before stopping collection on servers
+that currently enforce fingerprints. Legacy production preflight collectors can
+be narrowed independently because their output does not authorize live traffic.
+No changes to Fleet's own certificate inventory or renewal collection are made.
+
 ## BYOD iOS/iPadOS without serial numbers
 
 Apple User Enrollment omits hardware serial and UDID from attestation. The

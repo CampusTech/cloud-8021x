@@ -1,4 +1,4 @@
-"""Exact certificate authorization must never fall back to certificate CN."""
+"""SCEP cannot fall back to CN; attested identities need a verified TLS binding."""
 import hashlib
 import importlib.util
 import json
@@ -22,6 +22,29 @@ sys.modules['radiusd'] = types.SimpleNamespace(RLM_MODULE_REJECT=0, RLM_MODULE_U
 
 
 class CertificatePolicyTests(unittest.TestCase):
+    def test_attested_serial_uses_fresh_hardware_inventory_without_fingerprint_poll(self):
+        self.device.update(hardware_serial='SERIAL123', certificate_fingerprints=[],
+                           certificates_observed_at=0)
+        self.config['attested_acme'] = True
+        bound = {'fingerprint': self.fingerprint, 'attested_serial': 'SERIAL123'}
+        inventory = device_policy.snapshot([self.device], self.now)
+        self.assertEqual(device_policy.select_vlan(bound, inventory, self.config, self.now), 200)
+        for changed in [dict(inventory, updated_at=self.now - 7200),
+                        device_policy.snapshot([{**self.device, 'enrolled': False}], self.now),
+                        device_policy.snapshot([self.device, {**self.device, 'device_id': 'fleet:2'}], self.now),
+                        device_policy.snapshot([{**self.device, 'hardware_serial': '',
+                                                'identities': ['SERIAL123']}], self.now)]:
+            with self.assertRaises(ValueError):
+                device_policy.select_vlan(bound, changed, self.config, self.now)
+        self.config['attested_acme'] = False
+        with self.assertRaises(ValueError):
+            device_policy.select_vlan(bound, inventory, self.config, self.now)
+        # Enabling ACME must not turn unknown fingerprint/CN claims into aliases.
+        self.config['attested_acme'] = True
+        for untrusted in ['SERIAL123', self.fingerprint]:
+            with self.assertRaises(ValueError):
+                device_policy.select_vlan(untrusted, inventory, self.config, self.now)
+
     def setUp(self):
         self.now = time.time()
         self.fingerprint = 'a1' * 32

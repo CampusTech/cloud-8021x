@@ -23,13 +23,16 @@ def render(enabled=True, smallstep=False, webhook=False, certificate_inventory=F
                   tls_session_cache_lifetime=24, radius_clients_json='{}',
                   rewrite_username_separator=' - ', acme_webhook_url='https://127.0.0.1:9444/authorize' if webhook else '',
                   smallstep_enabled=smallstep, acme_webhook_enabled=webhook)
-    for name in ('device_policy', 'inventory_policy', 'radius_vlan', 'fleet_certificates', 'radius_identity', 'radius_log', 'radius_sources'):
+    for name in ('device_policy', 'inventory_policy', 'radius_vlan', 'fleet_certificates', 'radius_identity', 'radius_log', 'radius_sources', 'attested_acme'):
         values[name + '_module_b64'] = base64.b64encode((ROOT / 'scripts' / (name + '.py')).read_bytes()).decode()
     values['windows_certificates_script_b64'] = base64.b64encode((ROOT / 'scripts/windows_certificates.ps1').read_bytes()).decode()
     policy = {'group_vlans': {'staff': 100, 'byod': 200}, 'fallback_vlan': None,
               'cache_max_age': 3600, 'certificate_inventory': certificate_inventory, 'certificate_max_age': 86400, 'cache_file': '/etc/freeradius/3.0/device-policy-cache.json'}
     values['vlan_policy_config_b64'] = base64.b64encode(json.dumps(policy if enabled else None).encode()).decode()
     values['radius_sources_config_b64'] = base64.b64encode(b'{"project":"test","clients":{}}').decode()
+    values['attested_acme_config_b64'] = base64.b64encode(b'{"issuer_file":"/etc/freeradius/3.0/certs/attested-acme-issuer.pem","provisioner":"wifi-acme"}').decode()
+    values['fleet_acme_profile_uuids_b64'] = base64.b64encode(b'[]').decode()
+    values['fleet_scep_profile_uuids_b64'] = base64.b64encode(b'null').decode()
     expression = 'templatefile(' + json.dumps(str(ROOT / 'scripts/startup.sh')) + ', local.template_values)'
     with tempfile.TemporaryDirectory() as directory:
         # Embedded modules can exceed console's 64 KiB input-line limit.

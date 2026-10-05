@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--attested-acme', action='store_true', help='Exercise attested serial authorization without certificate inventory observations')
     parser.add_argument('--certificate-inventory', action='store_true',
                         help='Exercise exact DER fingerprints and authenticated accounting log identities')
     parser.add_argument('--source-discovery', action='store_true',
@@ -33,7 +34,7 @@ def main():
             docker('run', '--name', container, '-d', 'debian:12-slim', 'sleep', 'infinity', stdout=subprocess.DEVNULL)
             docker('exec', container, 'sh', '-c',
                    'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq '
-                   'freeradius freeradius-python3 freeradius-utils eapoltest openssl python3 >/tmp/install.log 2>&1')
+                   'freeradius freeradius-python3 freeradius-utils eapoltest openssl python3 python3-cryptography jq >/tmp/install.log 2>&1')
         # Stop only FreeRADIUS in this test container, including a previous debug run.
         docker('exec', container, 'python3', '-c', '''import os,signal
 for pid in os.listdir('/proc'):
@@ -50,6 +51,7 @@ for pid in os.listdir('/proc'):
             docker('cp', str(path / 'startup.sh'), container + ':/tmp/startup.sh')
         docker('cp', str(ROOT / 'tests' / 'radius_container.py'), container + ':/tmp/radius_container.py')
         docker('exec', container, 'python3', '/tmp/radius_container.py',
+               *(['--attested-acme'] if args.attested_acme else []),
                *(['--certificate-inventory'] if args.certificate_inventory else []),
                *(['--source-discovery'] if args.source_discovery else []))
     finally:

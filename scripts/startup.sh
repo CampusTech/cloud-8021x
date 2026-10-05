@@ -81,7 +81,7 @@ echo "=== Installing prerequisites ==="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y gnupg2 curl apt-transport-https ca-certificates \
-    lsb-release jq openssl python3
+    lsb-release jq openssl python3 python3-cryptography
 
 # Install gcloud CLI if not already present (for Secret Manager)
 if ! command -v gcloud &>/dev/null; then
@@ -115,6 +115,12 @@ printf '%s' '${radius_identity_module_b64}' | base64 -d > "$RADDB/mods-config/py
 printf '%s' '${radius_log_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_log.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
 printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
+printf '%s' '${attested_acme_module_b64}' | base64 -d > "$RADDB/mods-config/python3/attested_acme.py"
+printf '%s' '${attested_acme_config_b64}' | base64 -d > "$RADDB/attested-acme.json"
+printf '%s' '${fleet_acme_profile_uuids_b64}' | base64 -d > "$RADDB/fleet-acme-profiles.json"
+printf '%s' '${fleet_scep_profile_uuids_b64}' | base64 -d > "$RADDB/fleet-scep-profiles.json"
+chmod 644 "$RADDB/fleet-scep-profiles.json"
+chmod 644 "$RADDB/mods-config/python3/attested_acme.py" "$RADDB/attested-acme.json" "$RADDB/fleet-acme-profiles.json"
 printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
 chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log,radius_sources}.py "$RADDB/vlan-policy.json"
@@ -1534,6 +1540,12 @@ echo "Enabled radius-client-cert-metrics.timer (hourly client-cert expiry gauges
 #    validation — no post-start PEM file patching needed.
 # ---------------------------------------------------------------------------
 echo "=== Configuring EAP-TLS ==="
+if jq -e '.attested_acme == true' "$RADDB/vlan-policy.json" >/dev/null; then
+    # Pin the actual attested signing certificate, never the combined trust
+    # bundle or an issuer display name shared with legacy/SCEP credentials.
+    [ "${smallstep_enabled}" = "true" ] || { echo "Attested ACME requires the built-in Smallstep CA" >&2; exit 1; }
+    install -m 0644 "$STEPPATH/certs/intermediate_ca.crt" "$CERT_DIR/attested-acme-issuer.pem"
+fi
 %{ if certificate_inventory_enabled ~}
 # Handshake bindings are private, short-lived, and consumed before EAP-Success.
 install -d -o freerad -g freerad -m 0700 /run/radius-certificate-bindings
@@ -2230,7 +2242,10 @@ try:
         cert_max_age = vlan_config.get("certificate_max_age", 86400)
         ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
         observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
-                               now=now, max_age=cert_max_age, ca_file=ca_file)
+                               now=now, max_age=cert_max_age, ca_file=ca_file,
+                               acme_profile_uuids=(json.loads(Path("/etc/freeradius/3.0/fleet-acme-profiles.json").read_text())
+                                                   if vlan_config.get("attested_acme") is True else []),
+                               scep_profile_uuids=json.loads(Path("/etc/freeradius/3.0/fleet-scep-profiles.json").read_text()))
         # Build separately so a malformed observation cannot publish a partial
         # certificate snapshot when the legacy policy is still in use.
         certificate_devices = [dict(device) for device in policy_devices]
