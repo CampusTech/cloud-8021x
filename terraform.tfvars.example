@@ -137,6 +137,8 @@ EOT
 # See docs/scep-identity-binding.md; do not combine this policy with the one above.
 # enable_fleet_lookup                = true
 # enable_fleet_certificate_inventory = true
+# Separate scoped maintainer secret; keep fleet-api-token observer-only.
+# fleet_certificate_token_secret_id = "fleet-certificate-inventory-token"
 # fleet_api_base_url                 = "https://fleet.example.com"
 # scep_broker_requests_per_minute    = 1000 # Per Fleet outbound IP; excess gets HTTP 429, no timed ban.
 # radius_vlan_policy = {

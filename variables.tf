@@ -388,6 +388,16 @@ variable "enable_fleet_certificate_inventory" {
   }
 }
 
+variable "fleet_certificate_token_secret_id" {
+  description = "Existing Secret Manager secret for Fleet certificate collection. Use a separate scoped maintainer credential to keep fleet-api-token observer-only. Defaults to fleet-api-token for existing deployments."
+  type        = string
+  default     = "fleet-api-token"
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.fleet_certificate_token_secret_id))
+    error_message = "fleet_certificate_token_secret_id must be a valid Secret Manager secret ID."
+  }
+}
+
 variable "fleet_acme_profile_uuids" {
   description = "Fleet configuration profile UUIDs for hardware-attested ACME Wi-Fi. Hosts with a verified installation skip new certificate commands; Windows and unknown/pending/failed profiles still collect. Requires attested_acme authorization. These are Fleet profile UUIDs, not mobileconfig PayloadUUIDs."
   type        = set(string)
