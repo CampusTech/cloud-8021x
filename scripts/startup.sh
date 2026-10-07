@@ -2128,6 +2128,20 @@ FLEETCREDEOF
     chmod 600 "$FLEET_CRED_FILE"
     unset FLEET_API_TOKEN
 
+    # Keep privileged collection separate from observer lookup and CA authorization.
+    # This root-only tmpfs credential is never readable by the RADIUS worker.
+    if [ "$FLEET_CERTIFICATE_INVENTORY" = "true" ]; then
+        FLEET_CERTIFICATE_TOKEN=$(gcloud secrets versions access latest \
+            --secret='${fleet_certificate_token_secret_id}' --project="$PROJECT_ID")
+        [ -n "$FLEET_CERTIFICATE_TOKEN" ] || { echo "FATAL: collector credential missing" >&2; exit 1; }
+        ( umask 077; printf '%s' "$FLEET_CERTIFICATE_TOKEN" | python3 -c 'import json,sys; json.dump({"token":sys.stdin.read()},sys.stdout)' > /run/fleet-certificate-credentials.json )
+        chown root:root /run/fleet-certificate-credentials.json
+        chmod 600 /run/fleet-certificate-credentials.json
+        unset FLEET_CERTIFICATE_TOKEN
+    else
+        rm -f /run/fleet-certificate-credentials.json
+    fi
+
     # Deploy the Fleet device cache script (bulk inventory pull).
     install -d -m 0700 /var/lib/cloud-8021x
     printf '%s' "$FLEET_CERTIFICATE_INVENTORY" > /var/lib/cloud-8021x/collect-certificates
@@ -2241,7 +2255,11 @@ try:
         from fleet_certificates import refresh
         cert_max_age = vlan_config.get("certificate_max_age", 86400)
         ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
-        observations = refresh(base, token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+        with open("/run/fleet-certificate-credentials.json") as stream:
+            collection_token = json.load(stream)["token"]
+        if not isinstance(collection_token, str) or not collection_token.strip():
+            raise ValueError("collector credential missing")
+        observations = refresh(base, collection_token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
                                now=now, max_age=cert_max_age, ca_file=ca_file,
                                acme_profile_uuids=(json.loads(Path("/etc/freeradius/3.0/fleet-acme-profiles.json").read_text())
                                                    if vlan_config.get("attested_acme") is True else []),

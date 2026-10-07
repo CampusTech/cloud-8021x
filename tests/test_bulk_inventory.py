@@ -16,6 +16,12 @@ from inventory_policy import certificate_readiness
 
 
 class BulkInventoryTests(unittest.TestCase):
+    def test_certificate_collection_uses_separate_credential(self):
+        self.run_bulk(False, certificates=True, certificate_token='collector-token')
+
+    def test_missing_collector_credential_preserves_enforced_policy(self):
+        self.run_bulk(False, certificates=True, certificate_token='')
+
     def test_failed_page_keeps_previous_complete_snapshot(self):
         self.run_bulk(fail_page=True)
 
@@ -56,13 +62,15 @@ class BulkInventoryTests(unittest.TestCase):
                       collector_error=TimeoutError('test-token'))
 
     def run_bulk(self, fail_page, certificates=False, enforced=True, collector_error=None,
-                 config_text=None, report_error=None, marker=False):
+                 config_text=None, report_error=None, marker=False, certificate_token=None):
         text = (ROOT / 'scripts/startup.sh').read_text().split("<< 'FLEETCACHEEOF'\n", 1)[1].split('\nFLEETCACHEEOF', 1)[0]
         body = text.split("python3 << 'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             credentials = base / 'credentials.json'
             credentials.write_text(json.dumps({'url': 'https://inventory.example', 'token': 'test-token'}))
+            collector_credentials = base / 'collector-credentials.json'
+            collector_credentials.write_text(json.dumps({'token': 'test-token' if certificate_token is None else certificate_token}))
             policy = base / 'policy.json'
             previous = '{"version":1,"updated_at":1,"identities":{"old":{}}}'
             policy.write_text(previous)
@@ -75,7 +83,8 @@ class BulkInventoryTests(unittest.TestCase):
                 (base / 'config.json').write_text(config_text)
             if marker:
                 (base / 'fingerprint-enforced').touch()
-            body = body.replace('/run/fleet-credentials.json', str(credentials)).replace(
+            body = body.replace('/run/fleet-certificate-credentials.json', str(collector_credentials)).replace(
+                '/run/fleet-credentials.json', str(credentials)).replace(
                 '/etc/freeradius/3.0/fleet-scep-profiles.json', str(base / 'fleet-scep-profiles.json')).replace(
                 '/etc/freeradius/3.0/fleet-device-cache.json', str(base / 'enrichment.json')).replace(
                 '/etc/freeradius/3.0/device-policy-cache.json', str(policy)).replace(
@@ -111,6 +120,10 @@ class BulkInventoryTests(unittest.TestCase):
                         refresh.assert_not_called()
                         self.assertEqual(policy.read_text(), previous)
                         return
+                    if certificate_token == '':
+                        refresh.assert_not_called()
+                        self.assertEqual(policy.read_text(), previous)
+                        return
                     if collector_error:
                         refresh.assert_called_once()
                         self.assertFalse((base / 'certificate-readiness.json').exists())
@@ -135,6 +148,7 @@ class BulkInventoryTests(unittest.TestCase):
                         'serial': '', 'device_name': '', 'device_model': '', 'device_owner': ''})
                     if certificates:
                         refresh.assert_called_once()
+                        self.assertEqual(refresh.call_args.args[1], certificate_token or 'test-token')
                         self.assertEqual(data['version'], 2)
                         self.assertEqual(data['certificates'][fp]['device_id'], 'fleet:0')
                         self.assertEqual(data['certificates'][fp]['observed_at'], observation['enrollment-0']['observed_at'])

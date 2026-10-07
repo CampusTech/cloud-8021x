@@ -296,7 +296,14 @@ The cache is built on boot and refreshed every five minutes with VLAN policy ena
    fleetctl user create --name 'RADIUS Lookup' --api-only   # prints the token
    ```
 
-2. Store the token in Secret Manager out-of-band (it never passes through tfvars/CI). This is the **same `fleet-api-token` secret the ACME webhook uses** — reuse it if you already have it.
+2. Store tokens in Secret Manager out-of-band (they never pass through tfvars/CI).
+   Keep `fleet-api-token` observer-only for host lookup and ACME authorization.
+   For certificate collection, create a separate secret containing the scoped
+   maintainer token and set `fleet_certificate_token_secret_id` to its secret ID.
+   Terraform grants the VM access; only the root-run collector reads its tmpfs
+   credential. Existing deployments default to `fleet-api-token` for both roles.
+
+   The following commands configure the observer token:
 
    First time (create the secret):
    ```bash

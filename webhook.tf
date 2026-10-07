@@ -179,6 +179,15 @@ resource "google_secret_manager_secret_iam_member" "fleet_api_token_radius" {
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
+# Optional scoped collector credential; observer consumers keep fleet-api-token.
+resource "google_secret_manager_secret_iam_member" "fleet_certificate_token_radius" {
+  count     = var.enable_fleet_certificate_inventory && var.fleet_certificate_token_secret_id != "fleet-api-token" ? 1 : 0
+  project   = google_project.this.project_id
+  secret_id = var.fleet_certificate_token_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.radius.email}"
+}
+
 # The webhook authorize endpoint step-ca calls — always loopback now.
 output "acme_webhook_url" {
   description = "URL step-ca uses to reach the on-VM authorizing webhook (loopback). Set acme_authorizing_webhook_url to this value. Empty if disabled."
