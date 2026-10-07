@@ -869,7 +869,10 @@ for i in $(seq 1 30); do
   curl -fsS -k https://127.0.0.1:8444/health >/dev/null 2>&1 && break
   sleep 1
 done
-since=$(systemctl show step-ca-rsa -p ActiveEnterTimestamp --value)
+# ActiveEnterTimestamp still points to the previous start during ExecStartPost.
+# Use the new process timestamp so a busy CA does not scan months of history.
+since=$(systemctl show step-ca-rsa -p ExecMainStartTimestamp --value)
+[ -n "$since" ] || { echo "CA start timestamp unavailable" >&2; exit 1; }
 if journalctl -u step-ca-rsa --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
   echo "stepca-rsa-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
   exit 1
