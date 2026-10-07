@@ -22,6 +22,9 @@ class BulkInventoryTests(unittest.TestCase):
     def test_missing_collector_credential_preserves_enforced_policy(self):
         self.run_bulk(False, certificates=True, certificate_token='')
 
+    def test_collector_receives_only_hosts_visible_to_its_credential(self):
+        self.run_bulk(False, certificates=True, certificate_token='collector-token', scoped=True)
+
     def test_failed_page_keeps_previous_complete_snapshot(self):
         self.run_bulk(fail_page=True)
 
@@ -62,7 +65,7 @@ class BulkInventoryTests(unittest.TestCase):
                       collector_error=TimeoutError('test-token'))
 
     def run_bulk(self, fail_page, certificates=False, enforced=True, collector_error=None,
-                 config_text=None, report_error=None, marker=False, certificate_token=None):
+                 config_text=None, report_error=None, marker=False, certificate_token=None, scoped=False):
         text = (ROOT / 'scripts/startup.sh').read_text().split("<< 'FLEETCACHEEOF'\n", 1)[1].split('\nFLEETCACHEEOF', 1)[0]
         body = text.split("python3 << 'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
@@ -95,6 +98,8 @@ class BulkInventoryTests(unittest.TestCase):
                              'device_mapping': [{'email': 'owner@example.com'}]})
 
             def respond(req, timeout):
+                if req.get_header('Authorization') == 'Bearer collector-token':
+                    return io.BytesIO(json.dumps({'hosts': hosts[:1] if scoped else hosts}).encode()) if 'page=0&' in req.full_url else io.BytesIO(b'{"hosts":[]}')
                 self.assertEqual(req.get_header('Authorization'), 'Bearer test-token')
                 if 'page=0&' in req.full_url:
                     return io.BytesIO(json.dumps({'hosts': hosts}).encode())
@@ -106,7 +111,7 @@ class BulkInventoryTests(unittest.TestCase):
             observation = {'enrollment-0': {'fingerprints': [fp], 'observed_at': int(time.time()) - 10,
                                            'trust_verified': True, 'expires_at': {fp: time.time() + 86400}}}
             errors = io.StringIO()
-            with patch('fleet_certificates.refresh', return_value=observation, side_effect=collector_error) as refresh, patch('inventory_policy.certificate_readiness', wraps=certificate_readiness, side_effect=report_error), patch('urllib.request.urlopen', side_effect=respond), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+            with patch('fleet_certificates.refresh', return_value=observation, side_effect=collector_error) as refresh, patch('inventory_policy.certificate_readiness', wraps=certificate_readiness, side_effect=report_error), patch('urllib.request.urlopen', side_effect=respond), patch('urllib.request.OpenerDirector.open', side_effect=respond), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
                 if fail_page:
                     with self.assertRaises(SystemExit):
                         exec(compile(body, 'fleet-bulk-script', 'exec'), {})
@@ -149,6 +154,8 @@ class BulkInventoryTests(unittest.TestCase):
                     if certificates:
                         refresh.assert_called_once()
                         self.assertEqual(refresh.call_args.args[1], certificate_token or 'test-token')
+                        if scoped:
+                            self.assertEqual([h['id'] for h in refresh.call_args.args[2]], [0])
                         self.assertEqual(data['version'], 2)
                         self.assertEqual(data['certificates'][fp]['device_id'], 'fleet:0')
                         self.assertEqual(data['certificates'][fp]['observed_at'], observation['enrollment-0']['observed_at'])

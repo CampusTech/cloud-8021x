@@ -2252,14 +2252,30 @@ try:
         if not isinstance(vlan_config, dict) or not isinstance(vlan_config.get("certificate_inventory", False), bool):
             raise ValueError("invalid certificate inventory configuration")
         policy_ready = not (marker or vlan_config.get("certificate_inventory", False))
-        from fleet_certificates import refresh
+        from fleet_certificates import refresh, _requester
         cert_max_age = vlan_config.get("certificate_max_age", 86400)
         ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
         with open("/run/fleet-certificate-credentials.json") as stream:
             collection_token = json.load(stream)["token"]
         if not isinstance(collection_token, str) or not collection_token.strip():
             raise ValueError("collector credential missing")
-        observations = refresh(base, collection_token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+        # A scoped maintainer must never receive the global observer's host set.
+        # Intersect complete authenticated lists, retaining all observer metadata.
+        collection_request = _requester(base, collection_token)
+        collection_ids = set()
+        collection_page = 0
+        while True:
+            path = (f"/api/v1/fleet/hosts?page={collection_page}&per_page={page_size}"
+                    "&device_mapping=true")
+            scoped_hosts = collection_request("GET", path)["hosts"]
+            if not isinstance(scoped_hosts, list):
+                raise ValueError("invalid collector host list")
+            collection_ids.update(host["id"] for host in scoped_hosts)
+            if len(scoped_hosts) < page_size:
+                break
+            collection_page += 1
+        collection_hosts = [host for host in all_hosts if host["id"] in collection_ids]
+        observations = refresh(base, collection_token, collection_hosts, "/var/lib/cloud-8021x/certificate-state.json",
                                now=now, max_age=cert_max_age, ca_file=ca_file,
                                acme_profile_uuids=(json.loads(Path("/etc/freeradius/3.0/fleet-acme-profiles.json").read_text())
                                                    if vlan_config.get("attested_acme") is True else []),
