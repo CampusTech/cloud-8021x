@@ -93,6 +93,16 @@ variable "ssh_allowed_cidrs" {
   default     = ["35.235.240.0/20"]
 }
 
+variable "armor_trusted_cidrs" {
+  description = "Office egress CIDRs exempt from the CA's Cloud Armor rate limit. Every device at a site shares one NAT IP, so enrollment bursts otherwise trip the per-IP ban. Max 10 (Cloud Armor per-rule limit)."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = length(var.armor_trusted_cidrs) <= 10
+    error_message = "Cloud Armor allows at most 10 src_ip_ranges per rule."
+  }
+}
+
 variable "server_cert_cn" {
   description = "Common Name for the RADIUS server certificate (must match Jamf WiFi profile 'Trusted Server Certificate Names')"
   type        = string
