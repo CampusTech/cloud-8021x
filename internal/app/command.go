@@ -34,12 +34,13 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
-	ConfigFile   string
-	VerifiedLeaf *VerifiedLeafOptions
-	Debug        bool
-	DryRun       bool
-	Output       io.Writer
-	Logger       *logrus.Logger
+	SourceCandidateSHA256 string
+	ConfigFile            string
+	VerifiedLeaf          *VerifiedLeafOptions
+	Debug                 bool
+	DryRun                bool
+	Output                io.Writer
+	Logger                *logrus.Logger
 }
 type Services interface {
 	Run(context.Context, Operation, config.Config, RunOptions) error
@@ -106,6 +107,7 @@ func NewCommand(options Options) *cobra.Command {
 	}
 	operation := func(name string, op Operation) *cobra.Command {
 		var leaf VerifiedLeafOptions
+		var sourceDigest string
 		cmd := &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := load(cmd)
 			if err != nil {
@@ -115,13 +117,16 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
 			}
 			return options.Services.Run(cmd.Context(), op, cfg, run)
 		}}
+		if op == OperationSourcesApply {
+			cmd.Flags().StringVar(&sourceDigest, "candidate-sha256", "", "Require this canonical claimed candidate digest before privileged I/O")
+		}
 		if op == OperationRadiusVerifyLeaf {
 			cmd.Use = name + " [certificate-file session-token]"
 			cmd.Flags().StringVar(&leaf.CertificateFile, "certificate-file", "", "Completed TLS verification leaf PEM filename")

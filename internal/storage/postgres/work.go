@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
@@ -28,6 +29,9 @@ func (s *Store) Reserve(ctx context.Context, id, kind string, payload json.RawMe
 	return nil
 }
 func (s *Store) Claim(ctx context.Context, kind, owner string, lease time.Duration) (*jobs.Claim, error) {
+	if strings.HasPrefix(kind, "sources:") {
+		return nil, errors.New("source work requires ClaimSource")
+	}
 	if kind == "" || owner == "" || len(owner) > 128 || lease < time.Second || lease > 10*time.Minute {
 		return nil, errors.New("invalid work claim")
 	}

@@ -78,9 +78,11 @@ const (
 )
 
 type NetworkScopeResult struct {
-	ScopeID    string
-	Status     CapabilityStatus
-	ObservedAt Timestamp
+	VLANStatus     CapabilityStatus
+	VLANObservedAt Timestamp
+	ScopeID        string
+	Status         CapabilityStatus
+	ObservedAt     Timestamp
 }
 type NetworkSnapshot struct {
 	ProviderID     string
@@ -98,8 +100,12 @@ type Authenticator struct {
 	ID          string
 	SiteID      string
 	HardwareMAC string
-	Name        string
-	Ports       []string
+	// MACs are exact advertised aliases, scoped to this authenticator.
+	MACs []string
+	// InferredMACs are explicitly heuristic display aliases, lower priority than exact MACs.
+	InferredMACs []string
+	Name         string
+	Ports        []string
 }
 type VLANMetadata struct {
 	SiteID string

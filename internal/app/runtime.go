@@ -17,6 +17,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/identity"
+	"github.com/CampusTech/cloud-8021x/internal/network"
 	"golang.org/x/sys/unix"
 )
 
@@ -34,15 +35,26 @@ func (o VerifiedLeafOptions) Validate() error {
 	return nil
 }
 
-type RuntimeServices struct{}
+type RuntimeServices struct{ SourceDependencies SourceDependencies }
 
 func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 
 // Later orchestration tasks register the remaining concrete operations. Unimplemented
 // operations remain explicit errors; verify-leaf is already a real executable path.
-func (*RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
+func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if op == OperationSourcesApply {
+		return applySources(ctx, o, services.SourceDependencies)
+	}
+	if op == OperationSitesSync {
+		service, err := NetworkServiceFromConfig(cfg, new(network.Store), o.DryRun, nil)
+		if err != nil {
+			return err
+		}
+		service.Output = o.Output
+		return service.Sync(ctx, o.DryRun)
 	}
 	if op == OperationInventorySync {
 		service, cleanup, err := InventoryServiceFromConfig(ctx, cfg, new(domain.SnapshotStore), o.DryRun, nil)

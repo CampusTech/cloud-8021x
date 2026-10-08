@@ -147,3 +147,36 @@ The optional neutral repository contract lives in `internal/inventory`.
 Schema version 2 adds only partial indexes for recent and pending collection
 keys; reviewed v1 installations upgrade under the existing migration lock.
 Accounting/native contracts and privileges are unchanged.
+
+## Discovered RADIUS source work (Task 5)
+
+Source work uses `kind=sources:radius-primary` or `sources:radius-secondary`.
+`ClaimSource(ctx, node, owner, lease)` is the only supported claim API for these
+kinds; generic `Claim` rejects them. An advisory transaction lock serializes the
+fixed node across candidate revisions. Active leases/started attempts and all
+unresolved quarantine block another revision; expired started attempts become
+retained uncertainty. Primary and secondary are independent resources. Expired
+unstarted leases may be reclaimed with a new fenced generation. No schema change
+is required.
+
+`jobs/network.ApplyJob` reserves the exact candidate JSON, invokes ClaimSource,
+commits StartAttempt before external I/O, and passes the **persisted claimed**
+candidate to its callback. The installed callback must stage those bytes only in
+the configured private candidate path and invoke the fixed root helper with
+`--candidate-sha256` of canonical `json.Marshal([]domain.SourceCandidate)` bytes.
+A concurrently replaced candidate cannot be applied under another claim. Unknown
+start/finish or application outcomes never authorize automatic resubmission.
+
+Before calling `ReconcileSuccess` for a source work ID/generation, obtain actual
+root-authenticated `sources.Applier.ReconcileApplied` evidence: fresh exact pinned
+controller set, protected config identity, byte-exact expected client include,
+original public applied state, fixed node firewall identity/ranges and actual
+service health. Persist that evidence and retain original attempts/quarantine;
+reconciliation neither performs an apply nor refreshes source TTL. If exact
+success cannot be proven, leave the source resource blocked for explicit recovery.
+
+Task 8/9 additionally own the shared backend-maintenance gate and live peer
+readiness before root-started FreeRADIUS restarts. The source-specific database
+claim isolates each firewall node; it is not permission to restart both HA nodes
+simultaneously. Static configured clients remain independent of dynamic-source
+outages and TTL.

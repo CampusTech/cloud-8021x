@@ -139,13 +139,15 @@ type Network struct {
 	Discovery Discovery         `yaml:"discovery"`
 }
 type NetworkProvider struct {
-	ID         string        `yaml:"id"`
-	Kind       string        `yaml:"kind"`
-	BaseURL    string        `yaml:"base_url"`
-	Credential SecretRef     `yaml:"credential"`
-	Scopes     []string      `yaml:"scopes"`
-	Timeout    time.Duration `yaml:"timeout"`
-	CacheFile  string        `yaml:"cache_file"`
+	ConsoleID      string        `yaml:"console_id"`
+	OrganizationID string        `yaml:"organization_id"`
+	ID             string        `yaml:"id"`
+	Kind           string        `yaml:"kind"`
+	BaseURL        string        `yaml:"base_url"`
+	Credential     SecretRef     `yaml:"credential"`
+	Scopes         []string      `yaml:"scopes"`
+	Timeout        time.Duration `yaml:"timeout"`
+	CacheFile      string        `yaml:"cache_file"`
 }
 type Location struct {
 	ID          string `yaml:"id"`
@@ -153,10 +155,21 @@ type Location struct {
 	SiteID      string `yaml:"site_id"`
 	VLANEnabled bool   `yaml:"vlan_enabled"`
 }
+type SourceBinding struct {
+	ProviderID string `yaml:"provider_id"`
+	ClientID   string `yaml:"client_id"`
+}
+type SourceFirewall struct {
+	Project string `yaml:"project"`
+	Node    string `yaml:"node"`
+	Network string `yaml:"network"`
+}
 type Discovery struct {
-	Enabled       bool          `yaml:"enabled"`
-	MaxAge        time.Duration `yaml:"max_age"`
-	CandidateFile string        `yaml:"candidate_file"`
+	Bindings      []SourceBinding `yaml:"bindings"`
+	Firewall      SourceFirewall  `yaml:"firewall"`
+	Enabled       bool            `yaml:"enabled"`
+	MaxAge        time.Duration   `yaml:"max_age"`
+	CandidateFile string          `yaml:"candidate_file"`
 }
 type RadiusClient struct {
 	ID               string    `yaml:"id"`
@@ -509,6 +522,9 @@ func (c Config) Validate() error {
 			return err
 		}
 		providers[p.ID] = p
+	}
+	if err := validateNetworkDetails(c); err != nil {
+		return err
 	}
 	locations := map[string]Location{}
 	sites := map[string]bool{}
