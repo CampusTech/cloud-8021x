@@ -412,3 +412,55 @@ precondition. README documents these prerequisites. All previous Task 8/9/10
 installation, lifecycle, release and buffer-durability boundaries remain in force.
 Native/policy processes are stopped between modes, and the task-owned PG fixture
 was returned to stopped state with `docker stop cloud8021x-task6-pg-c7d492`.
+
+## Review fix round 2 — base f5b6a45a76698fd10ae4a52316274da50e18d755
+
+Addressed the remaining Important 2 assertion gap identified in
+`/private/tmp/cloud8021x-task6-fix-review/report.md`. The previous duplicate gate
+allowed the three distinct Start/Interim/Stop reports to collapse into one ledger
+observation because its expected count came from the observed IDs. The corrected
+development-only gate validates the three-status fixture, requires a distinct
+nonempty observation for each of its three expected replay identities, and checks
+observation/outbox counts against the manifest identity count. Each pair of
+duplicate intake copies must still share the same observation. This expectation
+is specific to these three distinct semantic reports; no product semantic dedup
+or uniqueness rule for legitimate NAS retries/different native IDs was changed.
+
+RED, before changing the gate:
+
+```
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_native_replay_gate.py
+PYTHONDONTWRITEBYTECODE=1 python3 /private/tmp/cloud8021x-task6-fix-review/cross_identity_gate_probe.py
+```
+
+The new `test_duplicate_gate_rejects_distinct_status_reports_collapsing` failed
+with `AssertionError not raised` (nine tests, one failure). The supplied probe
+exited 1 after the gate falsely printed success for one collapsed observation
+and one outbox item. GREEN after the fix: the exact same commands pass; all nine
+tests succeed, and the supplied probe reports `PASS: duplicate gate rejected
+cross-identity collapse`. Covering tests also require both expected table counts
+and accept three distinct observations with deduplicated copies.
+
+Only the changed actual native scenario was rerun, without rebuilding Go or the
+unchanged native package family:
+
+```
+docker cp tests/native_radius_container.py cloud8021x-daemon-fr-c7d492:/task6-native.py
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py outage
+docker start cloud8021x-task6-pg-c7d492
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py replay-duplicate
+docker stop cloud8021x-task6-pg-c7d492
+```
+
+Fresh session `outage-1da235e7f4a50c57` produced three ACKed, retained status
+records with the disposable database stopped. After recovery, `replay-duplicate`
+exited 0: exact original receipt/source/replay identities survived, matching
+pending work drained, two intake copies per identity shared their observation,
+and the three distinct reports produced three observations and three outbox
+items. The disposable database is stopped again; native/policy processes exited
+through the existing harness cleanup.
+
+`PYTHONPYCACHEPREFIX=/private/tmp/task6-fix-python-cache python3 -m py_compile
+tests/native_radius_container.py tests/test_native_replay_gate.py` and
+`git diff --check` passed. No Go files, exported APIs, native packages, product
+ledger behavior, or installation/lifecycle boundaries changed in this round.

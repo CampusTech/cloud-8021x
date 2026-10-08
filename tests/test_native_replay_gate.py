@@ -51,5 +51,31 @@ class ReplayGateTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError,'missing ACKed packet'):
                 GATE.assert_packets_delivered([self.expected])
 
+    def duplicate_fixture(self,observations,counts):
+        records=[dict(self.expected,replay_id=char*64,status=status,packet_id=str(i))
+                 for i,(char,status) in enumerate(zip('abc',['Start','Interim-Update','Stop']))]
+        original=[dict(record,processed=True,observation_id=observation)
+                  for record,observation in zip(records,observations)]
+        duplicates=[row.copy() for row in original for _ in range(2)]
+        (GATE.ROOT/'replay-expectations.json').write_text(json.dumps({'records':records,'files':['retained.detail']}))
+        (GATE.ROOT/'retained.detail').write_text('synthetic retained test record\n')
+        with mock.patch.object(GATE,'run'),mock.patch.object(GATE,'write'),\
+             mock.patch.object(GATE,'pending_replay_ids',return_value=set()),\
+             mock.patch.object(GATE,'intake_rows',side_effect=[original,original,original,duplicates,duplicates]),\
+             mock.patch.object(GATE,'postgres_json',return_value=counts):
+            GATE.replay_test(duplicate=True)
+
+    def test_duplicate_gate_rejects_distinct_status_reports_collapsing(self):
+        with self.assertRaisesRegex(AssertionError,'distinct status reports'):
+            self.duplicate_fixture(['collapsed-observation']*3,{'observations':1,'outbox':1})
+
+    def test_duplicate_gate_requires_each_expected_observation_and_outbox(self):
+        for counts in [{'observations':2,'outbox':3},{'observations':3,'outbox':2}]:
+            with self.subTest(counts=counts),self.assertRaisesRegex(AssertionError,'immutable event/outbox'):
+                self.duplicate_fixture(['start','interim','stop'],counts)
+
+    def test_duplicate_gate_accepts_three_reports_with_deduplicated_copies(self):
+        self.duplicate_fixture(['start','interim','stop'],{'observations':3,'outbox':3})
+
 
 if __name__=='__main__':unittest.main()

@@ -116,6 +116,8 @@ def replay_test(duplicate=False):
     try:
         rows=wait_replayed(records)
         if duplicate:
+            expected_count=len({record['replay_id'] for record in records})
+            assert len(records)==expected_count==3 and {record['status'] for record in records}=={'Start','Interim-Update','Stop'},'duplicate fixture requires three distinct status reports'
             run('runuser','-u','cloud8021x','--','/task6-native-fixture','process',str(CFG))
             before=intake_rows(records)
             assert all(row['processed'] and row['observation_id'] for row in before),'original replay did not reach shared ledger'
@@ -125,15 +127,19 @@ def replay_test(duplicate=False):
             wait_replayed(records,2)
             run('runuser','-u','cloud8021x','--','/task6-native-fixture','process',str(CFG))
             rows=intake_rows(records)
+            ids=[]
             for record in records:
                 copies=[row for row in rows if row['replay_id']==record['replay_id']]
                 assert len(copies)==2 and all(row['processed'] for row in copies)
                 assert len({row['observation_id'] for row in copies})==1 and copies[0]['observation_id'],'shared ledger did not deduplicate replay'
-            ids=sorted({row['observation_id'] for row in rows})
+                ids.append(copies[0]['observation_id'])
+            # These fixture statuses are distinct semantic reports. This is not
+            # a uniqueness rule for native IDs on legitimate NAS retransmissions.
+            assert len(set(ids))==expected_count,'distinct status reports collapsed into one observation'
             counts=postgres_json("""SELECT json_build_object(
                 'observations',(SELECT count(*) FROM ledger.observations WHERE event_id IN (SELECT jsonb_array_elements_text(:'ids'::jsonb))),
                 'outbox',(SELECT count(*) FROM ledger.work WHERE id IN (SELECT 'accounting:'||jsonb_array_elements_text(:'ids'::jsonb))));""",ids=ids)
-            assert counts=={'observations':len(ids),'outbox':len(ids)},('duplicate immutable event/outbox',counts)
+            assert counts=={'observations':expected_count,'outbox':expected_count},('duplicate immutable event/outbox',counts)
         print('PASS exact retained replay receipt/source/identity, pending drain'+(' and shared-ledger duplicate/outbox checks' if duplicate else ''),flush=True)
     finally:radius.terminate();radius.wait(timeout=3)
 
