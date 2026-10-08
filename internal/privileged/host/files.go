@@ -18,7 +18,8 @@ import (
 )
 
 var fixedFiles = map[string]bool{
-	legacyPolicySnapshot: true, daemonPolicySnapshot: true,
+	"/etc/cloud-8021x/legacy-display.json": true,
+	legacyPolicySnapshot:                   true, daemonPolicySnapshot: true,
 	"/etc/cloud-8021x/sources/clients.conf": true,
 	transactionRoot + "/current.json":       true,
 	legacyClassKey:                          true, "/etc/systemd/system/freeradius.service.d/accounting-key.conf": true,
@@ -123,7 +124,11 @@ func stateParentDescriptor(path string, owner int) (int, error) {
 	return openParentDescriptor(path, owner, false)
 }
 func snapshotState(file File) (SavedFile, error) {
-	return snapshotUsing(file, stateParentDescriptor)
+	saved, e := snapshotUsing(file, stateParentDescriptor)
+	if errors.Is(e, unix.ENOENT) {
+		return saved, nil
+	}
+	return saved, e
 }
 func Snapshot(file File) (SavedFile, error) {
 	return snapshotUsing(file, func(path string, owner int) (int, error) { return parentDescriptor(path, owner, false) })

@@ -45,6 +45,15 @@ func (s *Store) ImportLegacyBundle(ctx context.Context, id string, data []byte) 
 	if !ok || scope.store != s || !scope.active.Load() {
 		return false, errors.New("root migration scope required")
 	}
+	if b.FreshAbsenceSHA256 != "" {
+		var ready bool
+		if e = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bootstrap_private.fresh_inventory i JOIN bootstrap_private.fresh_seeds f USING(transition,node) WHERE i.transition=$1 AND i.node=$2 AND f.checksum=$3 AND i.bundle_sha256=f.checksum AND i.config_sha256=f.config_sha256)`, id, b.Node, bundleDigest(data)).Scan(&ready); e != nil {
+			return false, safeError(e)
+		}
+		if !ready {
+			return false, errors.New("fresh initial observer authority not durably proven")
+		}
+	}
 	checksum := bundleDigest(data)
 	return s.ImportOnce(ctx, "state:"+id+":"+b.Node, checksum, func(ctx context.Context, tx pgx.Tx) error {
 		var enabled, blocked bool

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/network"
@@ -20,6 +21,8 @@ import (
 // retain their original JSON, including numeric precision and null ambiguity.
 // Class key BYTES stay in the protected local archive, never in PostgreSQL.
 type Bundle struct {
+	VLANSources         *LegacyFile     `json:"vlan_sources,omitempty"`
+	FreshAbsenceSHA256  string          `json:"fresh_absence_sha256,omitempty"`
 	Version             int             `json:"version"`
 	Node                string          `json:"node"`
 	Policy              json.RawMessage `json:"policy"`
@@ -41,8 +44,11 @@ type LegacyFile struct {
 	Data       json.RawMessage `json:"data"`
 }
 type LegacySQL struct {
-	Status string         `json:"status"`
-	Rows   []LegacySQLRow `json:"rows,omitempty"`
+	SessionTimeZone string         `json:"session_time_zone,omitempty"`
+	SystemTimeZone  string         `json:"system_time_zone,omitempty"`
+	ServerVersion   string         `json:"server_version,omitempty"`
+	Status          string         `json:"status"`
+	Rows            []LegacySQLRow `json:"rows,omitempty"`
 }
 
 // Explicit operator projection of retained radacct. NAS address is not asserted
@@ -209,6 +215,9 @@ func DecodeBundle(raw []byte) (Bundle, error) {
 	if e != nil || b.FingerprintEnforced && policy.Version != 2 {
 		return bad()
 	}
+	if b.FreshAbsenceSHA256 != "" && (!digestPattern.MatchString(b.FreshAbsenceSHA256) || !bytes.Equal(b.Policy, UnavailableInventory()) || !b.UsageAbsent || b.SQL.Status != "absent" || len(b.Certificates) > 0 || len(b.Readiness) > 0 || len(b.Devices) > 0 || b.UniFi != nil || b.Meraki != nil || len(b.VLANs) > 0 || len(b.Discovery) > 0 || b.FingerprintEnforced || b.VLANSources != nil) {
+		return bad()
+	}
 	if b.UsageAbsent {
 		if len(b.Usage) != 0 && string(b.Usage) != "null" {
 			return bad()
@@ -265,6 +274,17 @@ func DecodeBundle(raw []byte) (Bundle, error) {
 				if e != nil || p != p.Masked() {
 					return bad()
 				}
+			}
+		}
+	}
+	if b.VLANSources != nil {
+		var sources map[string]LegacyVLANSource
+		if originalTime(b.VLANSources.ModifiedAt) != nil || domain.DecodeJSONStrict(b.VLANSources.Data, &sources) != nil || len(sources) > 128 {
+			return bad()
+		}
+		for office, source := range sources {
+			if !network.Name(office) || !source.Valid() {
+				return bad()
 			}
 		}
 	}
@@ -338,7 +358,12 @@ func validateSQL(s LegacySQL) error {
 			if at != nil {
 				raw, _ := json.Marshal(*at)
 				if _, e := ReceiptTime(raw); e != nil {
-					return e
+					if s.SessionTimeZone == "" || s.SystemTimeZone == "" || len(s.SessionTimeZone) > 128 || len(s.SystemTimeZone) > 128 || s.ServerVersion == "" {
+						return errors.New("original SQL timezone evidence unavailable")
+					}
+					if _, e = time.Parse("2006-01-02 15:04:05.999999", *at); e != nil {
+						return errors.New("invalid original database datetime")
+					}
 				}
 			}
 		}
@@ -352,4 +377,37 @@ func validateSQL(s LegacySQL) error {
 func LegacyCollectionScope(source string, id uint64, uuid string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSuffix(source, "/") + "\x00" + strconv.FormatUint(id, 10) + "\x00" + uuid))
 	return hex.EncodeToString(sum[:])
+}
+
+// UnavailableInventory has no observation time or enrolled identity. It cannot
+// satisfy freshness/READY and is never an authoritative empty provider response.
+func UnavailableInventory() []byte {
+	return []byte(`{"version":2,"updated_at":0,"identities":{},"certificates":{},"hardware_serials":{}}`)
+}
+func FreshBundle(node, class, absence string) ([]byte, error) {
+	b := Bundle{Version: 1, Node: node, Policy: UnavailableInventory(), FreshAbsenceSHA256: absence, ClassKeySHA256: class, UsageAbsent: true, SQL: LegacySQL{Status: "absent"}}
+	raw, e := json.Marshal(b)
+	if e != nil {
+		return nil, e
+	}
+	_, e = DecodeBundle(raw)
+	return raw, e
+}
+
+type LegacyVLANSource struct {
+	UniFiHostID     string `json:"unifi_host_id,omitempty"`
+	UniFiSiteID     string `json:"unifi_site_id,omitempty"`
+	MerakiNetworkID string `json:"meraki_network_id,omitempty"`
+}
+
+func (s LegacyVLANSource) Valid() bool {
+	if (s.UniFiHostID == "") == (s.MerakiNetworkID == "") || s.UniFiSiteID != "" && s.UniFiHostID == "" {
+		return false
+	}
+	for _, v := range []string{s.UniFiHostID, s.UniFiSiteID, s.MerakiNetworkID} {
+		if v != "" && !network.Name(v) {
+			return false
+		}
+	}
+	return true
 }

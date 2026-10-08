@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
@@ -124,7 +125,7 @@ func (s *Store) ReconcileHistoricalSource(ctx context.Context, transition, node,
 		return safeError(e)
 	}
 	var payload []byte
-	if e = tx.QueryRow(ctx, `SELECT payload FROM ledger.work WHERE id=$1 AND kind=$2 AND generation=$3 AND state='quarantine' FOR UPDATE`, id, "sources:"+node, generation).Scan(&payload); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT payload FROM ledger.work WHERE id=$1 AND kind=$2 AND generation=$3 AND (state='quarantine' OR (state='started' AND lease_until<=clock_timestamp())) AND NOT EXISTS(SELECT 1 FROM bootstrap_private.source_history h WHERE h.work_id=ledger.work.id AND h.generation=ledger.work.generation) FOR UPDATE`, id, "sources:"+node, generation).Scan(&payload); e != nil {
 		return errors.New("exact quarantined source attempt unavailable")
 	}
 	evidence, e := verify(ctx, payload)
@@ -133,6 +134,9 @@ func (s *Store) ReconcileHistoricalSource(ctx context.Context, transition, node,
 	}
 	if len(evidence) == 0 || len(evidence) > 1<<20 || !json.Valid(evidence) || string(evidence) == "null" {
 		return errors.New("invalid protected historical proof")
+	}
+	if _, e = tx.Exec(ctx, `INSERT INTO bootstrap_private.source_history(work_id,generation,transition,node,payload,evidence) VALUES($1,$2,$3,$4,$5,$6)`, id, generation, transition, node, payload, []byte(evidence)); e != nil {
+		return safeError(e)
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO ledger.reconciliations(work_id,generation,evidence) VALUES($1,$2,$3)`, id, generation, []byte(evidence)); e != nil {
 		return safeError(e)
@@ -144,4 +148,40 @@ func (s *Store) ReconcileHistoricalSource(ctx context.Context, transition, node,
 		return ErrUncertain
 	}
 	return nil
+}
+
+// HistoricalSourceRecorded is proof-only. The root-private row cannot be forged
+// by the runtime role. An absent row is useful only with the exact unresolved
+// original and independent physical helper/installed-state proof at the caller.
+func (s *Store) HistoricalSourceRecorded(ctx context.Context, transition, node, id string, generation int64, payload, evidence json.RawMessage) (string, error) {
+	if generation < 1 || len(payload) > 1<<20 || len(evidence) > 1<<20 || !json.Valid(payload) || !json.Valid(evidence) || (node != "radius-primary" && node != "radius-secondary") {
+		return "", errors.New("invalid source history identity")
+	}
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	var state string
+	var expired, history, exact bool
+	e := s.pool.QueryRow(ctx, `SELECT w.state,coalesce(w.lease_until<=clock_timestamp(),false),h.work_id IS NOT NULL,coalesce(h.transition=$4 AND h.node=$2 AND h.payload=$5::jsonb AND h.evidence=$6::jsonb,false) FROM ledger.work w LEFT JOIN bootstrap_private.source_history h ON h.work_id=w.id AND h.generation=w.generation WHERE w.id=$1 AND w.kind='sources:'||$2 AND w.generation=$3 AND w.payload=$5::jsonb AND EXISTS(SELECT 1 FROM bootstrap_private.writer_fences f WHERE f.transition=$4 AND f.node=$2)`, id, node, generation, transition, []byte(payload), []byte(evidence)).Scan(&state, &expired, &history, &exact)
+	if e != nil {
+		return "", safeError(e)
+	}
+	if state == "succeeded" && history && exact {
+		return "committed", nil
+	}
+	if !history && (state == "quarantine" || state == "started" && expired) {
+		return "uncommitted", nil
+	}
+	return "", errors.New("unknown or mismatched original source history")
+}
+
+// SourceMaintenanceAttempt exposes only the current fixed source operation's
+// journal identity to its original protected local receipt.
+func (s *Store) SourceMaintenanceAttempt(ctx context.Context, operation string) (int64, error) {
+	scope, ok := ctx.Value(maintenanceScopeKey{}).(*maintenanceScope)
+	if !ok || scope.store != s || !scope.active.Load() || (!strings.HasPrefix(operation, "sources-apply:") && !strings.HasPrefix(operation, "source-history:")) {
+		return 0, errors.New("owned source operation required")
+	}
+	var id int64
+	e := s.pool.QueryRow(ctx, `SELECT id FROM bootstrap_private.maintenance WHERE id=$1 AND operation=$2 AND outcome='started' AND expires_at>clock_timestamp()`, scope.id, operation).Scan(&id)
+	return id, safeError(e)
 }

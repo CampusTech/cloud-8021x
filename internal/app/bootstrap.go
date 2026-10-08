@@ -20,6 +20,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/adapters/gcp"
 	"github.com/CampusTech/cloud-8021x/internal/adapters/stepca"
 	"github.com/CampusTech/cloud-8021x/internal/config"
+	"github.com/CampusTech/cloud-8021x/internal/migration"
 	"github.com/CampusTech/cloud-8021x/internal/privileged/host"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
 	"github.com/CampusTech/cloud-8021x/internal/templates/systemd"
@@ -29,7 +30,7 @@ func bootstrapPlan(cfg config.Config, o RunOptions, renew bool) error {
 	if e := cfg.ValidateBootstrap(); e != nil {
 		return e
 	}
-	steps := []string{"validate-protected-artifact-manifest", "fetch-exact-secret-versions", "verify-cloud-sql-ca", "verify-schema-3-and-ca-role-isolation", "shared-maintenance", "adopt-or-recover-preserved-ca", "validate-server-certificate", "persist-last-known-good", "validate-native-config", "authenticate-peer-readiness", "activate-and-verify"}
+	steps := []string{"validate-protected-artifact-manifest", "fetch-exact-secret-versions", "verify-cloud-sql-ca", "verify-schema-3-and-ca-role-isolation", "require-both-protected-writer-fences", "preflight-original-state-and-producer-quiescence", "prepare-exact-legacy-capture-or-fresh-observer-snapshot", "shared-maintenance", "adopt-or-recover-preserved-ca", "validate-server-certificate", "persist-last-known-good", "validate-native-config", "authenticate-peer-readiness", "activate-and-verify"}
 	if o.FenceOnly {
 		steps = []string{"validate-protected-incoming-artifact-and-config", "fetch-exact-secret-versions", "verify-schema-and-role-isolation", "shared-maintenance", "fence-only-local-legacy-writers", "persist-protected-node-receipt", "prepared-waiting-no-activation"}
 	}
@@ -205,8 +206,16 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			if e != nil {
 				return "", e
 			}
-			if _, e = host.CaptureLegacyState(cfg.StateTransition, node, credentials[cfg.Policy.ClassSigningKey.File]); e != nil {
+			if fresh, e := host.HasFreshPreparation(cfg.StateTransition); e != nil {
 				return "", e
+			} else if fresh {
+				raw, e := host.CaptureFreshState(cfg.StateTransition, node, hash, credentials[cfg.Policy.ClassSigningKey.File])
+				if e != nil {
+					return "", e
+				}
+				if e = repository.RecordFreshSeed(ctx, cfg.StateTransition, hash, raw); e != nil {
+					return "", e
+				}
 			}
 			return receipt, nil
 		})
@@ -222,10 +231,42 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 	if cfg.Paths.InventoryFile != "/var/lib/cloud-8021x/inventory.json" || cfg.Paths.DowngradeGuardFile != "/var/lib/cloud-8021x/fingerprint-enforced" {
 		return errors.New("protected adoption requires fixed policy and guard paths")
 	}
-	adoption, e := host.ReadLegacyPolicySnapshot(cfg.Policy.IdentityMode)
+	var freshAdoption []byte
+	installedBefore, e := host.KnownInstallation()
 	if e != nil {
 		return e
 	}
+	originalFresh, e := host.ReadCapturedLegacyState(cfg.StateTransition, cfg.InstanceID, credentials[cfg.Policy.ClassSigningKey.File])
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	if installedBefore && e != nil {
+		return errors.New("installed host original capture unavailable")
+	}
+	fresh := false
+	if e == nil {
+		captured, e := migration.DecodeBundle(originalFresh)
+		if e != nil {
+			return e
+		}
+		fresh = captured.FreshAbsenceSHA256 != ""
+	}
+	if !installedBefore {
+		if fresh {
+			freshAdoption, e = prepareFreshInventory(ctx, cfg, credentials, repository, originalFresh, o.MaintenanceAttempt)
+		} else {
+			e = prepareLegacyCapture(ctx, cfg, credentials, repository, o.MaintenanceAttempt)
+		}
+		if e != nil {
+			return e
+		}
+		if o.MaintenanceAttempt > 0 {
+			return nil
+		}
+	} else if o.MaintenanceAttempt > 0 {
+		return errors.New("preparation recovery cannot select an installed host")
+	}
+	var adoption []byte
 	operation := "bootstrap"
 	if renew {
 		operation = "certificates renew"
@@ -238,7 +279,27 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if _, e = host.RevalidateLegacyWriterFence(ctx, cfg.StateTransition, cfg.InstanceID, writerLayout); e != nil {
 			return e
 		}
-		if _, e = host.ReadCapturedLegacyState(cfg.StateTransition, cfg.InstanceID, credentials[cfg.Policy.ClassSigningKey.File]); e != nil {
+		original, e := host.ReadCapturedLegacyState(cfg.StateTransition, cfg.InstanceID, credentials[cfg.Policy.ClassSigningKey.File])
+		if e != nil {
+			return e
+		}
+		captured, e := migration.DecodeBundle(original)
+		if e != nil {
+			return e
+		}
+		installed, e := host.KnownInstallation()
+		if e != nil {
+			return e
+		}
+		if captured.FreshAbsenceSHA256 != "" && !installed {
+			adoption = freshAdoption
+			if len(adoption) == 0 {
+				return errors.New("verified fresh preparation required before bootstrap")
+			}
+		} else {
+			adoption, e = host.ReadLegacyPolicySnapshot(cfg.Policy.IdentityMode)
+		}
+		if e != nil {
 			return e
 		}
 		ecSigner, e := cloud.Signer(ctx, cfg.Bootstrap.ECKMS)
@@ -419,6 +480,20 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return err
 		}
 		files = append(files, adoptionFiles...)
+		legacyRows, e := deriveLegacyDisplay(cfg, captured)
+		if e != nil {
+			return e
+		}
+		_, legacyHash, e := transitionBinding(cfg)
+		if e != nil {
+			return e
+		}
+		legacyData, e := json.Marshal(legacyDisplayDocument{ConfigSHA256: legacyHash, BundleSHA256: stateDigest(original), Provenance: "legacy-config-bound", VLANs: legacyRows})
+		if e != nil {
+			return e
+		}
+		files = append(files, host.File{Path: legacyDisplayPath, Data: legacyData, Mode: 0644})
+
 		collectorFiles, err := host.CollectorFiles(cfg, credentials["/run/cloud-8021x-collector/datadog-api-key"], accounts)
 		if err != nil {
 			return err

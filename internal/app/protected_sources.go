@@ -79,6 +79,11 @@ func protectedSources(ctx context.Context, cfg config.Config, o RunOptions) erro
 		return e
 	}
 	defer repository.Close()
+	unlock, e := host.AcquireWriterOperation()
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	if o.SourceWorkID != "" {
 		return recoverSourceAttempt(ctx, cfg, o, values, cloud, repository)
 	}
@@ -105,6 +110,13 @@ func protectedSources(ctx context.Context, cfg config.Config, o RunOptions) erro
 			return e
 		}
 		return gate.With(ctx, operation, func(ctx context.Context) error {
+			attempt, e := repository.SourceMaintenanceAttempt(ctx, operation)
+			if e != nil {
+				return e
+			}
+			if e = host.PrepareSourceAttempt(operation, attempt); e != nil {
+				return e
+			}
 			verifier, ops, e := protectedSourceOperations(ctx, cfg, values, cloud, repository)
 			if e != nil {
 				return e
@@ -223,7 +235,7 @@ func recoverSourceAttempt(ctx context.Context, cfg config.Config, o RunOptions, 
 	if e != nil {
 		return e
 	}
-	if work.State != "quarantine" || work.Generation != o.SourceGeneration {
+	if (work.State != "quarantine" && work.State != "started" && work.State != "succeeded") || work.Generation != o.SourceGeneration {
 		return errors.New("exact quarantined source generation required")
 	}
 	operation, e := sourceMaintenanceIdentity(cfg, o.SourceWorkID, o.SourceGeneration, work.Payload)
@@ -260,20 +272,56 @@ func recoverSourceAttempt(ctx context.Context, cfg config.Config, o RunOptions, 
 		return json.Marshal(evidence)
 	}
 	return network.WithPrivateLock(ctx, filepath.Join(filepath.Dir(sources.ClientsFile), "apply.lock"), func() error {
+		history := "source-history:" + strings.TrimPrefix(operation, "sources-apply:")
+		if e := host.ProveSourceAttemptStopped(operation, 0); e != nil {
+			return e
+		}
+		evidence, e := verify(ctx, work.Payload)
+		if e != nil {
+			return e
+		}
+		status, e := repository.HistoricalSourceRecorded(ctx, cfg.StateTransition, cfg.InstanceID, o.SourceWorkID, o.SourceGeneration, work.Payload, evidence)
+		if e != nil {
+			return e
+		}
 		if o.MaintenanceAttempt > 0 {
-			if e := repository.ReconcileMaintenance(ctx, o.MaintenanceAttempt, func(ctx context.Context, m postgres.MaintenanceEvidence) error {
-				if m.Operation != operation || m.Installation != "" {
+			if e = repository.ReconcileMaintenance(ctx, o.MaintenanceAttempt, func(ctx context.Context, m postgres.MaintenanceEvidence) error {
+				if m.Installation != "" || (m.Operation != operation && m.Operation != history) {
 					return errors.New("foreign source maintenance attempt")
 				}
-				_, e := verify(ctx, work.Payload)
-				return e
+				if e := host.ProveSourceAttemptStopped(m.Operation, o.MaintenanceAttempt); e != nil {
+					return e
+				}
+				current, e := repository.HistoricalSourceRecorded(ctx, cfg.StateTransition, cfg.InstanceID, o.SourceWorkID, o.SourceGeneration, work.Payload, evidence)
+				if e != nil || current != status {
+					return errors.New("source history changed during proof")
+				}
+				return nil
 			}); e != nil {
 				return e
 			}
 		}
-		gate := postgres.MaintenanceGate{Store: repository}
-		return gate.With(ctx, "source-history:"+strings.TrimPrefix(operation, "sources-apply:"), func(ctx context.Context) error {
-			return repository.ReconcileHistoricalSource(ctx, cfg.StateTransition, cfg.InstanceID, o.SourceWorkID, o.SourceGeneration, verify)
+		if status == "committed" {
+			return nil
+		}
+		return (postgres.MaintenanceGate{Store: repository}).With(ctx, history, func(ctx context.Context) error {
+			attempt, e := repository.SourceMaintenanceAttempt(ctx, history)
+			if e != nil {
+				return e
+			}
+			if e = host.PrepareSourceAttempt(history, attempt); e != nil {
+				return e
+			}
+			return repository.ReconcileHistoricalSource(ctx, cfg.StateTransition, cfg.InstanceID, o.SourceWorkID, o.SourceGeneration, func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+				next, e := verify(ctx, payload)
+				if e != nil {
+					return nil, e
+				}
+				if !bytes.Equal(next, evidence) {
+					return nil, errors.New("original historical proof changed")
+				}
+				return next, nil
+			})
 		})
 	})
 }

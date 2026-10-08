@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -237,5 +238,27 @@ func TestSourceRetentionQueryKeepsUnresolvedPayloadsWithoutRefreshingTime(t *tes
 	}
 	if _, e := s.UnresolvedSourcePayloads(ctx, "radius-secondary"); e == nil {
 		t.Fatal("unbounded proof list accepted")
+	}
+}
+
+func TestMaintenanceReportsExactRecoverableAttempt(t *testing.T) {
+	s, _ := integration(t)
+	ctx := context.Background()
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance CASCADE"); e != nil {
+		t.Fatal(e)
+	}
+	gate := MaintenanceGate{Store: s}
+	first := gate.With(ctx, "legacy-capture:"+strings.Repeat("a", 64), func(context.Context) error { return errors.New("fixture credential MUST_NOT_PRINT") })
+	var id int64
+	if e := s.pool.QueryRow(ctx, "SELECT max(id) FROM bootstrap_private.maintenance").Scan(&id); e != nil {
+		t.Fatal(e)
+	}
+	expected := fmt.Sprintf("attempt %d", id)
+	if first == nil || !strings.Contains(first.Error(), expected) || strings.Contains(first.Error(), "MUST_NOT_PRINT") {
+		t.Fatal("operator cannot identify exact attempt safely", first)
+	}
+	next := gate.With(ctx, "another", func(context.Context) error { t.Fatal("quarantine bypassed"); return nil })
+	if next == nil || !strings.Contains(next.Error(), expected) {
+		t.Fatal("blocked retry omitted exact attempt", next)
 	}
 }

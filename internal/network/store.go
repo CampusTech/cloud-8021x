@@ -15,6 +15,7 @@ import (
 )
 
 type Metadata struct {
+	Provenance                string
 	Site, Authenticator, VLAN string
 	ObservedAt                domain.Timestamp
 }
@@ -30,6 +31,7 @@ type index struct{ scopes map[string]scopeData }
 type Store struct {
 	mu      sync.Mutex
 	current atomic.Pointer[index]
+	legacy  atomic.Pointer[index]
 }
 
 func scopeKey(provider, site string) string { return provider + "\x00" + site }
@@ -216,17 +218,22 @@ func (s *Store) Publish(b domain.NetworkSnapshot) error {
 func (s *Store) Resolve(provider, site, calledStation string, vlan int, now time.Time, maxAge time.Duration) Metadata {
 	idx := s.current.Load()
 	if idx == nil {
-		return Metadata{}
+		return s.legacyVLAN(provider, site, vlan, now, maxAge)
 	}
 	d, ok := idx.scopes[scopeKey(provider, site)]
 	if !ok || !domain.Fresh(d.at, now, maxAge) {
-		return Metadata{}
+		return s.legacyVLAN(provider, site, vlan, now, maxAge)
 	}
 	vlanName := ""
 	if domain.Fresh(d.vlanAt, now, maxAge) {
 		vlanName = d.vlans[vlan]
 	}
-	return Metadata{Site: d.site, Authenticator: d.macs[MAC(calledStation)], VLAN: vlanName, ObservedAt: d.at}
+	result := Metadata{Site: d.site, Authenticator: d.macs[MAC(calledStation)], VLAN: vlanName, ObservedAt: d.at}
+	if !domain.Fresh(d.vlanAt, now, maxAge) {
+		legacy := s.legacyVLAN(provider, site, vlan, now, maxAge)
+		result.VLAN, result.Provenance = legacy.VLAN, legacy.Provenance
+	}
+	return result
 }
 func (s *Store) Ports(provider, site, id string, now time.Time, maxAge time.Duration) []string {
 	idx := s.current.Load()

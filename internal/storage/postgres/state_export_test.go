@@ -67,6 +67,9 @@ func TestPostgresColdExportRetainsCurrentStateAndUnknownNewWork(t *testing.T) {
 	if !bytes.Contains(out.Usage, []byte("18446744073709551615")) || !bytes.Contains(out.Usage, []byte("1728000000.123456789")) {
 		t.Fatal("lost exact original counters or times")
 	}
+	if len(out.Original) != 2 || !bytes.Contains(out.Original["radius-primary"], []byte("1791453600.123456789")) || bytes.Contains(out.Original["radius-primary"], []byte("1791453700.999999999")) {
+		t.Fatal("immutable original export lost")
+	}
 	if !bytes.Contains(out.Legacy["radius-primary"], []byte("1791453700.999999999")) {
 		t.Fatal("exported stale initial authorization instead of current state")
 	}

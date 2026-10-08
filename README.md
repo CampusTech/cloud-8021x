@@ -761,3 +761,11 @@ For a detailed technical walkthrough of the startup script, authentication flow,
 ## Future Work
 
 - **Multi-region**: Deploy additional RADIUS nodes closer to west coast / new offices
+
+
+The unified Go daemon's protected initial migration and fresh-host preparation
+sequence is documented in [Bootstrap preparation](docs/bootstrap-preparation.md).
+The checked-in [daemon dashboard](docs/telemetry/daemon-dashboard.json) uses maximum
+aggregation by shared cluster for shared PostgreSQL ledger gauges; adding values
+reported by both nodes would double-count the same backlog. Native auth file
+capacity remains host-local, with soft/critical/hard thresholds of 2048/3584/4096.

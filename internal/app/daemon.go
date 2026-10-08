@@ -73,6 +73,9 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	}
 	fail := func(err error) (lifecycle, func(), error) { closeAll(); return lifecycle{}, nil, err }
 	metadata := new(network.Store)
+	if err := loadLegacyDisplay(cfg, metadata); err != nil {
+		return fail(err)
+	}
 	sites, err := NetworkServiceFromConfig(cfg, metadata, false, nil)
 	if err != nil {
 		return fail(err)

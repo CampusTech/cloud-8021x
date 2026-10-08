@@ -197,7 +197,7 @@ func NewCommand(options Options) *cobra.Command {
 		return cmd
 	}
 	bootstrap := operation("bootstrap", OperationBootstrap)
-	bootstrap.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume exact interrupted fence-only attempt")
+	bootstrap.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove the exact interrupted fence or pre-install preparation attempt")
 	bootstrap.Flags().BoolVar(&fenceOnly, "fence-only", false, "Prepare only this node’s persistent legacy writer fence using the fixed incoming release")
 	bootstrap.Flags().BoolVar(&incoming, "incoming", false, "Bootstrap the verified release from the fixed protected incoming directory")
 	bootstrap.AddCommand(operation("credentials", OperationRefreshCredentials))

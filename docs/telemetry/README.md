@@ -208,3 +208,12 @@ It validates actual converter output (including complete ordinary configuration)
 503 retries, SIGKILL, restart without daemon resend, overflow 503, actual protobuf
 projection, and a separate 64 KiB ENOSPC filesystem with 10 MiB queue capacity.
 All runners remove only their own fixtures. Task6 retained fixtures are untouched.
+
+The reviewable `daemon-dashboard.json` supplements the retained business-log
+widgets. Import it explicitly through the normal dashboard delivery workflow;
+these tests do not publish it. Every shared ledger/outbox gauge is `max` grouped
+by the protected transition's `cluster`, with `scope:shared`; summing the two node
+reporters would double-count. Local auth/spool/source/inventory gauges stay per
+host. Missing samples remain unavailable. Auth file thresholds are 2048 soft,
+3584 critical, and 4096 reader bound: capacity is not an instruction to discard
+files or restart native authentication.

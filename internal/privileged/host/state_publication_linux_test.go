@@ -60,7 +60,7 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 	}
 
 	t.Run("capture_read_only", func(t *testing.T) {
-		for _, path := range []string{legacyDowngradeGuard, "/var/lib/cloud-8021x/metadata.json", legacyStatePaths["sql"], "/var/cache/cloud-8021x/runtime/provider.json"} {
+		for _, path := range []string{legacyDowngradeGuard, "/var/lib/cloud-8021x/metadata.json", legacyStatePaths["certificates"], "/var/cache/cloud-8021x/runtime/provider.json"} {
 			if AllowedFile(path) {
 				t.Fatal("read-only state became writable", path)
 			}
@@ -75,14 +75,14 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 		p, raw := publicationFixture("prepared")
 		var b migration.Bundle
 		_ = json.Unmarshal(raw, &b)
-		for _, path := range []string{legacyStatePaths["policy"], legacyStatePaths["sql"], "/run/radius-accounting-key"} {
+		for _, path := range []string{legacyStatePaths["policy"], legacyStatePaths["certificates"], "/run/radius-accounting-key"} {
 			if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 				t.Fatal(e)
 			}
 			_ = os.Remove(path)
 		}
 		class := bytes.Repeat([]byte("k"), 32)
-		for path, data := range map[string][]byte{legacyStatePaths["policy"]: b.Policy, legacyStatePaths["sql"]: []byte(`{"status":"absent"}`), "/run/radius-accounting-key": class} {
+		for path, data := range map[string][]byte{legacyStatePaths["policy"]: b.Policy, legacyStatePaths["certificates"]: []byte(`{"status":"absent"}`), "/run/radius-accounting-key": class} {
 			if e := os.WriteFile(path, data, 0600); e != nil {
 				t.Fatal(e)
 			}
@@ -96,13 +96,9 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 		if e := os.Chown("/var/lib/cloud-8021x", 0, 0); e != nil {
 			t.Fatal(e)
 		}
-		got, e := CaptureLegacyState(id, p.Node, class)
-		if e != nil {
-			t.Fatal(e)
-		}
-		captured, e := migration.DecodeBundle(got)
-		if e != nil || !bytes.Equal(captured.Policy, b.Policy) {
-			t.Fatal("original source capture", e)
+		captured, e := readLegacyStateComponent("policy", accounts.NativeUID)
+		if e != nil || captured == nil || !bytes.Equal(captured.Data, b.Policy) {
+			t.Fatal("original fixed source capture", e)
 		}
 		// Installation hands the fixed runtime directory to the isolated Go account after capture.
 		if e := os.Chown("/var/lib/cloud-8021x", accounts.RuntimeUID, accounts.RuntimeGID); e != nil {
@@ -125,14 +121,14 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 		if _, e := CaptureDaemonState(cfg, accounts, class); e != nil {
 			t.Fatal(e)
 		}
-		_ = os.Remove(legacyStatePaths["sql"])
-		if e := os.Symlink("/etc/passwd", legacyStatePaths["sql"]); e != nil {
+		_ = os.Remove(legacyStatePaths["certificates"])
+		if e := os.Symlink("/etc/passwd", legacyStatePaths["certificates"]); e != nil {
 			t.Fatal(e)
 		}
-		if _, e := readLegacyStateComponent("sql", 0); e == nil {
+		if _, e := readLegacyStateComponent("certificates", 0); e == nil {
 			t.Fatal("substituted state link accepted")
 		}
-		_ = os.Remove(legacyStatePaths["sql"])
+		_ = os.Remove(legacyStatePaths["certificates"])
 	})
 	for _, phase := range []string{"prepared", "archive", "complete"} {
 		t.Run(phase, func(t *testing.T) {

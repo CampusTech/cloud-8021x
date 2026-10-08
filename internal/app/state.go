@@ -111,8 +111,16 @@ func protectedStateFence(ctx context.Context, cfg config.Config, o RunOptions) e
 			if e != nil {
 				return "", e
 			}
-			if _, e = host.CaptureLegacyState(cfg.StateTransition, node, values[cfg.Policy.ClassSigningKey.File]); e != nil {
+			if fresh, e := host.HasFreshPreparation(cfg.StateTransition); e != nil {
 				return "", e
+			} else if fresh {
+				raw, e := host.CaptureFreshState(cfg.StateTransition, node, hash, values[cfg.Policy.ClassSigningKey.File])
+				if e != nil {
+					return "", e
+				}
+				if e = repository.RecordFreshSeed(ctx, cfg.StateTransition, hash, raw); e != nil {
+					return "", e
+				}
 			}
 			return receipt, nil
 		})
@@ -164,12 +172,27 @@ func preparedWriterFence(ctx context.Context, cfg config.Config, values map[stri
 		return "", e
 	}
 	if !known {
+		fresh, e := host.PrepareFreshState(cfg.StateTransition, node, next, values[cfg.Policy.ClassSigningKey.File])
+		if e != nil {
+			return "", e
+		}
+		if fresh {
+			if e = repository.RequireFreshEmpty(ctx, cfg.StateTransition); e != nil {
+				return "", e
+			}
+		}
 		receipt, e := host.FenceLegacyWriters(ctx, cfg.StateTransition, node, next)
 		if e != nil {
 			return "", e
 		}
-		if _, e = host.CaptureLegacyState(cfg.StateTransition, node, values[cfg.Policy.ClassSigningKey.File]); e != nil {
-			return "", e
+		if fresh {
+			raw, e := host.CaptureFreshState(cfg.StateTransition, node, next, values[cfg.Policy.ClassSigningKey.File])
+			if e != nil {
+				return "", e
+			}
+			if e = repository.RecordFreshSeed(ctx, cfg.StateTransition, next, raw); e != nil {
+				return "", e
+			}
 		}
 		return receipt, nil
 	}

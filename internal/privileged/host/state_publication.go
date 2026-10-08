@@ -67,6 +67,14 @@ func validatePublicationFiles(p StatePublication, data []byte) error {
 	if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
+	expectedPolicy, expectedGuard := b.Policy, b.FingerprintEnforced
+	if b.FreshAbsenceSHA256 != "" {
+		initial, e := readFreshInventory(p)
+		if e != nil {
+			return e
+		}
+		expectedPolicy, expectedGuard = initial.Snapshot, initial.FingerprintEnforced
+	}
 	accounts, e := ReadAccounts()
 	if e != nil {
 		return e
@@ -75,14 +83,14 @@ func validatePublicationFiles(p StatePublication, data []byte) error {
 	if e != nil {
 		return e
 	}
-	if !snapshot.Exists || !bytes.Equal(snapshot.Data, b.Policy) {
+	if !snapshot.Exists || !bytes.Equal(snapshot.Data, expectedPolicy) {
 		return errors.New("local authorization snapshot differs from original staged state")
 	}
 	guard, e := snapshotState(File{Path: legacyDowngradeGuard, UID: accounts.RuntimeUID})
 	if e != nil {
 		return e
 	}
-	if guard.Exists != b.FingerprintEnforced {
+	if guard.Exists != expectedGuard {
 		return errors.New("local sticky fingerprint evidence differs")
 	}
 	return nil

@@ -79,7 +79,7 @@ func (s *Store) ExportState(ctx context.Context, id string) ([]byte, error) {
 	if !fenced {
 		return nil, errors.New("both actual worker and current-state receipts required")
 	}
-	out := migration.RollbackExport{Version: 1, Transition: id, Legacy: map[string]json.RawMessage{}, Current: map[string]json.RawMessage{}, WorkersBlocked: true}
+	out := migration.RollbackExport{Version: 1, Transition: id, Legacy: map[string]json.RawMessage{}, Original: map[string]json.RawMessage{}, Current: map[string]json.RawMessage{}, WorkersBlocked: true}
 	rows, e := tx.Query(ctx, `SELECT b.node,b.document,w.document FROM bootstrap_private.legacy_bundles b JOIN bootstrap_private.worker_states w ON w.transition=b.transition AND w.node=b.node JOIN bootstrap_private.worker_fences f ON f.transition=w.transition AND f.node=w.node AND f.receipt_sha256=w.receipt_sha256 WHERE b.transition=$1 ORDER BY b.node`, id)
 	if e != nil {
 		return nil, safeError(e)
@@ -103,6 +103,13 @@ func (s *Store) ExportState(ctx context.Context, id string) ([]byte, error) {
 		}
 		// Authorization snapshot format is directly legacy-compatible. Keep its
 		// original generated time; do not rebuild or freshen it during export.
+		out.Original[node] = original
+		b.FreshAbsenceSHA256 = ""
+		b.Devices, e = migration.LegacyDevices(n.Inventory)
+		if e != nil {
+			rows.Close()
+			return nil, e
+		}
 		b.Policy = n.Inventory
 		b.FingerprintEnforced = n.FingerprintEnforced
 		compatible, e := json.Marshal(b)

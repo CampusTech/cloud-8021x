@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/netip"
 
 	"github.com/CampusTech/cloud-8021x/internal/domain"
@@ -72,23 +73,29 @@ func DecodeNodeState(raw []byte) (NodeState, error) {
 		if domain.DecodeJSONStrict(n.Discovery, &candidates) != nil || len(candidates) > 4096 {
 			return n, errors.New("invalid current discovery")
 		}
-		for _, c := range candidates {
-			if c.ProviderID == "" || c.SiteID == "" || c.ObservedAt <= 0 || len(c.CIDRs) > 128 {
-				return n, errors.New("invalid current candidate")
-			}
-			for _, cidr := range c.CIDRs {
-				if _, e := netip.ParsePrefix(cidr); e != nil {
-					return n, e
-				}
-			}
+		if e := validateRetainedCandidates(candidates); e != nil {
+			return n, e
 		}
 	}
 	if len(n.ProviderCaches) > 64 {
 		return n, errors.New("provider export exceeds bound")
 	}
 	for key, raw := range n.ProviderCaches {
-		if key == "" || len(key) > 253 || len(raw) > 16<<20 || !json.Valid(raw) {
+		var cache struct {
+			Key   string
+			Batch domain.NetworkSnapshot
+		}
+		if key == "" || len(key) > 253 || len(raw) > 16<<20 || domain.DecodeJSONStrict(raw, &cache) != nil || !digestPattern.MatchString(cache.Key) || cache.Batch.ProviderID != key || network.Validate(cache.Batch) != nil {
 			return n, errors.New("invalid retained provider cache")
+		}
+	}
+	if len(n.ProtectedSources) > 0 {
+		var state struct {
+			ConfigSHA256 string
+			Candidates   []domain.SourceCandidate
+		}
+		if domain.DecodeJSONStrict(n.ProtectedSources, &state) != nil || !digestPattern.MatchString(state.ConfigSHA256) || validateRetainedCandidates(state.Candidates) != nil {
+			return n, errors.New("invalid protected source state")
 		}
 	}
 	for _, files := range [][]RetainedFile{n.AuthFiles, n.AccountingFiles} {
@@ -120,6 +127,7 @@ type RollbackExport struct {
 	Usage          json.RawMessage            `json:"usage,omitempty"`
 	UsageAbsent    bool                       `json:"usage_absent"`
 	Ledger         LedgerExport               `json:"ledger"`
+	Original       map[string]json.RawMessage `json:"original"`
 	WorkersBlocked bool                       `json:"workers_blocked"`
 }
 type LedgerExport struct {
@@ -135,4 +143,50 @@ type LedgerExport struct {
 	Intervals        []json.RawMessage `json:"intervals"`
 	Quarantine       []json.RawMessage `json:"quarantine"`
 	AuthCursors      []json.RawMessage `json:"auth_cursors"`
+}
+
+func validateRetainedCandidates(candidates []domain.SourceCandidate) error {
+	if len(candidates) > 4096 {
+		return errors.New("source candidates exceed bound")
+	}
+	for _, c := range candidates {
+		if c.ProviderID == "" || len(c.ProviderID) > 253 || c.SiteID == "" || len(c.SiteID) > 253 || c.ObservedAt <= 0 || math.IsInf(float64(c.ObservedAt), 0) || math.IsNaN(float64(c.ObservedAt)) || len(c.CIDRs) > 128 {
+			return errors.New("invalid retained source identity")
+		}
+		for _, raw := range c.CIDRs {
+			p, e := netip.ParsePrefix(raw)
+			if e != nil || p != p.Masked() {
+				return errors.New("invalid original source prefix")
+			}
+		}
+	}
+	return nil
+}
+
+// LegacyDevices projects only unambiguous current aliases with known metadata.
+// Missing or ambiguous entries stay unavailable; the original snapshot lives in
+// the export's original section, and current source time is never reset.
+func LegacyDevices(raw []byte) (json.RawMessage, error) {
+	snapshot, e := domain.DecodeSnapshot(bytes.NewReader(raw))
+	if e != nil {
+		return nil, e
+	}
+	type device struct {
+		Email string           `json:"email"`
+		Name  string           `json:"device_name"`
+		Model string           `json:"device_model"`
+		Time  domain.Timestamp `json:"ts"`
+	}
+	out := map[string]device{}
+	for alias, record := range snapshot.Identities {
+		if record == nil {
+			continue
+		}
+		metadata := snapshot.Devices[record.DeviceID]
+		if metadata == nil {
+			continue
+		}
+		out[alias] = device{metadata.Owner, metadata.Name, metadata.Model, snapshot.UpdatedAt}
+	}
+	return json.Marshal(out)
 }

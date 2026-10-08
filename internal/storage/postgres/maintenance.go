@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"sync"
 	"sync/atomic"
@@ -52,19 +53,19 @@ func (g MaintenanceGate) With(ctx context.Context, operation string, fn func(con
 	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(8021,8)"); e != nil {
 		return safeError(e)
 	}
-	var busy bool
-	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bootstrap_private.maintenance WHERE outcome IN ('started','uncertain'))`).Scan(&busy); e != nil {
+	var busy int64
+	if e = tx.QueryRow(ctx, `SELECT coalesce(min(id),0) FROM bootstrap_private.maintenance WHERE outcome IN ('started','uncertain')`).Scan(&busy); e != nil {
 		return safeError(e)
 	}
-	if busy {
-		return errors.New("unresolved root maintenance blocks changes; read-only reconciliation required")
+	if busy > 0 {
+		return fmt.Errorf("unresolved root maintenance attempt %d blocks changes; read-only reconciliation required", busy)
 	}
 	var id int64
 	if e = tx.QueryRow(ctx, `INSERT INTO bootstrap_private.maintenance(operation,expires_at,outcome) VALUES($1,clock_timestamp()+$2::interval,'started') RETURNING id`, operation, lease.String()).Scan(&id); e != nil {
 		return safeError(e)
 	}
 	if e = commit(ctx, tx); e != nil {
-		return errors.New("maintenance start uncertain; no external action attempted")
+		return fmt.Errorf("maintenance attempt %d start uncertain; no external action attempted", id)
 	}
 	return g.runAttempt(ctx, id, lease, fn)
 }
@@ -105,11 +106,11 @@ func (g MaintenanceGate) runAttempt(ctx context.Context, id int64, lease time.Du
 		qctx, qcancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer qcancel()
 		_, _ = g.Store.pool.Exec(qctx, `UPDATE bootstrap_private.maintenance SET outcome='uncertain' WHERE id=$1 AND outcome='started'`, id)
-		return errors.New("root maintenance incomplete or uncertain; subsequent changes blocked")
+		return fmt.Errorf("root maintenance attempt %d incomplete or uncertain; subsequent changes blocked", id)
 	}
 	tag, e := g.Store.pool.Exec(ctx, `UPDATE bootstrap_private.maintenance SET outcome='complete',finished_at=clock_timestamp() WHERE id=$1 AND outcome='started' AND expires_at>clock_timestamp()`, id)
 	if e != nil || tag.RowsAffected() != 1 {
-		return errors.New("maintenance completion uncertain; subsequent changes blocked")
+		return fmt.Errorf("maintenance attempt %d completion uncertain; subsequent changes blocked", id)
 	}
 	return nil
 }
@@ -141,7 +142,7 @@ func (s *Store) ReconcileMaintenance(ctx context.Context, id int64, verify func(
 	return safeError(commit(ctx, tx))
 }
 func createMaintenance(ctx context.Context, tx pgx.Tx, r Roles) error {
-	statements := []string{`CREATE SCHEMA IF NOT EXISTS bootstrap_private`, `REVOKE ALL ON SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(), `CREATE TABLE IF NOT EXISTS bootstrap_private.maintenance(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,operation text NOT NULL,installation text NOT NULL DEFAULT '',started_at timestamptz NOT NULL DEFAULT clock_timestamp(),expires_at timestamptz NOT NULL,finished_at timestamptz,outcome text NOT NULL CHECK(outcome IN ('started','uncertain','complete','reconciled')))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.auth_quarantine(source text NOT NULL,start_offset bigint NOT NULL,end_offset bigint NOT NULL,sha256 text NOT NULL,original bytea NOT NULL,evidence jsonb NOT NULL,recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(source,start_offset))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.maintenance_recoveries(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,attempt bigint NOT NULL REFERENCES bootstrap_private.maintenance(id),operation text NOT NULL,observed_at timestamptz NOT NULL DEFAULT clock_timestamp())`, `CREATE TABLE IF NOT EXISTS bootstrap_private.ca_publication(reference text PRIMARY KEY CHECK(reference ~ '^[0-9a-f]{64}$'),secret text NOT NULL,sha256 text NOT NULL CHECK(sha256 ~ '^[0-9a-f]{64}$'),version text NOT NULL DEFAULT '',published boolean NOT NULL DEFAULT false)`, `REVOKE ALL ON ALL TABLES IN SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(), `REVOKE ALL ON ALL SEQUENCES IN SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize()}
+	statements := []string{`CREATE SCHEMA IF NOT EXISTS bootstrap_private`, `REVOKE ALL ON SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(), `CREATE TABLE IF NOT EXISTS bootstrap_private.maintenance(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,operation text NOT NULL,installation text NOT NULL DEFAULT '',started_at timestamptz NOT NULL DEFAULT clock_timestamp(),expires_at timestamptz NOT NULL,finished_at timestamptz,outcome text NOT NULL CHECK(outcome IN ('started','uncertain','complete','reconciled')))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.fresh_seeds(transition text NOT NULL,node text NOT NULL,config_sha256 text NOT NULL,checksum text NOT NULL,document bytea NOT NULL,PRIMARY KEY(transition,node))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.fresh_inventory(transition text NOT NULL,node text NOT NULL,config_sha256 text NOT NULL,bundle_sha256 text NOT NULL,snapshot bytea NOT NULL,PRIMARY KEY(transition,node),FOREIGN KEY(transition,node) REFERENCES bootstrap_private.fresh_seeds(transition,node))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.source_history(work_id text NOT NULL REFERENCES ledger.work(id) ON DELETE CASCADE,generation bigint NOT NULL,transition text NOT NULL,node text NOT NULL,payload jsonb NOT NULL,evidence jsonb NOT NULL,PRIMARY KEY(work_id,generation))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.auth_quarantine(source text NOT NULL,start_offset bigint NOT NULL,end_offset bigint NOT NULL,sha256 text NOT NULL,original bytea NOT NULL,evidence jsonb NOT NULL,recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(source,start_offset))`, `CREATE TABLE IF NOT EXISTS bootstrap_private.maintenance_recoveries(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,attempt bigint NOT NULL REFERENCES bootstrap_private.maintenance(id),operation text NOT NULL,observed_at timestamptz NOT NULL DEFAULT clock_timestamp())`, `CREATE TABLE IF NOT EXISTS bootstrap_private.ca_publication(reference text PRIMARY KEY CHECK(reference ~ '^[0-9a-f]{64}$'),secret text NOT NULL,sha256 text NOT NULL CHECK(sha256 ~ '^[0-9a-f]{64}$'),version text NOT NULL DEFAULT '',published boolean NOT NULL DEFAULT false)`, `REVOKE ALL ON ALL TABLES IN SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(), `REVOKE ALL ON ALL SEQUENCES IN SCHEMA bootstrap_private FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize()}
 	for _, q := range statements {
 		if _, e := tx.Exec(ctx, q); e != nil {
 			return e
