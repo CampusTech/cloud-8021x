@@ -31,21 +31,21 @@ Files: root go.mod/go.sum, cmd/cloud-8021x, internal/app, internal/config, moved
 
 Files: internal/domain, internal/policy, internal/identity, internal/accounting/binding, internal/adapters/network/signaling, internal/adapters/freeradius/policy.
 
-- [ ] Port tests/fixtures for inventory v1/v2, enrollment/ambiguity/freshness, group conflicts, site opt-out, fallback, IPv4/CIDR trust and unknown contexts. Establish failures before implementation.
-- [ ] Implement provider-neutral snapshots/decisions/context, validated numeric standard signaling and protected attribute validation; fake alternate vendor tests prove extensibility.
-- [ ] Port exact leaf hashing and attested ACME recognition, private one-use handoff (exclusive creation, mode, nofollow/flock/link checks, unlink before validation, age bounds), downgrade guard and bounded authenticated local REST. Preserve legacy serial mode without accepting arbitrary fingerprints.
-- [ ] Port signed Class byte format, HMAC, MAC/site/time validation, duplicate/hex handling and original receipt timestamps. Preserve key compatibility and conservative missing identity.
-- [ ] Wire real radius verify-leaf/policy service and unit/parity/race tests; commit.
+- [x] Port tests/fixtures for inventory v1/v2, enrollment/ambiguity/freshness, group conflicts, site opt-out, fallback, IPv4/CIDR trust and unknown contexts. Establish failures before implementation.
+- [x] Implement provider-neutral snapshots/decisions/context, validated numeric standard signaling and protected attribute validation; fake alternate vendor tests prove extensibility.
+- [x] Port exact leaf hashing and attested ACME recognition, private one-use handoff (exclusive creation, mode, nofollow/flock/link checks, unlink before validation, age bounds), downgrade guard and bounded authenticated local REST. Preserve legacy serial mode without accepting arbitrary fingerprints.
+- [x] Port signed Class byte format, HMAC, MAC/site/time validation, duplicate/hex handling and original receipt timestamps. Preserve key compatibility and conservative missing identity.
+- [x] Wire real radius verify-leaf/policy service and unit/parity/race tests; commit.
 
 ## Task 3: Shared PostgreSQL state and accounting engine
 
 Files: internal/storage/postgres, internal/accounting, migrations, internal/jobs; database Terraform in later integration task.
 
-- [ ] Add failing accounting tests for exact uint64 counters, mid-session baseline, resets, precision changes, reordered/duplicate stops, retry dedup, queued Start before Interim, invalid Class quarantine and unattributed events.
-- [ ] Add versioned logged PostgreSQL schema: raw intake, immutable observations, sessions, intervals, reservations, auth cursors, outbox/attempts/quarantine/import markers. Runtime/migration/native insert-only grants separate.
-- [ ] Implement pgx TLS/pools/query bounds, migration advisory lock, transactional work selection/session creation and locks, semantic dedup/high-water/outbox atomicity, uncertainty-safe lookup, bounded retry. No in-memory authoritative state.
-- [ ] Implement external-work claims with persisted started attempts, leases/generation/fencing; expired started attempts quarantine/reconcile rather than resubmit.
-- [ ] Exercise disposable PostgreSQL with two workers/crash/connection-loss/race tests, numeric boundaries and role permissions; commit.
+- [x] Add failing accounting tests for exact uint64 counters, mid-session baseline, resets, precision changes, reordered/duplicate stops, retry dedup, queued Start before Interim, invalid Class quarantine and unattributed events.
+- [x] Add versioned logged PostgreSQL schema: raw intake, immutable observations, sessions, intervals, reservations, auth cursors, outbox/attempts/quarantine/import markers. Runtime/migration/native insert-only grants separate.
+- [x] Implement pgx TLS/pools/query bounds, migration advisory lock, transactional work selection/session creation and locks, semantic dedup/high-water/outbox atomicity, uncertainty-safe lookup, bounded retry. No in-memory authoritative state.
+- [x] Implement external-work claims with persisted started attempts, leases/generation/fencing; expired started attempts quarantine/reconcile rather than resubmit.
+- [x] Exercise disposable PostgreSQL with two workers/crash/connection-loss/race tests, numeric boundaries and role permissions; commit.
 
 ## Task 4: Fleet device and managed certificate providers
 
