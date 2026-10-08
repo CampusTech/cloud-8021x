@@ -393,6 +393,12 @@ If you provide UniFi API credentials, FreeRADIUS will resolve the access point a
 
 If you provide a Datadog Application key, Terraform creates a dashboard with authentication metrics, device analytics, location breakdowns, accounting sessions, and infrastructure health.
 
+The Datadog provider is pinned to 4.25.0. This supports the UI's `datadog_dashboard_v2` Terraform exports.
+The existing dashboards use `datadog_dashboard_json`; adopting a native v2
+export for an existing dashboard requires a deliberate configuration/state
+migration so two resources do not manage the same dashboard. See
+[Datadog's migration guide](https://github.com/DataDog/terraform-provider-datadog/blob/v4.25.0/docs/guides/dashboard_v2_migration.md).
+
 1. In Datadog, create an **Application Key** (Organization Settings → Application Keys) scoped to `dashboards_read`, `dashboards_write`, `logs_read_pipelines`, and `logs_write_pipelines` for the dashboard and RADIUS owner-default pipeline. If you enable the collector health monitor, its Terraform application key also needs `monitors_read` and `monitors_write`. The collector uses a separate key scoped only to `logs_read_data`.
 
 2. Add to your `terraform.tfvars`:
