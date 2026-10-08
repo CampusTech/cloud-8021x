@@ -231,3 +231,19 @@ func TestDedicatedBusinessTelemetryEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestIndependentMetadataMaxAge(t *testing.T) {
+	c, err := Decode(strings.NewReader(validYAML))
+	if err != nil || c.Network.MetadataMaxAge != time.Hour {
+		t.Fatal(c.Network, err)
+	}
+	c, err = Decode(strings.NewReader(validYAML + "network:\n  metadata_max_age: 2m\n"))
+	if err != nil || c.Network.MetadataMaxAge != 2*time.Minute || c.Policy.InventoryMaxAge != time.Hour || c.Network.Discovery.MaxAge != 15*time.Minute {
+		t.Fatal(c.Network, err)
+	}
+	for _, v := range []string{"0s", "-1s", "25h", "not-a-duration"} {
+		if _, err := Decode(strings.NewReader(validYAML + "network:\n  metadata_max_age: " + v + "\n")); err == nil {
+			t.Fatal("accepted", v)
+		}
+	}
+}

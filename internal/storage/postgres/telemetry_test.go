@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/CampusTech/cloud-8021x/internal/adapters/otlp"
 	"github.com/CampusTech/cloud-8021x/internal/events/auth"
+	"github.com/CampusTech/cloud-8021x/internal/jobs"
 	"github.com/CampusTech/cloud-8021x/internal/telemetry"
 )
 
@@ -94,5 +96,95 @@ func TestPostgresTelemetryEmptyFreshnessUnknown(t *testing.T) {
 	}
 	if health.UsageAge != nil || health.OutboxOldestAge != nil {
 		t.Fatalf("empty ledger fabricated freshness: %+v", health)
+	}
+}
+
+func TestPostgresTelemetryTerminationMigrationAndImmutableDedup(t *testing.T) {
+	admin, c := integration(t)
+	reset(t, admin)
+	ctx := context.Background()
+	// Recreate the exact v2 column contract in this disposable fixture, leaving a
+	// pending old raw row and an immutable already-reserved payload across upgrade.
+	if _, err := admin.pool.Exec(ctx, "ALTER TABLE ledger.intake DROP COLUMN terminate_cause, DROP COLUMN terminate_cause_count; DELETE FROM ledger.schema_version WHERE version=3"); err != nil {
+		t.Fatal(err)
+	}
+	legacy := testRaw("old-stop", "Stop")
+	if err := insertRaw(ctx, admin, legacy); err != nil {
+		t.Fatal(err)
+	}
+	s := runtimeStore(t, admin, c)
+	old := json.RawMessage(`{"event_id":"legacy","status":"Stop"}`)
+	if err := s.Reserve(ctx, "accounting:legacy", "outbox", old); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.LookupWork(ctx, "accounting:legacy")
+	if err := admin.Migrate(ctx, Roles{Runtime: "app_runtime", Native: "app_native"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Migrate(ctx, Roles{Runtime: "app_runtime", Native: "app_native"}); err != nil {
+		t.Fatal("idempotent migration", err)
+	}
+	var absent bool
+	if err := admin.pool.QueryRow(ctx, "SELECT terminate_cause IS NULL AND terminate_cause_count=0 FROM ledger.intake").Scan(&absent); err != nil || !absent {
+		t.Fatal(absent, err)
+	}
+	if err := drain(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	var legacyID string
+	if err := admin.pool.QueryRow(ctx, "SELECT observation_id FROM ledger.intake").Scan(&legacyID); err != nil {
+		t.Fatal(err)
+	}
+	immutable, _ := s.LookupWork(ctx, "accounting:"+legacyID)
+	// Better display metadata on a retransmission must not rewrite or republish.
+	if err := insertRaw(ctx, admin, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.pool.Exec(ctx, "UPDATE ledger.intake SET terminate_cause='User-Request',terminate_cause_count=1 WHERE processed_at IS NULL"); err != nil {
+		t.Fatal(err)
+	}
+	if err := drain(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.LookupWork(ctx, "accounting:"+legacyID)
+	if string(immutable.Payload) != string(after.Payload) || count(t, admin, "observations") != 1 {
+		t.Fatal("duplicate rewrote immutable event")
+	}
+	cases := []struct {
+		value string
+		count int
+		want  string
+	}{{"Lost-Carrier", 1, "Lost-Carrier"}, {"User-Request", 2, "N/A"}, {"9999", 1, "N/A"}}
+	for i, tc := range cases {
+		r := testRaw(fmt.Sprintf("cause-%d", i), "Stop")
+		if err := insertRaw(ctx, admin, r); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.pool.Exec(ctx, "UPDATE ledger.intake SET terminate_cause=$1,terminate_cause_count=$2 WHERE processed_at IS NULL", tc.value, tc.count); err != nil {
+			t.Fatal(err)
+		}
+		if err := drain(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+		var id string
+		if err := admin.pool.QueryRow(ctx, "SELECT observation_id FROM ledger.intake WHERE session_id=$1", r.Session.Value).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		work, err := s.LookupWork(ctx, "accounting:"+id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projected, err := telemetry.Project(jobs.Claim{ID: "accounting:" + id, Payload: work.Payload}, nil)
+		if err != nil || projected.Fields["terminate_cause"] != tc.want {
+			t.Fatal(projected, err)
+		}
+	}
+	unchanged, _ := s.LookupWork(ctx, "accounting:legacy")
+	if string(before.Payload) != string(unchanged.Payload) {
+		t.Fatal("migration rewrote legacy payload")
+	}
+	projected, err := telemetry.Project(jobs.Claim{ID: "accounting:legacy", Payload: unchanged.Payload}, nil)
+	if err != nil || projected.Fields["terminate_cause"] != "N/A" {
+		t.Fatal(projected, err)
 	}
 }

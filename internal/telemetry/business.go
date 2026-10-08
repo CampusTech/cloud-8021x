@@ -76,6 +76,10 @@ func Project(c jobs.Claim, display Display) (BusinessRecord, error) {
 		}
 		r.ID, r.Host, r.Received = e.ID, e.Host, e.Received
 		r.Fields["event"] = name
+		r.Fields["terminate_cause"] = "N/A"
+		if e.Status == "Stop" {
+			r.Fields["terminate_cause"] = accounting.TerminationCause(e.TerminateCause)
+		}
 		sessionFields(r.Fields, e.Key, e.Upload, e.Download, e.Duration)
 		location, called, identity = e.Location, e.CalledStation, e.Identity
 		r.Fields["nas_port"] = e.NASPort

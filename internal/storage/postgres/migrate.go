@@ -82,6 +82,11 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 			return safeError(err)
 		}
 	}
+	if v <= 2 {
+		if _, err = tx.Exec(ctx, migrations.TerminationCause); err != nil {
+			return safeError(err)
+		}
+	}
 	var db string
 	if err = tx.QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
 		return safeError(err)

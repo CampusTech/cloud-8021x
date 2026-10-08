@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func (failingLogs) Export(ctx context.Context, _ []sdklog.Record) error {
 }
 func (failingLogs) ForceFlush(ctx context.Context) error { return ctx.Err() }
 func (failingLogs) Shutdown(context.Context) error       { return nil }
-func TestBoundedTelemetryFailureAndSampling(t *testing.T) {
+func TestBoundedTelemetryFailureAndShutdown(t *testing.T) {
 	cfg := config.Defaults().Telemetry
 	cfg.Enabled = true
 	cfg.Logs = true
@@ -105,12 +106,10 @@ func TestBoundedTelemetryFailureAndSampling(t *testing.T) {
 	}
 	_, span := s.Tracer.Start(context.Background(), "policy")
 	span.End()
+	start = time.Now()
 	_ = s.Shutdown(context.Background())
 	if time.Since(start) > time.Second {
 		t.Fatal("shutdown unbounded")
-	}
-	if len(spans.GetSpans()) != 0 {
-		t.Fatal("sample ratio ignored")
 	}
 }
 
@@ -169,5 +168,30 @@ func TestOrdinarySignalsReachFakeOTLPAsynchronously(t *testing.T) {
 		if paths[path] != 1 {
 			t.Fatalf("missing or duplicate remote signal %s: %v", path, paths)
 		}
+	}
+}
+
+func TestTraceSamplingBeforeShutdown(t *testing.T) {
+	for _, ratio := range []float64{0, 1} {
+		t.Run(fmt.Sprint(ratio), func(t *testing.T) {
+			cfg := config.Defaults().Telemetry
+			cfg.Enabled = true
+			cfg.Traces = true
+			cfg.TraceSampleRatio = ratio
+			spans := tracetest.NewInMemoryExporter()
+			s, err := newSDK(context.Background(), cfg, Identity{Host: "node"}, Exporters{Traces: spans}, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Shutdown(context.Background()) }()
+			_, span := s.Tracer.Start(context.Background(), "policy")
+			span.End()
+			if err := s.traces.ForceFlush(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(spans.GetSpans()); got != int(ratio) {
+				t.Fatalf("sample ratio %v exported %d spans", ratio, got)
+			}
+		})
 	}
 }

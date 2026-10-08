@@ -9,4 +9,7 @@ var Ledger string
 //go:embed 002_collection.sql
 var Collection string
 
-const Version = 2
+//go:embed 003_termination_cause.sql
+var TerminationCause string
+
+const Version = 3

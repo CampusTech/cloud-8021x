@@ -22,4 +22,4 @@ docker exec -i "$container" psql -U postgres -d cloud8021x -v ON_ERROR_STOP=1 >/
 CREATE ROLE app_runtime LOGIN PASSWORD 'disposable-runtime';
 CREATE ROLE app_native LOGIN PASSWORD 'disposable-native';
 SQL
-docker exec -e C8021X_PG_TEST_DSN=postgres://postgres:task7-synthetic-admin@localhost:5432/cloud8021x -e C8021X_PG_TEST_CA=/task7/ca.pem "$container" /task7/postgres.test -test.v -test.run 'TestPostgres(Telemetry|WorkClaims|LeaseGenerationsAndOutcomes)'
+docker exec -e C8021X_PG_TEST_DSN=postgres://postgres:task7-synthetic-admin@localhost:5432/cloud8021x -e C8021X_PG_TEST_CA=/task7/ca.pem "$container" /task7/postgres.test -test.v -test.run 'TestPostgres(Telemetry|WorkClaims|LeaseGenerationsAndOutcomes|CollectionMigration)'

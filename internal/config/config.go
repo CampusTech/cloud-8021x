@@ -134,9 +134,10 @@ type VLANRule struct {
 	VLAN       int    `yaml:"vlan"`
 }
 type Network struct {
-	Providers []NetworkProvider `yaml:"providers"`
-	Locations []Location        `yaml:"locations"`
-	Discovery Discovery         `yaml:"discovery"`
+	MetadataMaxAge time.Duration     `yaml:"metadata_max_age"`
+	Providers      []NetworkProvider `yaml:"providers"`
+	Locations      []Location        `yaml:"locations"`
+	Discovery      Discovery         `yaml:"discovery"`
 }
 type NetworkProvider struct {
 	ConsoleID      string        `yaml:"console_id"`
@@ -258,7 +259,7 @@ func Defaults() Config {
 		Listeners:   Listeners{Policy: Listener{MaxConcurrency: 64, MaxBodyBytes: 16 << 10, Timeout: 2 * time.Second}},
 		Inventory:   Inventory{Provider: "fleet", Fleet: Fleet{Timeout: 5 * time.Second, PollInterval: time.Hour, MaxPendingAge: 24 * time.Hour}},
 		Policy:      Policy{IdentityMode: "fingerprint", InventoryMaxAge: time.Hour, CertificateMaxAge: 24 * time.Hour, HandoffMaxAge: 120 * time.Second, ClassMaxAge: 30 * 24 * time.Hour},
-		Network:     Network{Discovery: Discovery{MaxAge: 15 * time.Minute}},
+		Network:     Network{MetadataMaxAge: time.Hour, Discovery: Discovery{MaxAge: 15 * time.Minute}},
 		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
 		Telemetry:   Telemetry{BusinessEndpoint: "http://127.0.0.1:4319", Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
 		CA:          CA{Provider: "step-ca"},
@@ -611,6 +612,9 @@ func (c Config) Validate() error {
 	}
 	if s.AccountingWorkers < 1 || s.AccountingWorkers > 32 || s.ExportWorkers < 1 || s.ExportWorkers > 32 {
 		return errors.New("worker count must be 1-32")
+	}
+	if !duration(c.Network.MetadataMaxAge, 24*time.Hour) {
+		return errors.New("network metadata age out of bounds")
 	}
 	if !duration(c.Network.Discovery.MaxAge, 7*24*time.Hour) {
 		return errors.New("source discovery age out of bounds")

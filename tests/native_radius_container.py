@@ -447,7 +447,41 @@ def start_radius():
         time.sleep(.05)
     raise AssertionError('native server did not start')
 
+def termination_test():
+    """Actual native detail/replay SQL, ledger normalization and business projection."""
+    suffix='-'+os.urandom(8).hex()
+    cases=[('known',[(49,struct.pack('!I',1))],'User-Request',1,'User-Request'),
+           ('legacy',[],None,0,'N/A'),
+           ('duplicate',[(49,struct.pack('!I',1)),(49,struct.pack('!I',2))],'User-Request',2,'N/A'),
+           ('unknown',[(49,struct.pack('!I',9999))],'9999',1,'N/A'),
+           ('dot1x',[(49,struct.pack('!I',20))],'Reauthentication-Failure',1,'Reauthentication-Failure')]
+    radius=start_radius()
+    try:
+        packets=[accounting('terminate-'+name+suffix,status=2,extra=extra) for name,extra,_,_,_ in cases]
+        assert_packets_delivered(packets)
+        run('runuser','-u','cloud8021x','--','/task6-native-fixture','process',str(CFG))
+        proof=[]
+        for name,_,raw,count,want in cases:
+            rows=postgres_json("""SELECT json_agg(row_to_json(r)) FROM (
+              SELECT i.terminate_cause,i.terminate_cause_count,o.event,w.payload
+              FROM ledger.intake i JOIN ledger.observations o ON i.observation_id=o.event_id
+              JOIN ledger.work w ON w.id='accounting:'||o.event_id
+              WHERE i.session_id=(:'session'::jsonb #>> '{}')) r;""",session='terminate-'+name+suffix)
+            assert len(rows)==1,rows
+            row=rows[0]
+            assert row['terminate_cause']==raw and row['terminate_cause_count']==count,row
+            assert row['event']['terminate_cause']==want and row['payload']==row['event'],row
+            projected=json.loads(run('/task6-native-fixture','project',str(CFG),input=json.dumps(row['payload'])).stdout)
+            assert projected['Fields']['terminate_cause']==want,projected
+            assert projected['Fields']['event']=='Acct-Stop' and projected['Fields']['input_bytes']==18446744073709551615,projected
+            proof.append({'case':name,'raw':raw,'count':count,'projection':want,'event_id':row['event']['event_id']})
+        write(ROOT/'termination-proof.json',json.dumps(proof,indent=2)+'\n')
+        print('PASS native Stop detail/replay SQL -> PostgreSQL -> immutable neutral event -> business terminate_cause (known/absent/duplicate/unknown/802.1X)',flush=True)
+    finally:
+        radius.terminate();radius.wait(timeout=3)
+
 def main():
+    if sys.argv[1]=='termination':termination_test();return
     if sys.argv[1]=='ipv6':
         global IP
         original=CFG.read_text();old_ip=IP;cfg=json.loads(original)

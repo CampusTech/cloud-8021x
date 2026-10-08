@@ -36,7 +36,7 @@ func Enricher(cfg config.Config, key []byte, snapshots *domain.SnapshotStore, me
 		if len(r.Values["C8021X-Called"]) == 1 {
 			called = e.Called
 		}
-		display := metadata.Resolve(location.ProviderID, location.SiteID, called, vlan, time.Now(), cfg.Policy.InventoryMaxAge)
+		display := metadata.Resolve(location.ProviderID, location.SiteID, called, vlan, time.Now(), cfg.Network.MetadataMaxAge)
 		if display.Site != "" {
 			e.SiteName = display.Site
 		}

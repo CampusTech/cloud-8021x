@@ -10,12 +10,15 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/CampusTech/cloud-8021x/internal/accounting"
 	"github.com/CampusTech/cloud-8021x/internal/adapters/freeradius/native"
 	"github.com/CampusTech/cloud-8021x/internal/adapters/freeradius/policy"
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/events/auth"
+	"github.com/CampusTech/cloud-8021x/internal/jobs"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
+	"github.com/CampusTech/cloud-8021x/internal/telemetry"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +30,20 @@ func main() {
 			return e
 		}
 		switch args[0] {
+		case "project":
+			var event accounting.Event
+			if err := json.NewDecoder(os.Stdin).Decode(&event); err != nil {
+				return err
+			}
+			payload, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			record, err := telemetry.Project(jobs.Claim{ID: "accounting:" + event.ID, Payload: payload}, nil)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(record)
 		case "render":
 			files, e := native.Render(cfg, "0123456789abcdef")
 			if e != nil {

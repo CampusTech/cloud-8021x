@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"math"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -46,7 +47,10 @@ func newMeasurements(m metric.Meter, failures *atomic.Uint64) *Measurements {
 	return x
 }
 func (x *Measurements) Observe(ctx context.Context, name string, value float64) {
-	if g := x.gauges[name]; g != nil && value >= 0 {
+	if name == "backend.up" || name == "backend.uptime" || name == "job.age" {
+		return
+	}
+	if g := x.gauges[name]; g != nil && value >= 0 && !math.IsInf(value, 0) {
 		g.Record(ctx, value)
 	}
 }
@@ -60,4 +64,29 @@ func operation(v string) string {
 }
 func (x *Measurements) Retry(ctx context.Context, backend string) {
 	x.retries.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", operation(backend))))
+}
+
+// ObserveComponent records only fixed backend/job categories. Negative or nonfinite
+// values mean unavailable and are omitted; unknown labels never create a series.
+func (x *Measurements) ObserveComponent(ctx context.Context, name, component string, value float64) {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return
+	}
+	switch name {
+	case "backend.up", "backend.uptime":
+		switch component {
+		case "freeradius", "step-ca", "postgres", "collector":
+		default:
+			return
+		}
+	case "job.age":
+		switch component {
+		case "inventory", "certificates", "sites", "sources", "accounting", "usage", "outbox", "metrics":
+		default:
+			return
+		}
+	default:
+		return
+	}
+	x.gauges[name].Record(ctx, value, metric.WithAttributes(attribute.String("component", component)))
 }

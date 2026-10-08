@@ -200,3 +200,22 @@ func TestIntervalRetainsOriginalProducerContext(t *testing.T) {
 		t.Fatal("display context changed semantic usage ID")
 	}
 }
+
+func TestTerminationCauseIsDisplayOnly(t *testing.T) {
+	r := raw("Stop", "10", "100", "200")
+	baseline := event(t, r)
+	for _, tc := range []struct {
+		attr Attribute
+		want string
+	}{
+		{Attribute{}, "N/A"}, {Attribute{"User-Request", 1}, "User-Request"},
+		{Attribute{"Lost-Carrier", 1}, "Lost-Carrier"}, {Attribute{"1", 1}, "User-Request"},
+		{Attribute{"User-Request", 2}, "N/A"}, {Attribute{"9999", 1}, "N/A"}, {Attribute{"secret arbitrary value", 1}, "N/A"},
+	} {
+		r.TerminateCause = tc.attr
+		got := event(t, r)
+		if got.TerminateCause != tc.want || got.ID != baseline.ID || got.Upload != baseline.Upload || got.Download != baseline.Download || got.Identity != nil {
+			t.Fatalf("changed semantic event: %+v", got)
+		}
+	}
+}

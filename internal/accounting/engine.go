@@ -25,12 +25,14 @@ type Attribute struct {
 	Count int    `json:"count"`
 }
 type Raw struct {
+	TerminateCause                                                                         Attribute
 	SourceIP                                                                               string
 	NASIP, Station, Session, Status, Duration, Input, Output, InputHigh, OutputHigh, Class Attribute
 	Received                                                                               time.Time
 	Location, Client, Host, ReplayID, CalledStation, NASPort                               string
 }
 type Event struct {
+	TerminateCause             string `json:"terminate_cause,omitempty"`
 	CalledStation, NASPort     string
 	ID                         string    `json:"event_id"`
 	Key                        [4]string `json:"session_key"`
@@ -152,6 +154,11 @@ func Normalize(r Raw, key []byte, maxAge time.Duration) (Event, error) {
 	if e.Identity == nil && r.Class.Count != 0 {
 		e.AttributionIssue = "invalid_class"
 	}
+	if e.Status == "Stop" && r.TerminateCause.Count == 1 {
+		e.TerminateCause = TerminationCause(r.TerminateCause.Value)
+	} else {
+		e.TerminateCause = "N/A"
+	}
 	e.ID = digest([]any{k, e.Status, e.Duration, e.Upload, e.Download, e.Bits, r.Location, r.Class})
 	return e, nil
 }
@@ -230,4 +237,16 @@ func Apply(s State, e Event) (State, *Interval, string) {
 		return s, nil, "counter_reset"
 	}
 	return s, &Interval{ID: usageID(e.Key, prev, cur), Key: e.Key, Previous: prev, Current: cur, Upload: e.Upload - prev[1], Download: e.Download - prev[2], Seconds: e.Duration - prev[0], Received: e.Received, Bits: s.Bits, Identity: s.Identity, Host: e.Host, Location: e.Location, CalledStation: e.CalledStation, NASPort: e.NASPort}, "interval"
+}
+
+// TerminationCause accepts the native RADIUS dictionary names or their integer
+// values. It is display-only and excluded from event identity and usage arithmetic.
+func TerminationCause(value string) string {
+	names := [...]string{"User-Request", "Lost-Carrier", "Lost-Service", "Idle-Timeout", "Session-Timeout", "Admin-Reset", "Admin-Reboot", "Port-Error", "NAS-Error", "NAS-Request", "NAS-Reboot", "Port-Unneeded", "Port-Preempted", "Port-Suspended", "Service-Unavailable", "Callback", "User-Error", "Host-Request", "Supplicant-Restart", "Reauthentication-Failure", "Port-Reinit", "Port-Disabled"}
+	for i, name := range names {
+		if value == name || value == strconv.Itoa(i+1) {
+			return name
+		}
+	}
+	return "N/A"
 }

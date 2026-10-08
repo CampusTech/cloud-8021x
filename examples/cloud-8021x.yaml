@@ -60,6 +60,7 @@ policy:
     - {group_id: 'fleet:1', location_id: nyc, vlan: 20}
 
 network:
+  metadata_max_age: 1h # Display metadata only; independent from inventory and discovery freshness.
   providers:
     - id: campus-unifi
       kind: unifi

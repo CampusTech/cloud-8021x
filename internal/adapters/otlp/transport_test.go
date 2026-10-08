@@ -66,3 +66,21 @@ func TestDashboardNumericAndExactCounterRepresentations(t *testing.T) {
 		t.Fatal("dashboard numeric measure or exact counter missing")
 	}
 }
+
+func TestStopReasonProjectsToScalarOTLPAttributeAndBody(t *testing.T) {
+	r, err := telemetry.Project(jobs.Claim{ID: "accounting:stop", Payload: json.RawMessage(`{"event_id":"stop","status":"Stop","terminate_cause":"User-Request"}`)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := Request([]telemetry.BusinessRecord{r}).ResourceLogs[0].ScopeLogs[0].LogRecords[0]
+	found := false
+	for _, attr := range log.Attributes {
+		if attr.Key == "terminate_cause" {
+			found = attr.Value.GetStringValue() == "User-Request"
+		}
+	}
+	var body map[string]any
+	if err = json.Unmarshal([]byte(log.Body.GetStringValue()), &body); err != nil || !found || body["terminate_cause"] != "User-Request" {
+		t.Fatal("missing stop-reason facet", err)
+	}
+}

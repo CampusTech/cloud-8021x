@@ -171,12 +171,12 @@ const rawSelect = `SELECT id,received_at,source_ip,client_id,location_id,host,re
  coalesce(status,''),status_count,coalesce(session_time,''),session_time_count,
  coalesce(input_octets,''),input_octets_count,coalesce(output_octets,''),output_octets_count,
  coalesce(input_gigawords,''),input_gigawords_count,coalesce(output_gigawords,''),output_gigawords_count,
- coalesce(class,''),class_count,coalesce(called_station,''),coalesce(nas_port,'') FROM ledger.intake`
+ coalesce(class,''),class_count,coalesce(called_station,''),coalesce(nas_port,''),coalesce(terminate_cause,''),terminate_cause_count FROM ledger.intake`
 
 func scanRaw(row pgx.Row) (int64, accounting.Raw, error) {
 	var id int64
 	var r accounting.Raw
-	err := row.Scan(&id, &r.Received, &r.SourceIP, &r.Client, &r.Location, &r.Host, &r.ReplayID, &r.NASIP.Value, &r.NASIP.Count, &r.Station.Value, &r.Station.Count, &r.Session.Value, &r.Session.Count, &r.Status.Value, &r.Status.Count, &r.Duration.Value, &r.Duration.Count, &r.Input.Value, &r.Input.Count, &r.Output.Value, &r.Output.Count, &r.InputHigh.Value, &r.InputHigh.Count, &r.OutputHigh.Value, &r.OutputHigh.Count, &r.Class.Value, &r.Class.Count, &r.CalledStation, &r.NASPort)
+	err := row.Scan(&id, &r.Received, &r.SourceIP, &r.Client, &r.Location, &r.Host, &r.ReplayID, &r.NASIP.Value, &r.NASIP.Count, &r.Station.Value, &r.Station.Count, &r.Session.Value, &r.Session.Count, &r.Status.Value, &r.Status.Count, &r.Duration.Value, &r.Duration.Count, &r.Input.Value, &r.Input.Count, &r.Output.Value, &r.Output.Count, &r.InputHigh.Value, &r.InputHigh.Count, &r.OutputHigh.Value, &r.OutputHigh.Count, &r.Class.Value, &r.Class.Count, &r.CalledStation, &r.NASPort, &r.TerminateCause.Value, &r.TerminateCause.Count)
 	return id, r, err
 }
 func quarantineIntake(ctx context.Context, tx pgx.Tx, id int64, reason string) error {

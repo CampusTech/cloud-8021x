@@ -64,3 +64,17 @@ func TestAuthDashboardSerial(t *testing.T) {
 		t.Fatal("serial projection lost", r, err)
 	}
 }
+
+func TestStopReasonProjectionIncludesLegacyUnavailable(t *testing.T) {
+	for _, value := range []string{"User-Request", "", "arbitrary secret"} {
+		payload, _ := json.Marshal(map[string]any{"event_id": "stop", "status": "Stop", "terminate_cause": value})
+		r, err := Project(jobs.Claim{ID: "accounting:stop", Payload: payload}, nil)
+		want := "N/A"
+		if value == "User-Request" {
+			want = value
+		}
+		if err != nil || r.Fields["terminate_cause"] != want {
+			t.Fatal(r, err)
+		}
+	}
+}

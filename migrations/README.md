@@ -6,7 +6,7 @@ stock `radcheck`, `radreply`, `radacct`, or SQL authentication/client lookup tab
 
 Run `postgres.NewMigration(...).Migrate(ctx, Roles{Runtime: ..., Native: ...})`
 with the separate migration credential. Migrations use advisory transaction lock
-`(8021,1)`, reject other database names before DDL, and store schema version 2 (v1 upgrades with the collection scope indexes).
+`(8021,1)`, reject other database names before DDL, and store schema version 3 (v1 upgrades with collection scope indexes; v2 adds optional termination display metadata).
 The runtime/native roles must already exist without elevated flags, membership,
 or object ownership. Migrations reset grants on application objects and grant:
 
@@ -180,3 +180,14 @@ readiness before root-started FreeRADIUS restarts. The source-specific database
 claim isolates each firewall node; it is not permission to restart both HA nodes
 simultaneously. Static configured clients remain independent of dynamic-source
 outages and TTL.
+
+## Termination display metadata (schema 3)
+
+`003_termination_cause.sql` adds nullable `intake.terminate_cause` and nonnegative
+`terminate_cause_count` (default 0). Existing native writers may omit both; new
+native SQL uses dictionary string expansion and original occurrence count.
+Apply migrations before enabling the new template. Existing raw rows remain
+absent metadata and immutable observations/work payloads are never rewritten.
+The normalizer projects only single recognized standard termination values;
+unknown/duplicate/absent values are `N/A` display data, not accounting quarantine
+or authorization inputs. Event IDs and interval arithmetic remain unchanged.

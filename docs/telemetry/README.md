@@ -38,7 +38,14 @@ this package does not install a second global provider or change policy decision
   `UsageAge` is time since the last usage work item was created (processing
   freshness). Nil ages mean unavailable/no observations, never fabricated zero.
   Poll independently of auth and report errors as unavailable measurements.
-- `Measurements.Observe` accepts only the named instruments below; Retry bounds
+- `Measurements.ObserveComponent(ctx, name, component, value)` is required for
+  `backend.up` / `backend.uptime` (components `freeradius`, `step-ca`, `postgres`,
+  `collector`) and `job.age` (`inventory`, `certificates`, `sites`, `sources`,
+  `accounting`, `usage`, `outbox`, `metrics`). Each category has its own series.
+  Unknown names/labels, negative or nonfinite values are omitted. Do not record
+  fabricated values for unavailable components. `Observe` cannot create unlabeled
+  versions of these component gauges.
+- `Measurements.Observe` accepts only the other named instruments below; Retry bounds
   its backend labels. Durations/concurrency, Go heap/GC/goroutines/process uptime
   and export errors are measured directly. The scheduler supplies real backend
   process uptime/status, native spool metadata, source/inventory freshness and
@@ -62,6 +69,11 @@ Domain payloads remain vendor-neutral. The adapter projects known fields from
 Access-Accept/Reject; accounting emits Acct-Start/Update/Stop; intervals emit
 Acct-Usage. Stable event/usage IDs, source/NAS/station/session, original receipt,
 verified identity/fingerprint/VLAN and local owner/site/AP/VLAN metadata survive.
+`network.metadata_max_age` independently bounds site/AP/VLAN display cache age:
+its default is 1h and accepted range is greater than zero through 24h. Both final
+native-auth enrichment and `NewDisplay` use it; inventory display still uses
+`policy.inventory_max_age`, while source authorization uses discovery freshness.
+Task 9 must pass this independent field to any network cache display resolution.
 Unavailable display values are `N/A`. Raw Class, certificates and credentials do
 not enter OTLP. Mutable cache metadata cannot change signed device/VLAN authority.
 
@@ -78,6 +90,19 @@ the producing accounting event. These JSON additions do not change semantic
 usage IDs, counters, signed attribution or dedup. Legacy payloads remain immutable;
 missing host becomes `N/A`, never the worker host. No old payload is rewritten or
 republished. An imported legacy interval cannot invent absent original metadata.
+
+Accounting Stop events additionally project `terminate_cause` for the existing
+stop-reason widget. Migration 003 appends optional raw value and occurrence count;
+native detail already retains `Acct-Terminate-Cause`, and native SQL now records
+its dictionary-expanded string with native escaping. Normalization accepts the
+installed standard RFC2866/RFC3580 names (values 1–22). Absent, duplicated or
+unknown values become `N/A`, as do absent legacy JSON fields. This is display-only:
+event/usage IDs, counters, signed attribution, deduplication and existing immutable
+payloads do not change. A retransmission with richer metadata cannot rewrite or
+republish an existing observation. Task 10 must migrate to schema 3 before enabling
+the new native SQL template. No native dictionary/package patch or Go accounting
+spool reader is introduced. [Native Stop proof](evidence/termination-native.json)
+and the `--native-mode termination` fixture gate cover the actual path.
 
 Fields are scalar OTLP log attributes, not a nested attributes map in the body.
 The JSON body retains exact decimal uint64 literals. Numeric counter attributes
@@ -167,6 +192,8 @@ from the shared PostgreSQL ledger, never a Datadog aggregate sum/readback.
 ```
 go test -race ./...
 scripts/test_telemetry_postgres.sh
+# Prepared, labeled disposable native fixture with matched campus3 packages and synthetic TLS PG:
+python3 tests/radius_integration.py --native --container "$TASK7_NATIVE_FIXTURE" --native-mode termination
 python3 tests/ddot_queue.py --evidence /private/tmp/task7-ddot-proof --full-config
 python3 tests/ddot_queue.py --evidence /private/tmp/task7-ddot-full-proof --storage-full
 golangci-lint run
