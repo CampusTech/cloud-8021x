@@ -115,6 +115,9 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 			return safeError(err)
 		}
 	}
+	if err = createMaintenance(ctx, tx, r); err != nil {
+		return safeError(err)
+	}
 	return safeError(commit(ctx, tx))
 }
 func rollback(tx pgx.Tx) {

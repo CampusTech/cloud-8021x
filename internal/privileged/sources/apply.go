@@ -50,6 +50,8 @@ type FirewallState struct {
 	Disabled     bool
 }
 type Backup struct {
+	PreviousProof            []byte
+	PreviousProofExist       bool
 	Proof                    []byte
 	ProofExist               bool
 	Clients, State           []byte

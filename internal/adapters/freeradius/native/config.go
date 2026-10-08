@@ -36,11 +36,35 @@ func Render(cfg config.Config, generation string) (map[string][]byte, error) {
 	if e != nil || uid <= 0 {
 		return nil, errors.New("invalid native policy account")
 	}
-	token, e := read(cfg.Listeners.Policy.Token.File, uid)
+	return render(cfg, generation, func(path string) (string, error) {
+		owner := os.Geteuid()
+		if path == cfg.Listeners.Policy.Token.File || path == cfg.Bootstrap.HealthSecret.File {
+			owner = uid
+		}
+		return read(path, owner)
+	})
+}
+
+// RenderWithSecrets serializes a protected bootstrap candidate entirely from
+// its already fetched in-memory credentials, before replacing any live files.
+func RenderWithSecrets(cfg config.Config, generation string, credentials map[string][]byte) (map[string][]byte, error) {
+	if e := cfg.Validate(); e != nil {
+		return nil, e
+	}
+	return render(cfg, generation, func(path string) (string, error) {
+		b, ok := credentials[path]
+		if !ok || len(b) == 0 || len(b) > 8192 {
+			return "", errors.New("required candidate credential missing")
+		}
+		return string(bytes.TrimSpace(b)), nil
+	})
+}
+func render(cfg config.Config, generation string, read func(string) (string, error)) (map[string][]byte, error) {
+	token, e := read(cfg.Listeners.Policy.Token.File)
 	if e != nil {
 		return nil, e
 	}
-	dsn, e := read(cfg.Database.NativeWriterDSN.File, os.Geteuid())
+	dsn, e := read(cfg.Database.NativeWriterDSN.File)
 	if e != nil {
 		return nil, e
 	}
@@ -57,11 +81,19 @@ func Render(cfg config.Config, generation string) (map[string][]byte, error) {
 	}
 	o := templates.Options{Host: cfg.Hostname, Generation: generation, ConfigDir: cfg.Backends.RadiusConfigDir, AuthDirectory: cfg.Paths.AuthLogDir, SpoolDirectory: cfg.Paths.AccountingSpoolDir, LeafDirectory: cfg.Backends.RadiusVerifyLeafDir, CertificateFile: cfg.CA.ServerCertFile, KeyFile: cfg.CA.ServerKeyFile.File, CAFile: cfg.CA.RootFiles[0], PolicyAddress: cfg.Listeners.Policy.Address, Bearer: token, NativeConninfo: conn, Legacy: cfg.Policy.IdentityMode == "legacy-serial", SourcesInclude: cfg.Network.Discovery.Enabled, SourceConfigSHA256: sc.Identity()}
 	for _, client := range cfg.RadiusClients {
-		secret, e := read(client.Secret.File, os.Geteuid())
+		secret, e := read(client.Secret.File)
 		if e != nil {
 			return nil, e
 		}
 		o.Clients = append(o.Clients, templates.Client{ID: client.ID, Location: client.LocationID, CIDRs: client.CIDRs, Secret: secret})
+	}
+	if cfg.Bootstrap.Project != "" {
+		o.HealthAddress = cfg.Bootstrap.LocalAddress
+		o.HealthPeer = cfg.Bootstrap.PeerAddress
+		o.HealthSecret, e = read(cfg.Bootstrap.HealthSecret.File)
+		if e != nil {
+			return nil, e
+		}
 	}
 	return templates.Render(o)
 }

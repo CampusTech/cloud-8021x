@@ -1,0 +1,25 @@
+# This separate Status-Server listener authenticates only the fixed HA peers.
+# Public auth/accounting listeners retain status_server = no.
+clients cloud8021x-health {
+ client health-local {
+  ipaddr = {{.HealthAddress}}
+  secret = {{quote .HealthSecret}}
+  require_message_authenticator = yes
+ }
+ client health-peer {
+  ipaddr = {{.HealthPeer}}
+  secret = {{quote .HealthSecret}}
+  require_message_authenticator = yes
+ }
+}
+server cloud8021x-health {
+ listen {
+  type = status
+  ipaddr = {{.HealthAddress}}
+  port = 18121
+  clients = cloud8021x-health
+ }
+ authorize {
+  ok
+ }
+}

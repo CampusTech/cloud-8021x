@@ -18,7 +18,6 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/identity"
 	"github.com/CampusTech/cloud-8021x/internal/network"
-	"golang.org/x/sys/unix"
 )
 
 const privilegedConfigFile = "/etc/cloud-8021x/config.yaml"
@@ -42,11 +41,29 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 // Later orchestration tasks register the remaining concrete operations. Unimplemented
 // operations remain explicit errors; verify-leaf is already a real executable path.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
+	if o.Incoming && op != OperationBootstrap {
+		return errors.New("incoming release selector is bootstrap-only")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if op == OperationDoctor || op == OperationMetricsEmit {
+		return diagnostics(ctx, op, cfg, o)
+	}
+	if op == OperationBootstrap {
+		return protectedBootstrap(ctx, cfg, o, false)
+	}
+	if op == OperationCertificatesRenew {
+		return protectedBootstrap(ctx, cfg, o, true)
+	}
+	if op == OperationRefreshCredentials {
+		return refreshRootCredentials(ctx, cfg, o)
+	}
 	if op == OperationSourcesApply {
-		return applySources(ctx, o, services.SourceDependencies)
+		if services.SourceDependencies != nil {
+			return applySources(ctx, o, services.SourceDependencies)
+		}
+		return protectedSources(ctx, cfg, o)
 	}
 	if op == OperationSitesSync {
 		service, err := NetworkServiceFromConfig(cfg, new(network.Store), o.DryRun, nil)
@@ -173,15 +190,8 @@ func verifyLeaf(ctx context.Context, cfg config.Config, o RunOptions) error {
 // Only the fixed-path root hook calls this; configuration is decoded again from
 // the protected descriptor so command-line/config injection cannot select root actions.
 func readProtectedHookConfig(path string) (config.Config, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return config.Config{}, errors.New("protected hook configuration unavailable")
+	if path != privilegedConfigFile {
+		return config.Config{}, errors.New("fixed protected hook config required")
 	}
-	f := os.NewFile(uintptr(fd), path)
-	defer func() { _ = f.Close() }()
-	var st unix.Stat_t
-	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != 0 || st.Nlink != 1 || st.Mode&0022 != 0 {
-		return config.Config{}, errors.New("hook configuration must be a root-owned, non-writable regular file")
-	}
-	return config.Decode(f)
+	return readProtectedSourceConfig()
 }

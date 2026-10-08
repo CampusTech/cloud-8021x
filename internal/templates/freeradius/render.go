@@ -23,6 +23,7 @@ type Client struct {
 	CIDRs                []string
 }
 type Options struct {
+	HealthAddress, HealthPeer, HealthSecret                                   string
 	SourceConfigSHA256                                                        string
 	Host, Generation, ConfigDir, AuthDirectory, SpoolDirectory, LeafDirectory string
 	CertificateFile, KeyFile, CAFile, PolicyAddress, Bearer, NativeConninfo   string
@@ -83,6 +84,17 @@ func Render(o Options) (map[string][]byte, error) {
 			}
 		}
 	}
+	if o.HealthAddress != "" {
+		for _, raw := range []string{o.HealthAddress, o.HealthPeer} {
+			ip, e := netip.ParseAddr(raw)
+			if e != nil || !ip.Is4() || !ip.IsPrivate() {
+				return nil, errors.New("health requires fixed private IPv4 peers")
+			}
+		}
+		if o.HealthAddress == o.HealthPeer || !regexp.MustCompile(`^[a-zA-Z0-9_-]{32,128}$`).MatchString(o.HealthSecret) {
+			return nil, errors.New("invalid separate native health secret")
+		}
+	}
 	result := map[string][]byte{}
 	for name, destination := range map[string]string{"radiusd": "radiusd.conf", "dictionary": "dictionary", "clients": "clients.conf", "eap": "mods-enabled/eap", "rest": "mods-enabled/rest", "sql": "mods-enabled/sql", "accounting": "mods-enabled/accounting_detail", "auth": "mods-enabled/auth_detail", "always": "mods-enabled/always", "default": "sites-enabled/default", "certificate": "sites-enabled/certificate", "buffered": "sites-enabled/buffered"} {
 		raw, e := templates.ReadFile(name + ".tmpl")
@@ -98,6 +110,21 @@ func Render(o Options) (map[string][]byte, error) {
 			return nil, e
 		}
 		result[destination] = b.Bytes()
+	}
+	if o.HealthAddress != "" {
+		raw, e := templates.ReadFile("health.tmpl")
+		if e != nil {
+			return nil, e
+		}
+		t, e := template.New("health").Funcs(template.FuncMap{"quote": quote}).Parse(string(raw))
+		if e != nil {
+			return nil, e
+		}
+		var b bytes.Buffer
+		if e = t.Execute(&b, o); e != nil {
+			return nil, e
+		}
+		result["sites-enabled/health"] = b.Bytes()
 	}
 	return result, nil
 }

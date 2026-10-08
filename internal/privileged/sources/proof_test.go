@@ -79,3 +79,44 @@ func TestProofReconciliationRejectsAlteredOriginalMtime(t *testing.T) {
 		t.Fatal("reconciliation accepted freshened proof")
 	}
 }
+
+func TestProofRetentionPreservesCurrentPreviousAndUnresolved(t *testing.T) {
+	o, _, _ := fixtureOps(t)
+	now := time.Now()
+	cfg := Config{MaxAge: time.Minute, Bindings: []Binding{{ProviderID: "u", ConsoleID: "console", ClientID: "office", LocationID: "nyc", Medium: "wifi", SecretFile: "fixed"}}}
+	var generations []string
+	for _, seconds := range []int{20, 15, 10, 5} {
+		candidate := domain.SourceCandidate{ProviderID: "u", SiteID: "console", CIDRs: []string{"8.8.8.8/32"}, ObservedAt: domain.Unix(now.Add(-time.Duration(seconds) * time.Second))}
+		applier := Applier{Config: cfg, Verifier: verifier{got: []domain.SourceCandidate{candidate}}, Operations: o, Now: func() time.Time { return now }}
+		if _, err := applier.Apply(context.Background(), []domain.SourceCandidate{candidate}, false); err != nil {
+			t.Fatal(err)
+		}
+		current, err := os.ReadFile(filepath.Join(o.proofPath, "current"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		generations = append(generations, string(current))
+	}
+	o.RetainedProofs = func(context.Context) ([]string, error) { return []string{generations[1]}, nil }
+	marker := filepath.Join(o.proofPath, generations[2], cfg.Identity(), clientHash("office"), "8.8.8.8")
+	before, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = o.PrepareRetention(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i, generation := range generations {
+		_, err := os.Stat(filepath.Join(o.proofPath, generation))
+		if i == 0 && !os.IsNotExist(err) {
+			t.Fatal("unreferenced generation retained")
+		}
+		if i > 0 && err != nil {
+			t.Fatal("referenced generation deleted", i, err)
+		}
+	}
+	after, err := os.Stat(marker)
+	if err != nil || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("retention refreshed original proof")
+	}
+}

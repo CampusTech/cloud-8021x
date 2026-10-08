@@ -33,6 +33,7 @@ type SecretRef struct {
 }
 
 type Config struct {
+	Bootstrap     Bootstrap      `yaml:"bootstrap"`
 	RuntimeUser   string         `yaml:"runtime_user"`
 	SchemaVersion int            `yaml:"schema_version"`
 	Debug         bool           `yaml:"debug"`

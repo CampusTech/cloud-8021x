@@ -52,6 +52,7 @@ type Firewall interface {
 }
 type SecretReader interface{ ReadSecret(string) ([]byte, error) }
 type FileOperations struct {
+	RetainedProofs         func(context.Context) ([]string, error)
 	Radius                 Radius
 	Firewall               Firewall
 	Target                 FirewallTarget
@@ -123,6 +124,13 @@ func (o *FileOperations) Snapshot(ctx context.Context) (Backup, error) {
 	b.Proof, b.ProofExist, e = readOptional(filepath.Join(o.proofPath, "current"), true)
 	if e == nil && b.ProofExist && !proofHash.Match(b.Proof) {
 		return Backup{}, errors.New("invalid existing source proof pointer")
+	}
+	if e != nil {
+		return b, e
+	}
+	b.PreviousProof, b.PreviousProofExist, e = readOptional(filepath.Join(o.proofPath, "previous"), true)
+	if e == nil && b.PreviousProofExist && !proofHash.Match(b.PreviousProof) {
+		return Backup{}, errors.New("invalid previous proof pointer")
 	}
 	return b, e
 }
@@ -258,6 +266,18 @@ func (o *FileOperations) Commit(ctx context.Context, s State) error {
 	if e = network.WritePublished(o.statePath, b); e != nil {
 		return e
 	}
+	current, present, e := readOptional(filepath.Join(o.proofPath, "current"), true)
+	if e != nil {
+		return e
+	}
+	if present && string(current) != o.stagedProof {
+		if !proofHash.Match(current) {
+			return errors.New("invalid prior proof pointer")
+		}
+		if e = network.WritePublished(filepath.Join(o.proofPath, "previous"), current); e != nil {
+			return e
+		}
+	}
 	// Publish trust last. Failed validation, activation or convergence cannot freshen it.
 	return network.WritePublished(filepath.Join(o.proofPath, "current"), []byte(o.stagedProof))
 }
@@ -293,6 +313,15 @@ func (o *FileOperations) Rollback(ctx context.Context, b Backup) error {
 	}
 	if err != nil {
 		return err
+	}
+	if b.PreviousProofExist {
+		if e := network.WritePublished(filepath.Join(o.proofPath, "previous"), b.PreviousProof); e != nil {
+			return e
+		}
+	} else {
+		if e := network.RemovePublished(filepath.Join(o.proofPath, "previous")); e != nil {
+			return e
+		}
 	}
 	if b.ProofExist {
 		return network.WritePublished(filepath.Join(o.proofPath, "current"), b.Proof)

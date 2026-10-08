@@ -16,17 +16,18 @@ import (
 type Operation string
 
 const (
-	OperationServe             Operation = "serve"
-	OperationBootstrap         Operation = "bootstrap"
-	OperationInventorySync     Operation = "inventory sync"
-	OperationSitesSync         Operation = "sites sync"
-	OperationMetricsEmit       Operation = "metrics emit"
-	OperationCertificatesRenew Operation = "certificates renew"
-	OperationRadiusVerifyLeaf  Operation = "radius verify-leaf"
-	OperationSourcesApply      Operation = "sources apply"
-	OperationStateMigrate      Operation = "state migrate"
-	OperationStateExport       Operation = "state export"
-	OperationDoctor            Operation = "doctor"
+	OperationServe              Operation = "serve"
+	OperationBootstrap          Operation = "bootstrap"
+	OperationRefreshCredentials Operation = "bootstrap credentials"
+	OperationInventorySync      Operation = "inventory sync"
+	OperationSitesSync          Operation = "sites sync"
+	OperationMetricsEmit        Operation = "metrics emit"
+	OperationCertificatesRenew  Operation = "certificates renew"
+	OperationRadiusVerifyLeaf   Operation = "radius verify-leaf"
+	OperationSourcesApply       Operation = "sources apply"
+	OperationStateMigrate       Operation = "state migrate"
+	OperationStateExport        Operation = "state export"
+	OperationDoctor             Operation = "doctor"
 )
 
 // ErrUnsupported is returned until the operation has a real injected service.
@@ -34,6 +35,8 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
+	Version               string
+	Incoming              bool
 	SourceCandidateSHA256 string
 	ConfigFile            string
 	VerifiedLeaf          *VerifiedLeafOptions
@@ -60,7 +63,7 @@ func NewCommand(options Options) *cobra.Command {
 		processUID = os.Geteuid
 	}
 	var path string
-	var debug, dryRun bool
+	var debug, dryRun, incoming bool
 	var policyAddress string
 	logger := options.Logger
 	if logger == nil {
@@ -78,11 +81,19 @@ func NewCommand(options Options) *cobra.Command {
 		}
 		var cfg config.Config
 		var err error
-		if cmd.Name() == "verify-leaf" && cmd.Parent() != nil && cmd.Parent().Name() == "radius" && processUID() == 0 {
+		privileged := cmd.Name() == "doctor" || (cmd.Name() == "emit" && cmd.Parent() != nil && cmd.Parent().Name() == "metrics") || cmd.Name() == "bootstrap" || (cmd.Name() == "credentials" && cmd.Parent() != nil && cmd.Parent().Name() == "bootstrap") || (cmd.Parent() != nil && ((cmd.Name() == "verify-leaf" && cmd.Parent().Name() == "radius") || (cmd.Name() == "renew" && cmd.Parent().Name() == "certificates") || (cmd.Name() == "apply" && cmd.Parent().Name() == "sources")))
+		if privileged && processUID() == 0 {
 			if path != privilegedConfigFile {
-				return config.Config{}, errors.New("privileged verify-leaf requires the fixed protected application configuration")
+				return config.Config{}, errors.New("root operation requires the fixed protected application configuration")
 			}
-			cfg, err = readProtectedHookConfig(path)
+			if root.PersistentFlags().Changed("policy-address") {
+				return config.Config{}, errors.New("root operation rejects listener overrides")
+			}
+			if incoming && cmd.Name() == "bootstrap" {
+				cfg, err = readFixedProtectedConfig("/var/cache/cloud-8021x/artifacts/config.yaml")
+			} else {
+				cfg, err = readProtectedSourceConfig()
+			}
 		} else {
 			cfg, err = config.LoadForOverrides(path)
 		}
@@ -117,7 +128,7 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{Version: options.Version, Incoming: incoming, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
@@ -144,7 +155,10 @@ func NewCommand(options Options) *cobra.Command {
 		}
 		return cmd
 	}
-	root.AddCommand(operation("serve", OperationServe), operation("bootstrap", OperationBootstrap), operation("doctor", OperationDoctor), versionCmd(options.Version))
+	bootstrap := operation("bootstrap", OperationBootstrap)
+	bootstrap.Flags().BoolVar(&incoming, "incoming", false, "Bootstrap the verified release from the fixed protected incoming directory")
+	bootstrap.AddCommand(operation("credentials", OperationRefreshCredentials))
+	root.AddCommand(operation("serve", OperationServe), bootstrap, operation("doctor", OperationDoctor), versionCmd(options.Version))
 	for _, group := range []struct {
 		name    string
 		actions []struct {

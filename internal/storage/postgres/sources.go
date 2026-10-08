@@ -65,3 +65,31 @@ func (s *Store) ClaimSource(ctx context.Context, node, owner string, lease time.
 	}
 	return claim, nil
 }
+
+// UnresolvedSourcePayloads supplies retention references without changing claims,
+// original candidate timestamps or reconciliation state. Any uncertainty means
+// the protected helper retains proof rather than deleting it by age.
+func (s *Store) UnresolvedSourcePayloads(ctx context.Context, node string) ([][]byte, error) {
+	if node != "radius-primary" && node != "radius-secondary" {
+		return nil, errors.New("invalid fixed source node")
+	}
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT payload FROM ledger.work WHERE kind=$1 AND state IN ('pending','leased','started','quarantine') ORDER BY id LIMIT 1025`, "sources:"+node)
+	if err != nil {
+		return nil, safeError(err)
+	}
+	defer rows.Close()
+	var payloads [][]byte
+	for rows.Next() {
+		var payload []byte
+		if err = rows.Scan(&payload); err != nil {
+			return nil, safeError(err)
+		}
+		if len(payload) > 1<<20 || len(payloads) >= 1024 {
+			return nil, errors.New("source retention references exceed bound")
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads, safeError(rows.Err())
+}

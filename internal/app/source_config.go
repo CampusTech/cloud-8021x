@@ -13,11 +13,17 @@ import (
 // unwritable directory descriptors. Neither ancestor symlinks nor a replaced
 // daemon-writable config path can select root resources or credentials.
 func readProtectedSourceConfig() (config.Config, error) {
+	return readFixedProtectedConfig(privilegedConfigFile)
+}
+func readFixedProtectedConfig(path string) (config.Config, error) {
+	if path != privilegedConfigFile && path != "/var/cache/cloud-8021x/artifacts/config.yaml" {
+		return config.Config{}, errors.New("fixed root config required")
+	}
 	fd, e := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if e != nil {
 		return config.Config{}, errors.New("protected source configuration unavailable")
 	}
-	parts := strings.Split(strings.TrimPrefix(privilegedConfigFile, "/"), "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for _, part := range parts[:len(parts)-1] {
 		next, e := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		_ = unix.Close(fd)

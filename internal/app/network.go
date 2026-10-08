@@ -190,6 +190,13 @@ func applySources(ctx context.Context, o RunOptions, dependencies SourceDependen
 		return e
 	}
 	apply := func() error {
+		if !o.DryRun {
+			if retention, ok := ops.(interface{ PrepareRetention(context.Context) error }); ok {
+				if err := retention.PrepareRetention(ctx); err != nil {
+					return err
+				}
+			}
+		}
 		bounded, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		plan, e := (&sources.Applier{Config: sourceConfig, Verifier: verify, Operations: ops}).Apply(bounded, candidates, o.DryRun)
