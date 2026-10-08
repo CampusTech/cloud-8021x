@@ -6,7 +6,7 @@ terraform.tfvars
 *.auto.tfvars
 crash.log
 .DS_Store
-freeradius/
+/freeradius/
 out/
 tfplan
 *.cert

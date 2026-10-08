@@ -3,6 +3,8 @@
 # Durations use Go duration syntax (for example 1h, 15m, 120s).
 schema_version: 1
 debug: false
+# Separate from root and freerad; bootstrap creates this dedicated account.
+runtime_user: cloud8021x
 instance_id: radius-example
 environment: development
 hostname: radius-example
@@ -131,8 +133,14 @@ ca:
   server_key_file: {file: /etc/freeradius/certs/server.key}
   readiness_file: /var/lib/step-ca/ready
 
+# The constrained root verify-leaf hook reads FreeRADIUS public leaf files here
+# and exclusively writes/chowns handoffs into the app-owned 0700 directory.
+backends:
+  radius_verify_leaf_dir: /run/freeradius/verified-leaves
+
 paths:
   handoff_dir: /run/radius-certificate-bindings
+  downgrade_guard_file: /var/lib/cloud-8021x/fingerprint-enforced
 
 schedules:
   inventory: 5m

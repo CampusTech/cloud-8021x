@@ -33,7 +33,7 @@ func execute(t *testing.T, ctx context.Context, services Services, args ...strin
 	if err := os.WriteFile(path, []byte(fixture), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := NewCommand(Options{Version: "test-version", Services: services})
+	cmd := NewCommand(Options{Version: "test-version", Services: services, ProcessUID: func() int { return 501 }})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -77,7 +77,7 @@ func TestCLIOverridesAndDryRun(t *testing.T) {
 	if !r.called || r.operation != OperationServe || !r.options.Debug || !r.options.DryRun || r.config.Listeners.Policy.Address != "127.0.0.1:9090" {
 		t.Fatalf("missing overrides: %+v", r)
 	}
-	for _, args := range [][]string{{"serve"}, {"--dry-run", "inventory", "sync"}, {"radius", "verify-leaf"}, {"bootstrap"}} {
+	for _, args := range [][]string{{"serve"}, {"--dry-run", "inventory", "sync"}, {"bootstrap"}} {
 		_, err = execute(t, context.Background(), nil, args...)
 		if !errors.Is(err, ErrUnsupported) {
 			t.Fatalf("unfinished command must fail explicitly: %v", err)

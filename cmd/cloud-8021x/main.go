@@ -16,7 +16,7 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := app.NewCommand(app.Options{Version: version}).ExecuteContext(ctx); err != nil {
+	if err := app.NewCommand(app.Options{Version: version, Services: app.NewRuntimeServices()}).ExecuteContext(ctx); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

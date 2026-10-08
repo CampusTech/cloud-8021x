@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/sirupsen/logrus"
@@ -33,21 +34,30 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
-	Debug  bool
-	DryRun bool
-	Output io.Writer
-	Logger *logrus.Logger
+	ConfigFile   string
+	VerifiedLeaf *VerifiedLeafOptions
+	Debug        bool
+	DryRun       bool
+	Output       io.Writer
+	Logger       *logrus.Logger
 }
 type Services interface {
 	Run(context.Context, Operation, config.Config, RunOptions) error
 }
 type Options struct {
-	Version  string
-	Services Services
-	Logger   *logrus.Logger
+	// ProcessUID supplies the platform effective-UID lookup. Mutation services
+	// independently check the actual OS UID; the executable uses os.Geteuid.
+	ProcessUID func() int
+	Version    string
+	Services   Services
+	Logger     *logrus.Logger
 }
 
 func NewCommand(options Options) *cobra.Command {
+	processUID := options.ProcessUID
+	if processUID == nil {
+		processUID = os.Geteuid
+	}
 	var path string
 	var debug, dryRun bool
 	var policyAddress string
@@ -65,7 +75,16 @@ func NewCommand(options Options) *cobra.Command {
 		if err := cmd.Context().Err(); err != nil {
 			return config.Config{}, err
 		}
-		cfg, err := config.LoadForOverrides(path)
+		var cfg config.Config
+		var err error
+		if cmd.Name() == "verify-leaf" && cmd.Parent() != nil && cmd.Parent().Name() == "radius" && processUID() == 0 {
+			if path != privilegedConfigFile {
+				return config.Config{}, errors.New("privileged verify-leaf requires the fixed protected application configuration")
+			}
+			cfg, err = readProtectedHookConfig(path)
+		} else {
+			cfg, err = config.LoadForOverrides(path)
+		}
 		if err != nil {
 			return config.Config{}, err
 		}
@@ -86,7 +105,8 @@ func NewCommand(options Options) *cobra.Command {
 		return cfg, nil
 	}
 	operation := func(name string, op Operation) *cobra.Command {
-		return &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		var leaf VerifiedLeafOptions
+		cmd := &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := load(cmd)
 			if err != nil {
 				return err
@@ -95,8 +115,29 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			return options.Services.Run(cmd.Context(), op, cfg, RunOptions{Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger})
+			run := RunOptions{Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			if op == OperationRadiusVerifyLeaf {
+				copy := leaf
+				run.VerifiedLeaf = &copy
+			}
+			return options.Services.Run(cmd.Context(), op, cfg, run)
 		}}
+		if op == OperationRadiusVerifyLeaf {
+			cmd.Use = name + " [certificate-file session-token]"
+			cmd.Flags().StringVar(&leaf.CertificateFile, "certificate-file", "", "Completed TLS verification leaf PEM filename")
+			cmd.Flags().StringVar(&leaf.SessionToken, "session-token", "", "Server-generated one-use TLS session token")
+			cmd.Args = func(cmd *cobra.Command, args []string) error {
+				if len(args) != 0 {
+					if len(args) != 2 || cmd.Flags().Changed("certificate-file") || cmd.Flags().Changed("session-token") {
+						return errors.New("provide certificate-file and session-token either as two arguments or explicit flags")
+					}
+					leaf.CertificateFile = args[0]
+					leaf.SessionToken = args[1]
+				}
+				return leaf.Validate()
+			}
+		}
+		return cmd
 	}
 	root.AddCommand(operation("serve", OperationServe), operation("bootstrap", OperationBootstrap), operation("doctor", OperationDoctor), versionCmd(options.Version))
 	for _, group := range []struct {

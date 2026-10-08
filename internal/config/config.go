@@ -33,6 +33,7 @@ type SecretRef struct {
 }
 
 type Config struct {
+	RuntimeUser   string         `yaml:"runtime_user"`
 	SchemaVersion int            `yaml:"schema_version"`
 	Debug         bool           `yaml:"debug"`
 	InstanceID    string         `yaml:"instance_id"`
@@ -206,6 +207,7 @@ type CA struct {
 	ReadinessFile     string    `yaml:"readiness_file"`
 }
 type Backends struct {
+	RadiusVerifyLeafDir string `yaml:"radius_verify_leaf_dir"`
 	RadiusBinary        string `yaml:"radius_binary"`
 	RadiusConfigDir     string `yaml:"radius_config_dir"`
 	RadiusService       string `yaml:"radius_service"`
@@ -236,16 +238,17 @@ type Schedules struct {
 
 func Defaults() Config {
 	return Config{
-		Listeners: Listeners{Policy: Listener{MaxConcurrency: 64, MaxBodyBytes: 16 << 10, Timeout: 2 * time.Second}},
-		Inventory: Inventory{Provider: "fleet", Fleet: Fleet{Timeout: 5 * time.Second, PollInterval: time.Hour, MaxPendingAge: 24 * time.Hour}},
-		Policy:    Policy{IdentityMode: "fingerprint", InventoryMaxAge: time.Hour, CertificateMaxAge: 24 * time.Hour, HandoffMaxAge: 120 * time.Second, ClassMaxAge: 30 * 24 * time.Hour},
-		Network:   Network{Discovery: Discovery{MaxAge: 15 * time.Minute}},
-		Database:  Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
-		Telemetry: Telemetry{Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
-		CA:        CA{Provider: "step-ca"},
-		Backends:  Backends{RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
-		Paths:     Paths{StateDir: "/var/lib/cloud-8021x", CacheDir: "/var/cache/cloud-8021x", HandoffDir: "/run/radius-certificate-bindings", InventoryFile: "/var/lib/cloud-8021x/inventory.json", MetadataFile: "/var/lib/cloud-8021x/metadata.json", AuthLogDir: "/var/log/freeradius/auth", AccountingSpoolDir: "/var/log/freeradius/radacct", DowngradeGuardFile: "/var/lib/cloud-8021x/fingerprint-required", LegacyStateDir: "/var/lib/fleet-radius"},
-		Schedules: Schedules{Inventory: 5 * time.Minute, Certificates: time.Hour, Sites: 5 * time.Minute, Sources: time.Minute, Metrics: time.Minute, AccountingWorkers: 2, ExportWorkers: 1},
+		RuntimeUser: "cloud8021x",
+		Listeners:   Listeners{Policy: Listener{MaxConcurrency: 64, MaxBodyBytes: 16 << 10, Timeout: 2 * time.Second}},
+		Inventory:   Inventory{Provider: "fleet", Fleet: Fleet{Timeout: 5 * time.Second, PollInterval: time.Hour, MaxPendingAge: 24 * time.Hour}},
+		Policy:      Policy{IdentityMode: "fingerprint", InventoryMaxAge: time.Hour, CertificateMaxAge: 24 * time.Hour, HandoffMaxAge: 120 * time.Second, ClassMaxAge: 30 * 24 * time.Hour},
+		Network:     Network{Discovery: Discovery{MaxAge: 15 * time.Minute}},
+		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
+		Telemetry:   Telemetry{Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
+		CA:          CA{Provider: "step-ca"},
+		Backends:    Backends{RadiusVerifyLeafDir: "/run/freeradius/verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
+		Paths:       Paths{StateDir: "/var/lib/cloud-8021x", CacheDir: "/var/cache/cloud-8021x", HandoffDir: "/run/radius-certificate-bindings", InventoryFile: "/var/lib/cloud-8021x/inventory.json", MetadataFile: "/var/lib/cloud-8021x/metadata.json", AuthLogDir: "/var/log/freeradius/auth", AccountingSpoolDir: "/var/log/freeradius/radacct", DowngradeGuardFile: "/var/lib/cloud-8021x/fingerprint-enforced", LegacyStateDir: "/var/lib/fleet-radius"},
+		Schedules:   Schedules{Inventory: 5 * time.Minute, Certificates: time.Hour, Sites: 5 * time.Minute, Sources: time.Minute, Metrics: time.Minute, AccountingWorkers: 2, ExportWorkers: 1},
 	}
 }
 
@@ -360,6 +363,12 @@ func listenerBindingsOverlap(a, b netip.AddrPort) bool {
 }
 
 func (c Config) Validate() error {
+	if !regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`).MatchString(c.RuntimeUser) || c.RuntimeUser == "root" || c.RuntimeUser == "freerad" || c.RuntimeUser == "freeradius" {
+		return errors.New("runtime_user must be a separate unprivileged daemon account")
+	}
+	if !cleanPath(c.Backends.RadiusVerifyLeafDir) || c.Backends.RadiusVerifyLeafDir == c.Paths.HandoffDir {
+		return errors.New("verified leaf input requires a fixed directory distinct from private daemon handoffs")
+	}
 	if c.SchemaVersion != SchemaVersion {
 		return errors.New("unsupported or missing schema_version; expected 1")
 	}
@@ -509,7 +518,7 @@ func (c Config) Validate() error {
 	rules := map[string]bool{}
 	for _, r := range c.Policy.Rules {
 		key := r.GroupID + "\x00" + r.LocationID
-		if r.GroupID == "" || locations[r.LocationID].ID == "" || r.VLAN < 1 || r.VLAN > 4094 || rules[key] {
+		if r.GroupID == "" || locations[r.LocationID].ID == "" || r.VLAN < 1 || r.VLAN > 4094 || rules[key] || !locations[r.LocationID].VLANEnabled {
 			return errors.New("policy rules require group, known location, unique group/location and VLAN 1-4094")
 		}
 		rules[key] = true
@@ -533,7 +542,7 @@ func (c Config) Validate() error {
 		clients[r.ID] = true
 		for _, s := range r.CIDRs {
 			p, e := netip.ParsePrefix(s)
-			if e != nil || p.Bits() == 0 || p != p.Masked() {
+			if e != nil || p.Bits() == 0 || p != p.Masked() || p.Addr().Is4In6() {
 				return errors.New("RADIUS client CIDRs must be canonical, bounded prefixes")
 			}
 			for _, other := range ranges {
