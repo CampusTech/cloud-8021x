@@ -150,3 +150,67 @@ func TestPinnedCloudSQLInstanceCAMode(t *testing.T) {
 		}
 	}
 }
+
+func TestListenerBindingCollisionSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		first     string
+		second    string
+		broker    bool
+		wantError bool
+	}{
+		{"port spelling", "127.0.0.1:9080", "127.0.0.1:09080", false, true},
+		{"mapped ipv4", "127.0.0.1:9080", "[::ffff:127.0.0.1]:9080", false, true},
+		{"ipv6 spelling", "[::1]:9080", "[0:0:0:0:0:0:0:1]:9080", false, true},
+		{"ipv4 wildcard", "127.0.0.1:9080", "0.0.0.0:9080", true, true},
+		{"ipv6 wildcard", "127.0.0.1:9080", "[::]:9080", true, true},
+		{"mapped wildcard", "[::1]:9080", "[::ffff:0.0.0.0]:9080", true, true},
+		{"different ports", "127.0.0.1:9080", "0.0.0.0:9081", true, false},
+		{"distinct loopbacks", "127.0.0.1:9080", "127.0.0.2:9080", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Decode(strings.NewReader(validYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Listeners.Policy.Address = tc.first
+			c.Listeners.Policy.Token = SecretRef{File: "/run/policy-token"}
+			c.Policy.ClassSigningKey = SecretRef{File: "/run/class-key"}
+			if tc.broker {
+				c.Inventory.Enabled = true
+				c.Inventory.Fleet.BaseURL = "https://fleet.example"
+				c.Inventory.Fleet.ObserverToken = SecretRef{File: "/run/observer"}
+				c.Inventory.Fleet.MaintainerToken = SecretRef{File: "/run/maintainer"}
+				c.Inventory.Fleet.ManagedCertificates = true
+				c.Listeners.Broker = BrokerListener{Enabled: true, Address: tc.second, CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, Username: "fleet", Token: SecretRef{File: "/run/broker-token"}, SigningKey: SecretRef{File: "/run/signing-key"}, SCEPURL: "https://ca.example/scep", Provisioner: "wifi-scep"}
+			} else {
+				c.Listeners.HealthAddress = tc.second
+			}
+			err = c.Validate()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("binding %s vs %s error=%v wantError=%v", tc.first, tc.second, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestBrokerWildcardCollidesWithCanonicalWebhookBinding(t *testing.T) {
+	c, err := Decode(strings.NewReader(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Inventory.Enabled = true
+	c.Inventory.Fleet.BaseURL = "https://fleet.example"
+	c.Inventory.Fleet.ObserverToken = SecretRef{File: "/run/observer"}
+	c.Inventory.Fleet.MaintainerToken = SecretRef{File: "/run/maintainer"}
+	c.Inventory.Fleet.ManagedCertificates = true
+	c.Listeners.Webhook = TLSListener{Enabled: true, Address: "[::ffff:127.0.0.1]:09444", CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, ClientCAFiles: []string{"/run/client-ca.crt"}, ClientDNSNames: []string{"step-ca.internal"}}
+	c.Listeners.Broker = BrokerListener{Enabled: true, Address: "[::]:9444", CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, Username: "fleet", Token: SecretRef{File: "/run/broker-token"}, SigningKey: SecretRef{File: "/run/signing-key"}, SCEPURL: "https://ca.example/scep", Provisioner: "wifi-scep"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("broker wildcard overlaps canonical webhook binding")
+	}
+	c.Listeners.Broker.Address = "[::]:9445"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("different broker port rejected: %v", err)
+	}
+}

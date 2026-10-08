@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/CampusTech/cloud-8021x/internal/config"
+	"github.com/sirupsen/logrus"
 )
 
 const fixture = `schema_version: 1
@@ -111,5 +112,109 @@ func TestUnifiedChallengeRequiresFileAndRespectsDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Fatal("dry run created token")
+	}
+}
+
+func TestPolicyAddressOverrideRepairsConfiguredAddress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	invalid := strings.Replace(fixture, "  policy:\n", "  policy:\n    address: 0.0.0.0:9080\n", 1)
+	if err := os.WriteFile(path, []byte(invalid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("default config.Load must still validate")
+	}
+	r := new(recorder)
+	cmd := NewCommand(Options{Services: r})
+	cmd.SetArgs([]string{"--config", path, "--policy-address", "127.0.0.1:9080", "serve"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("safe effective override rejected: %v", err)
+	}
+	if !r.called || r.config.Listeners.Policy.Address != "127.0.0.1:9080" {
+		t.Fatal("service did not receive validated effective config")
+	}
+}
+
+func TestUnifiedChallengeUsesEffectiveDebugAndInjectedLogger(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		yamlDebug bool
+		flags     []string
+		wantLog   bool
+	}{
+		{"yaml debug", true, nil, true},
+		{"flag enables", false, []string{"--debug"}, true},
+		{"flag disables", true, []string{"--debug=false"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			key := filepath.Join(dir, "key")
+			output := filepath.Join(dir, "challenge")
+			data := fixture
+			if tc.yamlDebug {
+				data = strings.Replace(data, "debug: false", "debug: true", 1)
+			}
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(key, []byte(strings.Repeat("k", 32)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			logger := logrus.New()
+			logger.SetFormatter(&logrus.JSONFormatter{})
+			hook := new(logCapture)
+			logger.AddHook(hook)
+			cmd := NewCommand(Options{Logger: logger})
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			args := append([]string{"--config", path}, tc.flags...)
+			cmd.SetArgs(append(args, "scep-challenge", "--identity", "device", "--provisioner", "wifi-scep", "--signing-key-file", key, "--out", output))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if (len(hook.entries) > 0) != tc.wantLog {
+				t.Fatalf("injected logger entries=%d wantLog=%v", len(hook.entries), tc.wantLog)
+			}
+			if tc.wantLog && (hook.entries[0].Message != "SCEP challenge written" || hook.entries[0].Data["provisioner"] != "wifi-scep") {
+				t.Fatalf("missing issuance metadata: %+v", hook.entries)
+			}
+			if strings.Contains(out.String(), strings.Repeat("k", 32)) {
+				t.Fatal("secret exposed in debug output")
+			}
+		})
+	}
+}
+
+type logCapture struct{ entries []*logrus.Entry }
+
+func (*logCapture) Levels() []logrus.Level { return logrus.AllLevels }
+func (h *logCapture) Fire(e *logrus.Entry) error {
+	h.entries = append(h.entries, e.Dup())
+	h.entries[len(h.entries)-1].Message = e.Message
+	return nil
+}
+
+func TestUnifiedChallengeHelpDoesNotOfferLegacyEnvironmentFallback(t *testing.T) {
+	cmd := NewCommand(Options{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"scep-challenge", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "SCEP_CHALLENGE_SIGNING_KEY") {
+		t.Fatal("unified help offers unsupported environment fallback")
+	}
+	legacy := NewCompatibilityCommand("test")
+	out.Reset()
+	legacy.SetOut(&out)
+	legacy.SetArgs([]string{"scep-challenge", "--help"})
+	if err := legacy.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SCEP_CHALLENGE_SIGNING_KEY") {
+		t.Fatal("lost legacy environment help")
 	}
 }

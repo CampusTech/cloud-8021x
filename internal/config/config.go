@@ -249,16 +249,42 @@ func Defaults() Config {
 	}
 }
 
+// Load strictly decodes and validates a configuration before returning it.
 func Load(path string) (Config, error) {
+	cfg, err := LoadForOverrides(path)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// LoadForOverrides strictly decodes and applies defaults, but defers semantic
+// validation. Callers MUST apply supported overrides and Validate before use.
+func LoadForOverrides(path string) (Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("open configuration: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	return Decode(f)
+	return decodeForOverrides(f)
 }
 
+// Decode strictly decodes and validates a configuration.
 func Decode(r io.Reader) (Config, error) {
+	cfg, err := decodeForOverrides(r)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func decodeForOverrides(r io.Reader) (Config, error) {
 	data, err := io.ReadAll(io.LimitReader(r, MaxConfigBytes+1))
 	if err != nil {
 		return Config{}, errors.New("read configuration failed")
@@ -276,9 +302,6 @@ func Decode(r io.Reader) (Config, error) {
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Config{}, errors.New("configuration must contain exactly one YAML document")
-	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }
@@ -301,19 +324,39 @@ func httpsURL(s string) bool {
 	return e == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
 func listenAddress(s string, loopback bool) bool {
-	host, port, e := net.SplitHostPort(s)
-	if e != nil {
-		return false
+	_, err := parseListenerBinding(s, loopback)
+	return err == nil
+}
+
+func parseListenerBinding(s string, loopback bool) (netip.AddrPort, error) {
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return netip.AddrPort{}, errors.New("listener requires numeric IP and port")
 	}
-	n, e := strconv.Atoi(port)
-	if e != nil || n < 1 || n > 65535 {
-		return false
+	for _, digit := range port {
+		if digit < '0' || digit > '9' {
+			return netip.AddrPort{}, errors.New("listener port must be decimal")
+		}
 	}
-	ip, e := netip.ParseAddr(host)
-	if e != nil {
-		return false
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return netip.AddrPort{}, errors.New("listener port out of bounds")
 	}
-	return !loopback || ip.IsLoopback()
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Zone() != "" {
+		return netip.AddrPort{}, errors.New("listener requires unscoped numeric IP")
+	}
+	ip = ip.Unmap()
+	if loopback && !ip.IsLoopback() {
+		return netip.AddrPort{}, errors.New("listener requires loopback IP")
+	}
+	return netip.AddrPortFrom(ip, uint16(n)), nil
+}
+
+func listenerBindingsOverlap(a, b netip.AddrPort) bool {
+	// Wildcard listeners are conservatively treated as dual-stack because the
+	// operating system and tcp listener's IPV6_V6ONLY defaults can differ.
+	return a.Port() == b.Port() && (a.Addr() == b.Addr() || a.Addr().IsUnspecified() || b.Addr().IsUnspecified())
 }
 
 func (c Config) Validate() error {
@@ -369,21 +412,35 @@ func (c Config) Validate() error {
 	if p.MaxConcurrency < 1 || p.MaxConcurrency > 1024 || p.MaxBodyBytes < 1 || p.MaxBodyBytes > 1<<20 || !duration(p.Timeout, 10*time.Second) {
 		return errors.New("policy listener bounds invalid")
 	}
-	addresses := map[string]bool{}
-	for _, a := range []string{p.Address, c.Listeners.HealthAddress, c.Listeners.MetricsAddress} {
-		if a != "" {
-			if !listenAddress(a, true) || addresses[a] {
-				return errors.New("local listeners must use distinct numeric loopback addresses")
+	var bindings []netip.AddrPort
+	addListener := func(address string, loopback bool) error {
+		binding, err := parseListenerBinding(address, loopback)
+		if err != nil {
+			return err
+		}
+		for _, existing := range bindings {
+			if listenerBindingsOverlap(binding, existing) {
+				return errors.New("listeners use overlapping bind addresses")
 			}
-			addresses[a] = true
+		}
+		bindings = append(bindings, binding)
+		return nil
+	}
+	for _, address := range []string{p.Address, c.Listeners.HealthAddress, c.Listeners.MetricsAddress} {
+		if address != "" {
+			if err := addListener(address, true); err != nil {
+				return fmt.Errorf("local listener: %w", err)
+			}
 		}
 	}
 	w := c.Listeners.Webhook
 	if w.Enabled {
-		if !listenAddress(w.Address, true) || addresses[w.Address] || !cleanPath(w.CertFile) || len(w.ClientCAFiles) == 0 || len(w.ClientDNSNames) == 0 || !c.Inventory.Enabled {
+		if !cleanPath(w.CertFile) || len(w.ClientCAFiles) == 0 || len(w.ClientDNSNames) == 0 || !c.Inventory.Enabled {
 			return errors.New("webhook requires loopback TLS, client trust/DNS names and Fleet inventory")
 		}
-		addresses[w.Address] = true
+		if err := addListener(w.Address, true); err != nil {
+			return fmt.Errorf("webhook listener: %w", err)
+		}
 	}
 	for _, f := range w.ClientCAFiles {
 		if !cleanPath(f) {
@@ -391,8 +448,13 @@ func (c Config) Validate() error {
 		}
 	}
 	b := c.Listeners.Broker
-	if b.Enabled && (!listenAddress(b.Address, false) || addresses[b.Address] || !cleanPath(b.CertFile) || b.Username == "" || b.Provisioner == "" || !httpsURL(b.SCEPURL) || !c.Inventory.Fleet.ManagedCertificates) {
+	if b.Enabled && (!cleanPath(b.CertFile) || b.Username == "" || b.Provisioner == "" || !httpsURL(b.SCEPURL) || !c.Inventory.Fleet.ManagedCertificates) {
 		return errors.New("broker requires distinct TLS listener, credentials, HTTPS SCEP URL and managed certificate inventory")
+	}
+	if b.Enabled {
+		if err := addListener(b.Address, false); err != nil {
+			return fmt.Errorf("broker listener: %w", err)
+		}
 	}
 	if c.Inventory.Provider != "fleet" {
 		return errors.New("inventory provider must be fleet; Okta/Jamf support was removed")

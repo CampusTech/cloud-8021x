@@ -65,7 +65,7 @@ func NewCommand(options Options) *cobra.Command {
 		if err := cmd.Context().Err(); err != nil {
 			return config.Config{}, err
 		}
-		cfg, err := config.Load(path)
+		cfg, err := config.LoadForOverrides(path)
 		if err != nil {
 			return config.Config{}, err
 		}
@@ -150,12 +150,15 @@ func NewCommand(options Options) *cobra.Command {
 		return err
 	}})
 	root.AddCommand(cfgCmd)
-	challenge := challengeCommand(true)
+	challengeOptions := &RunOptions{Logger: logger}
+	challenge := challengeCommand(true, challengeOptions)
 	challenge.PreRunE = func(cmd *cobra.Command, _ []string) error {
 		cfg, err := load(cmd)
 		if err != nil {
 			return err
 		}
+		challengeOptions.Debug = cfg.Debug
+		challengeOptions.DryRun = dryRun
 		if !cmd.Flags().Changed("signing-key-file") {
 			if err := cmd.Flags().Set("signing-key-file", cfg.Inventory.Fleet.ChallengeSigningKey.File); err != nil {
 				return err

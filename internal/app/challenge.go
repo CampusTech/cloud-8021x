@@ -13,9 +13,9 @@ import (
 
 // challengeCmd is an administrator/MDM-side issuer. It deliberately exposes no
 // unauthenticated HTTP minting endpoint and never accepts a signing key in argv.
-func challengeCmd() *cobra.Command { return challengeCommand(false) }
+func challengeCmd() *cobra.Command { return challengeCommand(false, nil) }
 
-func challengeCommand(inheritFlags bool) *cobra.Command {
+func challengeCommand(inheritFlags bool, options *RunOptions) *cobra.Command {
 	var identity, provisioner, output, keyFile string
 	var ttl time.Duration
 	var dryRun, debug bool
@@ -27,9 +27,13 @@ func challengeCommand(inheritFlags bool) *cobra.Command {
 			if err := cmd.Context().Err(); err != nil {
 				return err
 			}
-			if inheritFlags {
-				dryRun, _ = cmd.Flags().GetBool("dry-run")
-				debug, _ = cmd.Flags().GetBool("debug")
+			logger := logrus.StandardLogger()
+			if options != nil {
+				dryRun = options.DryRun
+				debug = options.Debug
+				if options.Logger != nil {
+					logger = options.Logger
+				}
 			}
 			var key []byte
 			if !inheritFlags {
@@ -66,7 +70,7 @@ func challengeCommand(inheritFlags bool) *cobra.Command {
 				return closeErr
 			}
 			if debug {
-				logrus.WithFields(logrus.Fields{"provisioner": provisioner, "ttl": ttl.String()}).Info("SCEP challenge written")
+				logger.WithFields(logrus.Fields{"provisioner": provisioner, "ttl": ttl.String()}).Info("SCEP challenge written")
 			}
 			return nil
 		},
@@ -74,7 +78,11 @@ func challengeCommand(inheritFlags bool) *cobra.Command {
 	cmd.Flags().StringVar(&identity, "identity", "", "Device identity selected from trusted MDM inventory")
 	cmd.Flags().StringVar(&provisioner, "provisioner", "", "Exact step-ca SCEP provisioner name")
 	cmd.Flags().StringVar(&output, "out", "", "New private output file (never overwrites)")
-	cmd.Flags().StringVar(&keyFile, "signing-key-file", "", "Server-only signing key file; otherwise SCEP_CHALLENGE_SIGNING_KEY")
+	keyHelp := "Server-only signing key file; otherwise SCEP_CHALLENGE_SIGNING_KEY"
+	if inheritFlags {
+		keyHelp = "Server-only signing key file; defaults to the configured secret file reference"
+	}
+	cmd.Flags().StringVar(&keyFile, "signing-key-file", "", keyHelp)
 	cmd.Flags().DurationVar(&ttl, "ttl", 15*time.Minute, "Enrollment validity, maximum 24h; renewal needs a fresh challenge")
 	if !inheritFlags {
 		cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without writing a challenge")
