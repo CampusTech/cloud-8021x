@@ -205,3 +205,85 @@ accepting arbitrary plist object graphs. No Fleet server/upstream API changes,
 Wi-Fi profile minting, new webhook protocols or privileged runtime migration were
 introduced. Self-review addressed metadata, XML, cache source/filter identity,
 trust-content reload, pending-budget accounting and terminal-result replay.
+
+## Review fix round 1 (base ad223738)
+
+All three Important findings in `task-4-review.md` are addressed together.
+Scope is strict Fleet OS-version normalization, label population and fair
+bounded collection selection in the existing Sync/Collect APIs. No production
+or vendor requests, subagents, push, new schema, webhook changes or unrelated
+full suites occurred.
+
+### Fixes and downstream API
+
+1. ManagedOnly now recognizes the documented Fleet shape `macOS 15.2`,
+   established `Mac OS X` form and iOS/iPadOS names in the matching Apple OS
+   family, while retaining canonical bare numeric compatibility. Prefix removal
+   is explicit, followed by an anchored one-to-three-component canonical ASCII
+   version grammar; it never searches for arbitrary digits. Old/unknown OS,
+   wrong family, signed/zero-padded components, malformed separators, extra
+   components and suffixes still reject. The real fake HTTPS Get host fixture
+   in the Apple PG test now returns `os_version: macOS 15.2`.
+2. Observer list requests set `populate_labels=true` on every page when
+   `allow_label` is configured. The HTTP regression deliberately omits labels
+   unless that parameter is present, and proves the matching host survives
+   while a different-label host is excluded.
+3. Collector Prepare derives a fair due selection from the exact current
+   scoped/enrolled/trust/script binding's shared PostgreSQL work records.
+   Never-attempted hosts sort first, then oldest original reservation CreatedAt,
+   with deterministic opaque DeviceID ties. Full active/uncertain pending budgets
+   cannot consume new-submission selection slots; recently reserved or freshly
+   observed hosts remain on their existing cadence. Previously reserved but
+   never-started work still requires a valid claimed generation and StartAttempt.
+   Result repoll time, updated_at and receipt completion time never set priority.
+   The selected subset is limited by BatchBudget and Collector checks that subset
+   before any submission, independently of caller order. ReserveCollection and
+   existing claim/Start/fencing remain the final transactional authority, so a
+   prepared selection cannot authorize duplicate requests or uncertain resends.
+
+`inventory.CollectionOrderProvider` is a new optional provider-neutral capability
+returning prepared opaque DeviceIDs. Sync follows it using its own device-slice
+copy; inventory-only and ordinary managed providers need no new method and
+remain unchanged. `fleet.Collector.CollectionOrder()` returns a copied plan.
+There is no durable cursor to import, new database API or schema migration.
+Every new process rebuilds its plan from retained original shared work timestamps.
+Existing poll/reconciliation, provenance checks and original observed_at remain.
+Planning adds read-only detail/work lookups; this is not a production performance
+claim or permission to increase device CertificateList/script polling.
+
+### Actual RED before product edits
+
+`go test ./internal/adapters/fleet -run 'Test(ManagedOnlyFleetOSVersionFormats|ObserverLabelScopeRequestsMembershipOnEveryPage)' -count=1`
+exited 1:
+
+- Supported macOS/Mac OS X/iOS/iPadOS-prefixed versions were rejected; bare
+  `+15.2` was incorrectly accepted. Negative malformed/old fixtures accompany
+  the supported real shapes.
+- `label scope erased valid inventory: []` because the fixture omitted labels
+  without the opt-in request parameter.
+
+`C8021X_PG_FIXTURE_TASK=task4 scripts/test_postgres.sh -run TestPostgresFleetFairSelectionSurvivesRestartAndTerminalFailures`
+exited 1 against actual PostgreSQL 16:
+`later host starved across restarted passes: submissions=[1 1 1 1 1]`.
+The fixture has a stable three-host inventory, BatchBudget=1, five recreated
+collector/service instances, original shared reservation ages and authenticated
+terminal script failures with exact host/execution/script+nonce/timestamp proof.
+Each fake remote mutation additionally checks the real DB state is started.
+
+### Actual GREEN after fixes
+
+- Affected normal adapter/sync/inventory/app tests passed.
+- `C8021X_PG_FIXTURE_TASK=task4 scripts/test_postgres.sh -run 'TestPostgres(Collection|Fleet)'`:
+  **all six real PG16/race cases passed**, 2.122s. Fair restarted selection is
+  `[1 2 3 1 2]`, exactly one submission per pass; later hosts receive commands
+  despite early hosts' repeated authenticated failures. Existing cross-worker
+  cadence/pending budgets, immutable results, lost response/no blind resend,
+  reconciliation, exact Apple/Windows proof, original timestamps, enrollment
+  and trust-content invalidation also passed.
+- `go test -race ./internal/adapters/fleet ./internal/jobs/inventory ./internal/inventory ./internal/app -count=1`:
+  passed (1.521s / 1.167s / 1.173s / 1.227s).
+- `goimports -w` applied to all seven changed Go files.
+  `golangci-lint run`: **0 issues**. `git diff --check`: clean.
+- Disposable fixtures retain the Task4 label and EXIT cleanup; no unchanged
+  root/Python/SCEP/full database suite was repeated. The earlier report's real
+  Windows/deployment/legacy-retirement limits remain; no new blocker identified.

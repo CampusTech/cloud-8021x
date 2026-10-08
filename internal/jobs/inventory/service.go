@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -49,6 +50,25 @@ func (s *Service) Sync(ctx context.Context, dryRun bool) error {
 			if err = preparer.Prepare(ctx, batch); err != nil {
 				return err
 			}
+		}
+	}
+	if s.Certificates != nil && !dryRun {
+		if orderer, ok := s.Certificates.(inventory.CollectionOrderProvider); ok {
+			order := orderer.CollectionOrder()
+			ranks := map[domain.DeviceID]int{}
+			for i, id := range order {
+				ranks[id] = i
+			}
+			// The provider's original slice can be reused by other consumers. Scheduling
+			// must not change its stable inventory order or its authorization records.
+			batch.Devices = append([]domain.Device{}, batch.Devices...)
+			rank := func(id domain.DeviceID) int {
+				if r, ok := ranks[id]; ok {
+					return r
+				}
+				return len(order)
+			}
+			sort.SliceStable(batch.Devices, func(i, j int) bool { return rank(batch.Devices[i].ID) < rank(batch.Devices[j].ID) })
 		}
 	}
 	for i := range batch.Devices {

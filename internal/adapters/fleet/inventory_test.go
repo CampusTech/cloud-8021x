@@ -109,3 +109,38 @@ func TestClientRejectsCredentialRedirectAndMutatingRetry(t *testing.T) {
 		}
 	}
 }
+
+func TestObserverLabelScopeRequestsMembershipOnEveryPage(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		hosts := []map[string]any{}
+		if page == "0" || page == "1" {
+			id := 1
+			label := "allowed"
+			if page == "1" {
+				id = 2
+				label = "other"
+			}
+			h := map[string]any{"id": id, "uuid": itoa(id), "team_id": 1, "mdm": map[string]any{"enrollment_status": "On (automatic)"}}
+			// Real Fleet omits membership unless explicitly requested.
+			if r.URL.Query().Get("populate_labels") == "true" {
+				h["labels"] = []map[string]any{{"name": label}}
+			}
+			hosts = append(hosts, h)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"hosts": hosts})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "observer", server.Client(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := Observer{Client: client, PageSize: 1, AllowLabel: "allowed"}
+	batch, err := observer.Fetch(context.Background(), domain.InventoryScope{ProviderID: "fleet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !batch.Complete || len(batch.Devices) != 1 || batch.Devices[0].ID != "fleet:1" {
+		t.Fatalf("label scope erased valid inventory: %+v", batch.Devices)
+	}
+}

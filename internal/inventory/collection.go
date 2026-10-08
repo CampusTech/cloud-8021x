@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
 )
 
@@ -32,3 +33,8 @@ type CollectionRepository interface {
 	ReconcileSuccess(context.Context, string, int64, json.RawMessage) error
 	RecordCollectionResult(context.Context, string, int64, json.RawMessage, json.RawMessage) error
 }
+
+// CollectionOrderProvider optionally returns a prepared fair device order. It is
+// scheduling advice only; durable reservation and fencing still authorize I/O.
+// Inventory-only and ordinary managed providers need not implement this capability.
+type CollectionOrderProvider interface{ CollectionOrder() []domain.DeviceID }

@@ -11,9 +11,13 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +26,7 @@ import (
 	fleetadapter "github.com/CampusTech/cloud-8021x/internal/adapters/fleet"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/inventory"
+	inventoryjob "github.com/CampusTech/cloud-8021x/internal/jobs/inventory"
 	"howett.net/plist"
 )
 
@@ -182,7 +187,7 @@ func TestPostgresFleetAppleExactCommandAndPendingBudget(t *testing.T) {
 		case "/api/v1/fleet/hosts":
 			_ = json.NewEncoder(w).Encode(map[string]any{"hosts": []any{map[string]any{"id": 1, "uuid": "host", "platform": "darwin"}}})
 		case "/api/v1/fleet/hosts/1":
-			_ = json.NewEncoder(w).Encode(map[string]any{"host": map[string]any{"id": 1, "uuid": "host", "platform": "darwin", "os_version": "14.0", "last_mdm_enrolled_at": enrolled, "last_enrolled_at": enrolled, "mdm": map[string]any{"enrollment_status": "On (automatic)"}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": map[string]any{"id": 1, "uuid": "host", "platform": "darwin", "os_version": "macOS 15.2", "last_mdm_enrolled_at": enrolled, "last_enrolled_at": enrolled, "mdm": map[string]any{"enrollment_status": "On (automatic)"}}})
 		case "/api/v1/fleet/commands/run":
 			var body struct {
 				Command string   `json:"command"`
@@ -291,5 +296,109 @@ func TestPostgresFleetAppleExactCommandAndPendingBudget(t *testing.T) {
 	mu.Unlock()
 	if _, err = collector.Collect(ctx, request); !errors.Is(err, inventory.ErrPending) {
 		t.Fatalf("reenrollment retained old binding %v", err)
+	}
+}
+
+func TestPostgresFleetFairSelectionSurvivesRestartAndTerminalFailures(t *testing.T) {
+	admin, c := integration(t)
+	reset(t, admin)
+	repository := runtimeStore(t, admin, c)
+	trust, _ := collectionTrust(t)
+	ctx := context.Background()
+	now := time.Now()
+	enrolled := now.Add(-time.Hour).Format(time.RFC3339)
+	type execution struct {
+		host            int
+		script, created string
+	}
+	executions := map[string]execution{}
+	submitted := []int{}
+	var mu sync.Mutex
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/fleet/hosts":
+			if token := r.Header.Get("Authorization"); token != "Bearer observer" && token != "Bearer maintainer" {
+				t.Error("unexpected credential")
+			}
+			hosts := []any{}
+			for id := 1; id <= 3; id++ {
+				hosts = append(hosts, map[string]any{"id": id, "uuid": "host-" + fmt.Sprint(id), "platform": "windows", "team_id": 1, "mdm": map[string]any{"enrollment_status": "On (automatic)"}})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"hosts": hosts})
+		case "/api/v1/fleet/scripts/run":
+			if r.Header.Get("Authorization") != "Bearer maintainer" {
+				t.Error("observer mutated Fleet")
+			}
+			var body struct {
+				HostID int    `json:"host_id"`
+				Script string `json:"script_contents"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			nonce := strings.TrimSpace(strings.Split(body.Script, "# Collection nonce: ")[1])
+			var state string
+			if err := admin.pool.QueryRow(ctx, "SELECT state FROM ledger.work WHERE payload->>'command_uuid'=$1", nonce).Scan(&state); err != nil || state != "started" {
+				t.Errorf("missing durable started proof: %s %v", state, err)
+			}
+			id := "execution-" + fmt.Sprint(len(submitted))
+			executions[id] = execution{host: body.HostID, script: body.Script, created: now.Truncate(time.Second).Format(time.RFC3339)}
+			submitted = append(submitted, body.HostID)
+			_ = json.NewEncoder(w).Encode(map[string]any{"host_id": body.HostID, "execution_id": id})
+		default:
+			if strings.HasPrefix(r.URL.Path, "/api/v1/fleet/hosts/") {
+				id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v1/fleet/hosts/"))
+				if err != nil {
+					t.Error(err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"host": map[string]any{"id": id, "uuid": "host-" + fmt.Sprint(id), "platform": "windows", "scripts_enabled": true, "last_enrolled_at": enrolled, "mdm": map[string]any{"enrollment_status": "On (automatic)"}}})
+				return
+			}
+			id := strings.TrimPrefix(r.URL.Path, "/api/v1/fleet/scripts/results/")
+			execution, ok := executions[id]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"host_id": execution.host, "execution_id": id, "script_contents": execution.script, "exit_code": 1, "created_at": execution.created, "output": "authenticated terminal failure"})
+		}
+	}))
+	defer server.Close()
+	observerClient, _ := fleetadapter.NewClient(server.URL, "observer", server.Client(), time.Second)
+	maintainer, _ := fleetadapter.NewClient(server.URL, "maintainer", server.Client(), time.Second)
+	scope := domain.InventoryScope{ProviderID: "fleet"}
+	path := filepath.Join(t.TempDir(), "inventory.json")
+	// Restart the collector and sync service each pass. There is no volatile cursor
+	// capable of explaining progress; original PG reservation ages select work.
+	for pass := 0; pass < 5; pass++ {
+		collector := &fleetadapter.Collector{Maintainer: maintainer, Repository: repository, Trust: trust, Owner: "worker-" + fmt.Sprint(pass), Options: fleetadapter.CollectionOptions{BatchBudget: 1}, Now: func() time.Time { return now }}
+		observer := &fleetadapter.Observer{Client: observerClient, Now: func() time.Time { return now }}
+		service := inventoryjob.Service{Provider: observer, Certificates: collector, Scope: scope, Store: new(domain.SnapshotStore), Path: path}
+		if err := service.Sync(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		count := len(submitted)
+		mu.Unlock()
+		if count != pass+1 {
+			t.Fatalf("pass budget exceeded or stranded: pass=%d submitted=%d", pass, count)
+		}
+		// Age only fixture reservations while preserving relative DB age ordering.
+		if _, err := admin.pool.Exec(ctx, "UPDATE ledger.work SET created_at=created_at-interval '2 hours'"); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(2 * time.Hour)
+	}
+	mu.Lock()
+	actual := append([]int{}, submitted...)
+	mu.Unlock()
+	if !reflect.DeepEqual(actual, []int{1, 2, 3, 1, 2}) {
+		t.Fatalf("later host starved across restarted passes: submissions=%v", actual)
+	}
+	var unstarted int
+	if err := admin.pool.QueryRow(ctx, "SELECT count(*) FROM ledger.attempts WHERE outcome IS NULL").Scan(&unstarted); err != nil || unstarted != 0 {
+		t.Fatalf("unfinished actual submission %d %v", unstarted, err)
 	}
 }

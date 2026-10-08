@@ -102,3 +102,25 @@ func TestWindowsTerminalFailureRequiresExactProvenance(t *testing.T) {
 		t.Fatal("wrong host failure freed a reservation")
 	}
 }
+
+func TestManagedOnlyFleetOSVersionFormats(t *testing.T) {
+	for _, tc := range []struct {
+		platform, version string
+		supported         bool
+	}{
+		{"darwin", "macOS 15.2", true}, {"macos", "macOS 10.15.7", true}, {"darwin", "Mac OS X 10.15.7", true},
+		{"ios", "iOS 17.5.1", true}, {"ipados", "iPadOS 17.5", true}, {"ios", "iPadOS 17.5", true},
+		{"darwin", "15.2", true}, {"ios", "13.0", true},
+		{"darwin", "macOS 10.14.6", false}, {"ios", "iOS 12.5.7", false}, {"ipados", "iPadOS 12.9", false},
+		{"darwin", "", false}, {"darwin", "unknown 15.2", false}, {"darwin", "iOS 15.2", false},
+		{"ios", "macOS 15.2", false}, {"darwin", "macOS15.2", false}, {"darwin", "macOS 15.2 beta", false},
+		{"darwin", "macOS 15..2", false}, {"darwin", "macOS +15.2", false}, {"darwin", "+15.2", false},
+		{"darwin", "macOS 15.2.1.1", false}, {"darwin", "macOS 015.2", false}, {"darwin", "macOS 15.2 Windows 11", false},
+	} {
+		t.Run(tc.platform+"/"+tc.version, func(t *testing.T) {
+			if got := managedOnlySupported(tc.platform, tc.version); got != tc.supported {
+				t.Fatalf("version %q platform %s supported=%v want=%v", tc.version, tc.platform, got, tc.supported)
+			}
+		})
+	}
+}

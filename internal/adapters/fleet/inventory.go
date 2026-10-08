@@ -125,6 +125,9 @@ func (o *Observer) hosts(ctx context.Context) ([]host, error) {
 			Hosts []host `json:"hosts"`
 		}
 		query := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(size)}, "device_mapping": {"true"}}
+		if o.AllowLabel != "" {
+			query.Set("populate_labels", "true")
+		}
 		if err := o.Client.request(ctx, "GET", "/api/v1/fleet/hosts?"+query.Encode(), nil, &response); err != nil {
 			return nil, err
 		}

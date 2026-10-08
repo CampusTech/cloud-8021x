@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +42,8 @@ type Collector struct {
 	mu          sync.Mutex
 	hosts       map[domain.DeviceID]host
 	requests    int
+	selected    map[domain.DeviceID]bool
+	order       []domain.DeviceID
 }
 
 var _ domain.ManagedCertificateProvider = (*Collector)(nil)
@@ -95,7 +99,7 @@ func (c *Collector) Prepare(ctx context.Context, batch domain.DeviceSnapshot) er
 	}
 	c.hosts = eligible
 	c.requests = 0
-	return nil
+	return c.prepareSelection(ctx)
 }
 func installed(h host, uuids []string, verified bool) bool {
 	for _, p := range h.MDM.Profiles {
@@ -266,15 +270,12 @@ func (c *Collector) Collect(ctx context.Context, request domain.CertificateColle
 			best = ob
 		}
 	}
-	if claim != nil {
-		if c.requests >= budget {
-			return domain.CertificateObservation{}, errors.New("fleet pending claim exceeds pass budget")
-		}
+	if claim != nil && c.selected[request.DeviceID] && c.requests < budget {
 		if err = c.submit(ctx, *claim, binding); err != nil {
 			return domain.CertificateObservation{}, err
 		}
 		c.requests++
-	} else if c.requests < budget && (best == nil || !domain.Fresh(best.ObservedAt, c.now(), cadence)) {
+	} else if claim == nil && c.selected[request.DeviceID] && c.requests < budget && (best == nil || !domain.Fresh(best.ObservedAt, c.now(), cadence)) {
 		var nonce [16]byte
 		if _, err = rand.Read(nonce[:]); err != nil {
 			return domain.CertificateObservation{}, errors.New("collection nonce generation failed")
@@ -489,7 +490,30 @@ func (c *Collector) ReconcileWindows(ctx context.Context, device domain.DeviceID
 	return inventory.ErrPending
 }
 
+var canonicalOSVersion = regexp.MustCompile(`^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){0,2}$`)
+
 func managedOnlySupported(platform, version string) bool {
+	switch platform {
+	case "darwin", "macos":
+		for _, prefix := range []string{"macOS ", "Mac OS X "} {
+			if strings.HasPrefix(version, prefix) {
+				version = strings.TrimPrefix(version, prefix)
+				break
+			}
+		}
+	case "ios", "ipados":
+		for _, prefix := range []string{"iOS ", "iPadOS "} {
+			if strings.HasPrefix(version, prefix) {
+				version = strings.TrimPrefix(version, prefix)
+				break
+			}
+		}
+	default:
+		return false
+	}
+	if !canonicalOSVersion.MatchString(version) {
+		return false
+	}
 	parts := strings.Split(version, ".")
 	if len(parts) < 1 || len(parts) > 3 {
 		return false
@@ -510,4 +534,90 @@ func managedOnlySupported(platform, version string) bool {
 		return major >= 13
 	}
 	return false
+}
+
+// prepareSelection derives the bounded pass from original shared reservation
+// timestamps. Repeated terminal failures and process restarts cannot reset a
+// host's priority to "never attempted". Result polling/receipt time is not used.
+func (c *Collector) prepareSelection(ctx context.Context) error {
+	cadence, _, budget, err := c.limits()
+	if err != nil {
+		return err
+	}
+	c.selected = map[domain.DeviceID]bool{}
+	c.order = nil
+	ids := make([]domain.DeviceID, 0, len(c.hosts))
+	for id := range c.hosts {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	type candidate struct {
+		id   domain.DeviceID
+		last time.Time
+	}
+	candidates := []candidate{}
+	for _, id := range ids {
+		_, binding, err := c.boundHost(ctx, id)
+		if errors.Is(err, inventory.ErrIneligible) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if c.Repository == nil {
+			return errors.New("fleet collection requires durable repository")
+		}
+		works, err := c.Repository.ListCollection(ctx, binding.Key)
+		if err != nil {
+			return err
+		}
+		var last time.Time
+		pending := 0
+		unstarted, freshObservation := false, false
+		for _, work := range works {
+			if work.CreatedAt.After(last) {
+				last = work.CreatedAt
+			}
+			var receipt collectionReceipt
+			if len(work.Receipt) > 0 && json.Unmarshal(work.Receipt, &receipt) != nil {
+				return errors.New("invalid durable Fleet collection receipt")
+			}
+			if work.State != "succeeded" || receipt.Pending {
+				pending++
+			}
+			if work.State == "pending" || work.State == "leased" {
+				unstarted = true
+			}
+			if receipt.Observation != nil && domain.Fresh(receipt.Observation.ObservedAt, c.now(), cadence) {
+				freshObservation = true
+			}
+		}
+		// Active/uncertain full budgets cannot consume selection slots. A previously
+		// reserved but never-started claim may still be claimed/fenced, not resubmitted.
+		due := pending < 2 && !freshObservation && (last.IsZero() || !last.Add(cadence).After(c.now()))
+		if due || unstarted {
+			candidates = append(candidates, candidate{id: id, last: last})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].last.Equal(candidates[j].last) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].last.Before(candidates[j].last)
+	})
+	for i, candidate := range candidates {
+		c.order = append(c.order, candidate.id)
+		if i < budget {
+			c.selected[candidate.id] = true
+		}
+	}
+	return nil
+}
+
+var _ inventory.CollectionOrderProvider = (*Collector)(nil)
+
+func (c *Collector) CollectionOrder() []domain.DeviceID {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]domain.DeviceID{}, c.order...)
 }
