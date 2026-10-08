@@ -1,0 +1,144 @@
+{
+  "provider_version": "4.25.0",
+  "deployment_blocked": true,
+  "upstream_dependency": "https://github.com/DataDog/terraform-provider-datadog/pull/4225",
+  "losses": [
+    {
+      "path": "$.widgets[1].definition.widgets[2].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[1].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[1].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[1].definition.requests[0].queries[1].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[1].definition.requests[0].queries[1].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[2].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[2].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[2].definition.widgets[2].definition.requests[0].queries[0].group_by[2].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[3].definition.widgets[1].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[3].definition.widgets[2].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[3].definition.widgets[3].definition.requests[0].queries[0].group_by[2].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[4].definition.widgets[2].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[5].definition.widgets[3].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[5].definition.widgets[3].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[6].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[6].definition.requests[0].queries[1].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[0].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[0].group_by[2].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[1].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[1].group_by[1].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[6].definition.widgets[9].definition.requests[0].queries[1].group_by[2].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[7].definition.widgets[2].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    },
+    {
+      "path": "$.widgets[7].definition.widgets[3].definition.requests[0].queries[0].group_by[0].should_exclude_missing",
+      "source": false,
+      "reason": "native logs group_by schema cannot express missing-bucket inclusion"
+    }
+  ],
+  "normalizations": [
+    {
+      "path": "$.template_variables[0].available_values",
+      "source": [],
+      "reason": "empty variable choices are retained in HCL but omitted by provider JSON serialization"
+    },
+    {
+      "path": "$.template_variables[1].available_values",
+      "source": [],
+      "reason": "empty variable choices are retained in HCL but omitted by provider JSON serialization"
+    },
+    {
+      "path": "$.widgets[5].definition.widgets[3].definition.hide_total",
+      "source": false,
+      "reason": "modeled false is retained in HCL but omitted by provider JSON serialization"
+    }
+  ]
+}

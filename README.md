@@ -393,11 +393,32 @@ If you provide UniFi API credentials, FreeRADIUS will resolve the access point a
 
 If you provide a Datadog Application key, Terraform creates a dashboard with authentication metrics, device analytics, location breakdowns, accounting sessions, and infrastructure health.
 
-The Datadog provider is pinned to 4.25.0. This supports the UI's `datadog_dashboard_v2` Terraform exports.
-The existing dashboards use `datadog_dashboard_json`; adopting a native v2
-export for an existing dashboard requires a deliberate configuration/state
-migration so two resources do not manage the same dashboard. See
-[Datadog's migration guide](https://github.com/DataDog/terraform-provider-datadog/blob/v4.25.0/docs/guides/dashboard_v2_migration.md).
+The Datadog provider is pinned to 4.25.0. Both dashboards remain managed by
+`datadog_dashboard_json`: the native `datadog_dashboard_v2` resource cannot yet
+represent `should_exclude_missing = false` for log groupings. Switching today
+would lose our explicit inclusion of missing owner/AP/VLAN buckets. Upstream
+[PR #4225](https://github.com/DataDog/terraform-provider-datadog/pull/4225)
+adds support, but is not included in this pinned release.
+
+The HCL dashboard locals are the source of truth. A development-only Go tool
+keeps the two importable JSON exports and a
+[native HCL companion](docs/generated/datadog-dashboard-v2.tf) in sync:
+
+```sh
+cd tools/dashboard
+go run . sync --root ../..
+go run . sync --root ../.. --check
+```
+
+This evaluates dashboard locals in an isolated temporary Terraform module. It
+does not load deployment credentials, use the production backend, contact
+Datadog, or apply changes. CI runs the same check. The native companion uses
+Datadog's official provider mapping; its
+[loss report](docs/generated/datadog-dashboard-v2-losses.json) identifies fields
+the pinned native schema cannot represent. It lives outside the root module
+and is **not a deployment replacement**. Do not copy it into the root module
+or let native and JSON resources manage the same dashboard. See
+[export and migration guidance](docs/dashboard-exports.md).
 
 1. In Datadog, create an **Application Key** (Organization Settings → Application Keys) scoped to `dashboards_read`, `dashboards_write`, `logs_read_pipelines`, and `logs_write_pipelines` for the dashboard and RADIUS owner-default pipeline. If you enable the collector health monitor, its Terraform application key also needs `monitors_read` and `monitors_write`. The collector uses a separate key scoped only to `logs_read_data`.
 
