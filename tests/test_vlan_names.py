@@ -72,6 +72,25 @@ class VlanNameTests(unittest.TestCase):
             return [{'vlanNames': [{'vlanId': '4', 'name': 'Conferencing'}]}]
         self.assertEqual(self.module.fetch_meraki(self.sources['atl'], 'secret', request), {'4': 'Conferencing'})
 
+    def test_meraki_disabled_appliance_vlans_can_use_vlan_profiles(self):
+        calls = []
+        def request(url, headers):
+            calls.append(url)
+            if url.endswith('/appliance/vlans'):
+                raise HTTPError(url, 400, 'VLANs are not enabled for this network', {}, None)
+            return [{'vlanNames': [{'vlanId': '4', 'name': 'Conferencing'}]}]
+        self.assertEqual(self.module.fetch_meraki(self.sources['atl'], 'secret', request), {'4': 'Conferencing'})
+        self.assertEqual([url.rsplit('/', 1)[-1] for url in calls], ['vlans', 'vlanProfiles'])
+
+    def test_meraki_vlan_profile_bad_request_is_not_optional(self):
+        def request(url, headers):
+            if url.endswith('/vlanProfiles'):
+                raise HTTPError(url, 400, 'bad request', {}, None)
+            return [{'id': 5, 'name': 'Secure'}]
+        with self.assertRaises(HTTPError) as raised:
+            self.module.fetch_meraki(self.sources['atl'], 'secret', request)
+        self.assertEqual(raised.exception.code, 400)
+
     def test_meraki_permission_and_rate_limit_failures_do_not_publish_partial_results(self):
         for code in (403, 429, 500):
             def request(url, headers):

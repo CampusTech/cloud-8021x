@@ -128,14 +128,14 @@ def fetch_meraki(source, key, request=http_json):
     base = 'https://api.meraki.com/api/v1/networks/' + quote(source['meraki_network_id'], safe='')
     headers = {'Authorization': 'Bearer ' + key, 'Accept': 'application/json'}
     rows, available = [], False
-    # MR-only networks may expose named VLAN profiles without an MX appliance.
+    # MR-only networks or disabled appliance VLANs may still expose named VLAN profiles.
     # An SSID's name is never a VLAN name. 403/429/5xx retain the old snapshot.
     for endpoint in ('/appliance/vlans', '/vlanProfiles'):
         try:
             data = request(base + endpoint, headers)
         except HTTPError as exc:
             exc.close()
-            if exc.code == 404:
+            if exc.code == 404 or (exc.code == 400 and endpoint == '/appliance/vlans'):
                 continue
             raise
         if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
