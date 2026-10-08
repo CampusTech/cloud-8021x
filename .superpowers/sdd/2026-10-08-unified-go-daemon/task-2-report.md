@@ -25,7 +25,7 @@ The parent owns pushing. No production/cloud operations, legacy retirement, prov
 ## Security/integration contracts for Tasks 6, 8 and 9
 
 1. `runtime_user` defaults to `cloud8021x`; this must be a dedicated unprivileged account separate from root and freerad. The daemon gets no DAC/CHOWN capability and no CA-private-key/service-management access.
-2. Provision `/run/freeradius/verified-leaves` as the fixed FreeRADIUS-owned private public-leaf input directory (`backends.radius_verify_leaf_dir`). FreeRADIUS writes its completed TLS-verification leaf there. Do not use the app-only handoff directory as the FreeRADIUS PEM tempdir.
+2. Provision `/run/radius-verified-leaves` as the fixed freerad-owned 0700 public-leaf input directory (`backends.radius_verify_leaf_dir`), directly under root-owned, non-group/other-writable ancestry. FreeRADIUS writes completed TLS-verification leaves as freerad-owned 0600 single-link regular files. Do not inherit a writable `/run/freeradius` parent or use the app-only handoff directory as the FreeRADIUS PEM tempdir. See the review-fix compatibility preflight below.
 3. Provision `/run/radius-certificate-bindings` as app-owned 0700. The narrow root hook exclusively writes and chowns each 0600 handoff to the app UID; the daemon consumes it under its own UID. Existing freerad-owned handoff directories need explicit fenced migration by privileged bootstrap, not widened permissions.
 4. Install a narrowly scoped freerad sudo rule for the fixed binary/config/subcommand invocation, e.g. `/usr/local/bin/cloud-8021x --config /etc/cloud-8021x/config.yaml radius verify-leaf <leaf-file> <server-session-token>`. No generic root command proxy. Cobra checks the fixed protected configuration **before its initial config load**, and RuntimeServices independently checks the real root UID and reloads the fixed file through NOFOLLOW/root-owned/regular/nlink=1/non-writable descriptor checks before any hook-controlled path access. Root dry-run is also gated. Thus extra `--config` flags cannot select attacker-owned YAML or arbitrary root paths. The executable's default effective-UID lookup is `os.Geteuid`; tests inject the lookup at command construction only, while operational services always recheck the actual OS UID.
 5. Root-managed YAML is `/etc/cloud-8021x/config.yaml`, root-owned and not group/other writable. Pin the attested EC issuer and exact provisioner in it. Root bootstrap should persist/check the downgrade guard before activation and retain the original marker during migration/rollback.
@@ -78,3 +78,37 @@ GREEN final checks:
 - Full serve lifecycle, shared database import of existing state/guard/key, schedules, event workers and all remaining command dispatch belong to Task 9. Accounting counter processing belongs to Task 3.
 - Runtime Fleet host mapping/managed-certificate command provenance and full provider implementations belong to Tasks 4/5; the legacy provider-specific Python helpers remain intact until Task 10.
 - `.gitignore` was corrected from broad `freeradius/` to root-only `/freeradius/` so tested source under `internal/adapters/freeradius/` is committed. The 23 relocated webhook source files were not modified.
+
+
+## Review fix round 1: descriptor-confined privileged public-leaf input
+
+Base: `c43c50ff0602473833e61faf08ed7f926272829a`. Scope is the Important Task 2 security finding only; snapshot metadata sanitization remains deferred to Task 4. No production operations, pushes, subagents, legacy changes, or unchanged Python/SCEP suite reruns occurred.
+
+The root helper previously checked the input's lexical dirname and opened its full filename with `O_NOFOLLOW`, which did not reject ancestor symlinks. The new `identity.OpenLeafDirectory` walks from `/` using descriptor-relative `openat` with `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC` for every component. Root requires every ancestor to be root-owned and not group/other writable. The final directory must be owned by the fixed `freerad` account and exactly 0700. Directories must be linked; legitimate single-link overlay filesystem directories are allowed. A mutex pins the directory descriptor through reads and close. Renaming/replacing its pathname after opening cannot redirect the reader.
+
+`LeafDirectory.Read` opens one basename relative to that descriptor using `O_NOFOLLOW|O_NONBLOCK`, checks producer UID, exact 0600 permissions, regular-file type and `nlink == 1` **before reading any bytes**, and retains the existing bounded PEM parser. The actual root RuntimeServices path selects the system `freerad` UID independently of caller flags/YAML. The parsed byte slice still goes directly to `RecordPEM`; no source pathname is reopened. Non-root dry-run permits private user ancestry and root-owned sticky temporary directories without granting root reads. Root never accepts sticky writable ancestry. Existing fixed-config gates still precede leaf access.
+
+### Test-first evidence
+
+- RED: `go test ./internal/app -run 'TestVerifyLeafRejects(ReplacedDirectoryComponentBeforeRead|HardlinkedInputBeforeRead)' -count=1` exited 1 before the confinement change. Both final-directory and ancestor replacements failed with `helper followed replaced directory component and accepted outside certificate`; hardlinked input failed with `helper accepted hardlinked public leaf outside the approved directory`. These fixtures contain a valid public X.509 leaf outside the approved directory, so failure is attributable to confinement rather than certificate parsing.
+- RED: new identity directory tests initially failed to compile with `undefined: OpenLeafDirectory`, before implementation.
+- RED: `go test ./internal/identity -run TestPrivilegedLeafAncestryRequiresRootAndNoWritableParent -count=1` exited 1 with `rejected protected root-owned single-link directory`. Directory checks were corrected to reject zero links rather than valid one-link overlay directories; leaf input checks retain exactly one link.
+- Additional regressions prove pinned original bytes after pathname replacement; reject all symlink components, wrong directory ownership, public directories/files, replaceable writable ancestry, hardlinked/symlinked leaves and nested/absolute filename escapes. Root ancestor policy specifically rejects non-root ownership and writable sticky directories.
+
+### Final verification
+
+- Initial expanded focused race checkpoint: identity/app/config/local REST passed, but policy `TestCertificateFreshnessAmbiguityEnrollmentAndGroupConflicts` failed with `invalid, expired or consumed certificate handoff`. Its fixture sampled time before file creation and consumed at that timestamp plus only one millisecond, which can precede the completed write. The fixture now samples receipt time after `Record` completes; production future-time rejection is unchanged.
+- `go test -race ./internal/policy -run TestCertificateFreshnessAmbiguityEnrollmentAndGroupConflicts -count=50`: passed (`ok .../internal/policy 1.217s`).
+- `go test -race ./internal/identity ./internal/app ./internal/config ./internal/policy ./internal/adapters/freeradius/policy -count=1`: passed (identity 1.245s, app 1.171s, config 1.104s, policy 1.099s, local REST 1.247s).
+- `goimports -w` applied to every changed Go file.
+- `golangci-lint run`: exited 0, `0 issues.`
+- `GOOS=linux GOARCH=amd64 go build ./internal/identity ./internal/app`: exited 0.
+- `git diff --check`: exited 0.
+
+### Task 6/8 contract amendment and compatibility preflight
+
+Default/example input is now `/run/radius-verified-leaves`; handoffs remain `/run/radius-certificate-bindings`, app-owned 0700 with app-owned 0600 one-use entries. Task 8 must create the source directory freerad-owned 0700 under protected root ancestry and Task 6 must use that same directory for the completed TLS-verification hook's public PEM inputs, mode 0600. Every configured input-directory component must be a real directory, with protected root-owned ancestors and a freerad-owned final directory. The root helper rejects invalid configured paths before reading public leaf bytes, even if installation/preflight missed them.
+
+An existing `/run/freeradius/verified-leaves` configuration is unsafe when `/run/freeradius` is freerad-writable; bootstrap must fail its compatibility preflight and move/configure the leaf source at the new protected path. Symlink aliases, hardlinks and permission widening are not migration mechanisms. Update the root-managed fixed configuration and TLS-hook leaf/temp directory together before activation. Keep the narrow fixed-config sudo contract and distinct daemon UID; no daemon root/freerad execution or DAC/CHOWN capability is added.
+
+Positive installed root-to-freerad/application-UID ownership, protected `/run` ancestry and the full TLS-hook invocation remain assigned to Task 8's disposable Linux fixture, with native hook proof in Task 6. This fix's actual RuntimeServices regressions execute as the non-root macOS user, and separate root-policy checks cover ownership/writable-ancestor rules; Linux build passes. No positive root mutation claim is made here.

@@ -246,7 +246,7 @@ func Defaults() Config {
 		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
 		Telemetry:   Telemetry{Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
 		CA:          CA{Provider: "step-ca"},
-		Backends:    Backends{RadiusVerifyLeafDir: "/run/freeradius/verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
+		Backends:    Backends{RadiusVerifyLeafDir: "/run/radius-verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
 		Paths:       Paths{StateDir: "/var/lib/cloud-8021x", CacheDir: "/var/cache/cloud-8021x", HandoffDir: "/run/radius-certificate-bindings", InventoryFile: "/var/lib/cloud-8021x/inventory.json", MetadataFile: "/var/lib/cloud-8021x/metadata.json", AuthLogDir: "/var/log/freeradius/auth", AccountingSpoolDir: "/var/log/freeradius/radacct", DowngradeGuardFile: "/var/lib/cloud-8021x/fingerprint-enforced", LegacyStateDir: "/var/lib/fleet-radius"},
 		Schedules:   Schedules{Inventory: 5 * time.Minute, Certificates: time.Hour, Sites: 5 * time.Minute, Sources: time.Minute, Metrics: time.Minute, AccountingWorkers: 2, ExportWorkers: 1},
 	}

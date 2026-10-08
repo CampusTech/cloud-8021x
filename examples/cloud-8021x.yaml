@@ -136,7 +136,9 @@ ca:
 # The constrained root verify-leaf hook reads FreeRADIUS public leaf files here
 # and exclusively writes/chowns handoffs into the app-owned 0700 directory.
 backends:
-  radius_verify_leaf_dir: /run/freeradius/verified-leaves
+  # Root-owned, non-writable ancestry; final directory freerad-owned 0700.
+  # Public leaf inputs must be freerad-owned single-link regular files, mode 0600.
+  radius_verify_leaf_dir: /run/radius-verified-leaves
 
 paths:
   handoff_dir: /run/radius-certificate-bindings

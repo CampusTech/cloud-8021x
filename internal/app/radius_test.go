@@ -21,12 +21,12 @@ import (
 )
 
 func TestVerifyLeafCLIArgsAndFlags(t *testing.T) {
-	for _, args := range [][]string{{"radius", "verify-leaf", "/run/freeradius/verified-leaves/leaf.pem", strings.Repeat("a", 64)}, {"radius", "verify-leaf", "--certificate-file", "/run/freeradius/verified-leaves/leaf.pem", "--session-token", strings.Repeat("a", 64)}} {
+	for _, args := range [][]string{{"radius", "verify-leaf", "/run/radius-verified-leaves/leaf.pem", strings.Repeat("a", 64)}, {"radius", "verify-leaf", "--certificate-file", "/run/radius-verified-leaves/leaf.pem", "--session-token", strings.Repeat("a", 64)}} {
 		r := new(recorder)
 		if _, err := execute(t, context.Background(), r, args...); err != nil {
 			t.Fatal(err)
 		}
-		if !r.called || r.operation != OperationRadiusVerifyLeaf || r.options.VerifiedLeaf == nil || r.options.VerifiedLeaf.CertificateFile != "/run/freeradius/verified-leaves/leaf.pem" || r.options.VerifiedLeaf.SessionToken != strings.Repeat("a", 64) {
+		if !r.called || r.operation != OperationRadiusVerifyLeaf || r.options.VerifiedLeaf == nil || r.options.VerifiedLeaf.CertificateFile != "/run/radius-verified-leaves/leaf.pem" || r.options.VerifiedLeaf.SessionToken != strings.Repeat("a", 64) {
 			t.Fatal("hook input not dispatched")
 		}
 	}
@@ -108,7 +108,13 @@ func TestActualCLIDispatchValidCertificateDryRun(t *testing.T) {
 		t.Skip("root verify-leaf, including dry-run, is restricted to the installed protected configuration; non-root CLI planning is tested here")
 	}
 	leaf, _, _ := makeRuntimeCertificate(t)
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	cfgPath := filepath.Join(dir, "config.yaml")
 	leafPath := filepath.Join(dir, "leaf.pem")
 	_ = os.WriteFile(leafPath, leaf, 0600)
@@ -149,7 +155,7 @@ func TestRootDryRunDoesNotBypassFixedConfiguration(t *testing.T) {
 		t.Skip("requires root helper process")
 	}
 	cfg := configuredFixture(t)
-	err := NewRuntimeServices().Run(context.Background(), OperationRadiusVerifyLeaf, cfg, RunOptions{DryRun: true, ConfigFile: "/tmp/attacker-config", VerifiedLeaf: &VerifiedLeafOptions{CertificateFile: "/run/freeradius/verified-leaves/missing", SessionToken: strings.Repeat("a", 64)}})
+	err := NewRuntimeServices().Run(context.Background(), OperationRadiusVerifyLeaf, cfg, RunOptions{DryRun: true, ConfigFile: "/tmp/attacker-config", VerifiedLeaf: &VerifiedLeafOptions{CertificateFile: "/run/radius-verified-leaves/missing", SessionToken: strings.Repeat("a", 64)}})
 	if err == nil || !strings.Contains(err.Error(), "fixed protected") {
 		t.Fatal("root dry-run bypass", err)
 	}
@@ -160,9 +166,85 @@ func TestCobraRootHookRejectsAlternateConfigBeforeInitialLoad(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing-root-only-file"), "--dry-run", "radius", "verify-leaf", "/run/freeradius/verified-leaves/leaf.pem", strings.Repeat("a", 64)})
+	cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "missing-root-only-file"), "--dry-run", "radius", "verify-leaf", "/run/radius-verified-leaves/leaf.pem", strings.Repeat("a", 64)})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "fixed protected") || strings.Contains(err.Error(), "open configuration") || r.called {
 		t.Fatal("Cobra opened attacker-selected config before privilege gate", err)
+	}
+}
+
+func TestVerifyLeafRejectsReplacedDirectoryComponentBeforeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("unprivileged dry-run exercises the same descriptor confinement without installed root configuration")
+	}
+	for _, component := range []string{"final-directory", "ancestor"} {
+		t.Run(component, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(base, "outside")
+			if err := os.Mkdir(outside, 0700); err != nil {
+				t.Fatal(err)
+			}
+			leaf, _, _ := makeRuntimeCertificate(t)
+			if err := os.WriteFile(filepath.Join(outside, "leaf.pem"), leaf, 0600); err != nil {
+				t.Fatal(err)
+			}
+			fixed := filepath.Join(base, "verified-leaves")
+			if component == "final-directory" {
+				if err := os.Symlink(outside, fixed); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				ancestor := filepath.Join(base, "replaced-parent")
+				if err := os.Symlink(base, ancestor); err != nil {
+					t.Fatal(err)
+				}
+				fixed = filepath.Join(ancestor, "outside")
+			}
+			cfg := configuredFixture(t)
+			cfg.Backends.RadiusVerifyLeafDir = fixed
+			cfg.Paths.HandoffDir = filepath.Join(base, "handoff")
+			cfg.Paths.DowngradeGuardFile = filepath.Join(base, "guard")
+			err = NewRuntimeServices().Run(context.Background(), OperationRadiusVerifyLeaf, cfg, RunOptions{DryRun: true, VerifiedLeaf: &VerifiedLeafOptions{CertificateFile: filepath.Join(fixed, "leaf.pem"), SessionToken: strings.Repeat("a", 64)}})
+			if err == nil {
+				t.Fatal("helper followed replaced directory component and accepted outside certificate")
+			}
+			for _, p := range []string{cfg.Paths.HandoffDir, cfg.Paths.DowngradeGuardFile} {
+				if _, err := os.Lstat(p); !os.IsNotExist(err) {
+					t.Fatal("rejected source mutated state", p)
+				}
+			}
+		})
+	}
+}
+func TestVerifyLeafRejectsHardlinkedInputBeforeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("unprivileged dry-run does not require installed root configuration")
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "verified-leaves")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	leaf, _, _ := makeRuntimeCertificate(t)
+	original := filepath.Join(base, "outside-leaf.pem")
+	if err := os.WriteFile(original, leaf, 0600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(dir, "leaf.pem")
+	if err := os.Link(original, inside); err != nil {
+		t.Fatal(err)
+	}
+	cfg := configuredFixture(t)
+	cfg.Backends.RadiusVerifyLeafDir = dir
+	cfg.Paths.HandoffDir = filepath.Join(base, "handoff")
+	cfg.Paths.DowngradeGuardFile = filepath.Join(base, "guard")
+	if err := NewRuntimeServices().Run(context.Background(), OperationRadiusVerifyLeaf, cfg, RunOptions{DryRun: true, VerifiedLeaf: &VerifiedLeafOptions{CertificateFile: inside, SessionToken: strings.Repeat("a", 64)}}); err == nil {
+		t.Fatal("helper accepted hardlinked public leaf outside the approved directory")
 	}
 }

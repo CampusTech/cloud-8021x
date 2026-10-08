@@ -15,7 +15,7 @@ func TestPrivateHandoffActorAndFixedLeafDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RuntimeUser != "cloud8021x" || cfg.Backends.RadiusVerifyLeafDir != "/run/freeradius/verified-leaves" {
+	if cfg.RuntimeUser != "cloud8021x" || cfg.Backends.RadiusVerifyLeafDir != "/run/radius-verified-leaves" {
 		t.Fatal("missing separate actor defaults")
 	}
 	for _, user := range []string{"root", "freerad", "", "a/b"} {

@@ -95,6 +95,9 @@ func ReadLeaf(path string) ([]byte, error) {
 		return nil, errors.New("verified leaf must be a regular public certificate file")
 	}
 	defer func() { _ = f.Close() }()
+	return readLeafPEM(f)
+}
+func readLeafPEM(f *os.File) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(f, MaxLeafBytes+1))
 	if err != nil || len(data) > MaxLeafBytes {
 		return nil, errors.New("verified leaf exceeds limit")

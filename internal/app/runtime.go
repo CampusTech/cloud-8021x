@@ -76,7 +76,23 @@ func verifyLeaf(ctx context.Context, cfg config.Config, o RunOptions) error {
 	if cfg.Policy.IdentityMode != "fingerprint" {
 		return errors.New("verified leaf handoff requires fingerprint identity mode")
 	}
-	data, err := identity.ReadLeaf(input.CertificateFile)
+	leafUID := os.Geteuid()
+	if leafUID == 0 {
+		producer, err := user.Lookup("freerad")
+		if err != nil {
+			return errors.New("fixed FreeRADIUS leaf producer account unavailable")
+		}
+		leafUID, err = strconv.Atoi(producer.Uid)
+		if err != nil || leafUID <= 0 {
+			return errors.New("invalid fixed FreeRADIUS leaf producer account")
+		}
+	}
+	directory, err := identity.OpenLeafDirectory(cfg.Backends.RadiusVerifyLeafDir, leafUID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	data, err := directory.Read(filepath.Base(input.CertificateFile))
 	if err != nil {
 		return err
 	}

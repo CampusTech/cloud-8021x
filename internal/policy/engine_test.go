@@ -24,6 +24,8 @@ func fixture(t *testing.T) (*Engine, domain.Snapshot, identity.VerifiedCertifica
 	if err := h.Record(path, token, nil, now); err != nil {
 		t.Fatal(err)
 	}
+	// Receipt follows the completed filesystem write, including slow race builds.
+	now = time.Now()
 	cert, err := h.Consume(token, now.Add(time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
