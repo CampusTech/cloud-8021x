@@ -205,6 +205,8 @@ See [terraform.tfvars.example](terraform.tfvars.example) for common settings and
 
 After deployment, run `./scripts/fetch-outputs.sh` and open `out/README.md` for all IPs, shared secrets, and certs in one place.
 
+Optional Meraki log enrichment uses organization device inventory and wireless SSID statuses to resolve exact hardware MACs and BSSIDs to AP and network names. The API key needs read access to both endpoints; no MAC offsets are guessed. This enrichment does not change authentication or VLAN selection.
+
 Configure your access points (UniFi, Meraki, or any 802.1X-capable AP) with:
 
 - **Primary RADIUS Server IP**: from `out/README.md` or `terraform output radius_primary_ip`

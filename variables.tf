@@ -160,7 +160,7 @@ variable "meraki_api_key" {
 }
 
 variable "meraki_org_id" {
-  description = "Cisco Meraki organization ID the AP cache reads from (whole-org BSSID→AP-name map). Required when meraki_api_key is set. Find it in the Dashboard URL or via GET /organizations."
+  description = "Cisco Meraki organization ID the AP cache reads from (whole-org exact hardware-MAC/BSSID→AP-name map). Required when meraki_api_key is set. Find it in the Dashboard URL or via GET /organizations."
   type        = string
   default     = ""
 
