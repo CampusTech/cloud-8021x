@@ -92,11 +92,11 @@ Files: internal/telemetry, internal/adapters/otlp, internal/templates/ddot, tele
 
 Files: internal/adapters/stepca, internal/adapters/gcp, internal/privileged, internal/templates/systemd, internal/app commands.
 
-- [ ] Add adoption/initialization tests distinguishing no enabled secret version from read outage, immutable CA trust material, key/chain validation and activate/rollback failures.
-- [ ] Port Smallstep EC/RSA KMS initialization/adoption, ACME/SCEP/webhook config, persisted readiness ordering, certificate cache/renewal and FR validation before activation. Root keys intentionally deleted stay deleted.
-- [ ] Port privileged package/user/template/service operations with fixed paths and typed actions. Render serialized config; atomic last-known-good activation/rollback; renewal/source jobs use same binary.
-- [ ] Dedicated daemon user cannot access CA keys/modify services; root fetches runtime secrets into private files; systemd/network rules block GCP metadata credentials including endpoint variants.
-- [ ] Wire bootstrap/certificates renew/doctor/metrics commands with true dry-run, context and safe structured operation output; CA mock/local integration tests; commit.
+- [x] Add adoption/initialization tests distinguishing no enabled secret version from read outage, immutable CA trust material, key/chain validation and activate/rollback failures.
+- [x] Port Smallstep EC/RSA KMS initialization/adoption, ACME/SCEP/webhook config, persisted readiness ordering, certificate cache/renewal and FR validation before activation. Root keys intentionally deleted stay deleted.
+- [x] Port privileged package/user/template/service operations with fixed paths and typed actions. Render serialized config; atomic last-known-good activation/rollback; renewal/source jobs use same binary.
+- [x] Dedicated daemon user cannot access CA keys/modify services; root fetches runtime secrets into private files; systemd/network rules block GCP metadata credentials including endpoint variants.
+- [x] Wire bootstrap/certificates renew/doctor/metrics commands with true dry-run, context and safe structured operation output; CA mock/local integration tests; commit.
 
 ## Task 9: Full daemon orchestration and migration/rollback
 
