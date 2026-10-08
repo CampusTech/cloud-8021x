@@ -61,11 +61,11 @@ Files: internal/inventory, internal/adapters/fleet, internal/jobs/inventory, Win
 
 Files: internal/adapters/unifi, internal/adapters/meraki, internal/network, internal/jobs/network, internal/privileged/sources.
 
-- [ ] Add normalized provider tests covering scoped sites/APs/switch ports/VLAN names, hardware-MAC mapping, complete pagination/cancellation/429, unsupported versus empty versus failed scope, collision isolation.
-- [ ] Port API clients with bounded retries and development disk caches; registry injects inventory and optional VLANSignaler/source-discovery capabilities. No API calls on auth path.
-- [ ] Port trusted pinned-controller WAN/CIDR discovery candidate validation/static fallback/overlap/TTL, atomic metadata publication retaining successful timestamps.
-- [ ] Implement fixed privileged sources apply with config validation, FreeRADIUS/firewall convergence before freshness commit, rollback and meaningful dry-run; no generic root command proxy.
-- [ ] Wire sites sync/schedules, scoped fake provider tests; commit.
+- [x] Add normalized provider tests covering scoped sites/APs/switch ports/VLAN names, hardware-MAC mapping, complete pagination/cancellation/429, unsupported versus empty versus failed scope, collision isolation.
+- [x] Port API clients with bounded retries and development disk caches; registry injects inventory and optional VLANSignaler/source-discovery capabilities. No API calls on auth path.
+- [x] Port trusted pinned-controller WAN/CIDR discovery candidate validation/static fallback/overlap/TTL, atomic metadata publication retaining successful timestamps.
+- [x] Implement fixed privileged sources apply with config validation, FreeRADIUS/firewall convergence before freshness commit, rollback and meaningful dry-run; no generic root command proxy.
+- [x] Wire sites sync/schedules, scoped fake provider tests; commit.
 
 ## Task 6: Native FreeRADIUS templates and event ingestion
 
