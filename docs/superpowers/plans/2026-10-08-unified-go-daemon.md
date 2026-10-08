@@ -51,11 +51,11 @@ Files: internal/storage/postgres, internal/accounting, migrations, internal/jobs
 
 Files: internal/inventory, internal/adapters/fleet, internal/jobs/inventory, Windows script retained.
 
-- [ ] Add provider contract and Fleet fixture tests for full pagination, cancellation/rate limits, incomplete refresh, host scope intersection, minimum polling scope, observed_at independence and pending command/result binding.
-- [ ] Port Fleet inventory/metadata and existing Apple MDM/Windows SYSTEM certificate collectors, immutable local cache publication and namespaced devices/groups. Keep observer/maintainer credentials separate.
-- [ ] Coordinate collection/reservations with PostgreSQL; persist submission attempts before remote requests; reconcile uncertain submissions and enforce exact authenticated host/result provenance.
-- [ ] Wire scheduled and inventory sync commands, fake provider contract proves domain independence. No increase in ACME device polling.
-- [ ] Run provider/storage/race parity tests; commit.
+- [x] Add provider contract and Fleet fixture tests for full pagination, cancellation/rate limits, incomplete refresh, host scope intersection, minimum polling scope, observed_at independence and pending command/result binding.
+- [x] Port Fleet inventory/metadata and existing Apple MDM/Windows SYSTEM certificate collectors, immutable local cache publication and namespaced devices/groups. Keep observer/maintainer credentials separate.
+- [x] Coordinate collection/reservations with PostgreSQL; persist submission attempts before remote requests; reconcile uncertain submissions and enforce exact authenticated host/result provenance.
+- [x] Wire scheduled and inventory sync commands, fake provider contract proves domain independence. No increase in ACME device polling.
+- [x] Run provider/storage/race parity tests; commit.
 
 ## Task 5: UniFi/Meraki inventory and source discovery
 
