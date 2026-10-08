@@ -390,7 +390,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		for path, data := range caFiles {
 			files = append(files, host.File{Path: path, Data: data, Mode: 0600})
 		}
-		for path, data := range map[string][]byte{"/etc/cloud-8021x/client-cas.pem": trust, "/etc/cloud-8021x/ec-intermediate.pem": ec.Intermediate, "/etc/cloud-8021x/rsa-intermediate.pem": rsa.Intermediate, "/etc/cloud-8021x/webhook.crt": webhook.Certificate, "/usr/local/share/ca-certificates/acme-webhook.crt": webhook.Certificate} {
+		for path, data := range map[string][]byte{"/etc/cloud-8021x/client-cas.pem": trust, "/etc/cloud-8021x/radius-server.pem": certificate.Chain, "/etc/cloud-8021x/ec-intermediate.pem": ec.Intermediate, "/etc/cloud-8021x/rsa-intermediate.pem": rsa.Intermediate, "/etc/cloud-8021x/webhook.crt": webhook.Certificate, "/usr/local/share/ca-certificates/acme-webhook.crt": webhook.Certificate} {
 			files = append(files, host.File{Path: path, Data: data, Mode: 0644})
 		}
 		files = append(files, host.File{Path: "/etc/acme-authz-webhook/server.key", Data: webhook.Key, Mode: 0600}, host.File{Path: "/etc/acme-authz-webhook/server.crt", Data: webhook.Certificate, Mode: 0644}, host.File{Path: "/run/cloud-8021x/credentials/webhook.key", Data: webhook.Key, UID: accounts.RuntimeUID, GID: accounts.RuntimeGID, Mode: 0600})

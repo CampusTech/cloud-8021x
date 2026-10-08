@@ -33,24 +33,25 @@ type SecretRef struct {
 }
 
 type Config struct {
-	Bootstrap     Bootstrap      `yaml:"bootstrap"`
-	RuntimeUser   string         `yaml:"runtime_user"`
-	SchemaVersion int            `yaml:"schema_version"`
-	Debug         bool           `yaml:"debug"`
-	InstanceID    string         `yaml:"instance_id"`
-	Environment   string         `yaml:"environment"`
-	Hostname      string         `yaml:"hostname"`
-	Listeners     Listeners      `yaml:"listeners"`
-	Inventory     Inventory      `yaml:"inventory"`
-	Policy        Policy         `yaml:"policy"`
-	Network       Network        `yaml:"network"`
-	RadiusClients []RadiusClient `yaml:"radius_clients"`
-	Database      Database       `yaml:"database"`
-	Telemetry     Telemetry      `yaml:"telemetry"`
-	CA            CA             `yaml:"ca"`
-	Backends      Backends       `yaml:"backends"`
-	Paths         Paths          `yaml:"paths"`
-	Schedules     Schedules      `yaml:"schedules"`
+	StateTransition string         `yaml:"state_transition"`
+	Bootstrap       Bootstrap      `yaml:"bootstrap"`
+	RuntimeUser     string         `yaml:"runtime_user"`
+	SchemaVersion   int            `yaml:"schema_version"`
+	Debug           bool           `yaml:"debug"`
+	InstanceID      string         `yaml:"instance_id"`
+	Environment     string         `yaml:"environment"`
+	Hostname        string         `yaml:"hostname"`
+	Listeners       Listeners      `yaml:"listeners"`
+	Inventory       Inventory      `yaml:"inventory"`
+	Policy          Policy         `yaml:"policy"`
+	Network         Network        `yaml:"network"`
+	RadiusClients   []RadiusClient `yaml:"radius_clients"`
+	Database        Database       `yaml:"database"`
+	Telemetry       Telemetry      `yaml:"telemetry"`
+	CA              CA             `yaml:"ca"`
+	Backends        Backends       `yaml:"backends"`
+	Paths           Paths          `yaml:"paths"`
+	Schedules       Schedules      `yaml:"schedules"`
 }
 
 type Listener struct {
@@ -381,6 +382,9 @@ func listenerBindingsOverlap(a, b netip.AddrPort) bool {
 }
 
 func (c Config) Validate() error {
+	if c.StateTransition != "" && !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.StateTransition) {
+		return errors.New("state_transition must be a protected shared 64-hex identity")
+	}
 	if !regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`).MatchString(c.RuntimeUser) || c.RuntimeUser == "root" || c.RuntimeUser == "freerad" || c.RuntimeUser == "freeradius" {
 		return errors.New("runtime_user must be a separate unprivileged daemon account")
 	}

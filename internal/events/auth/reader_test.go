@@ -163,3 +163,36 @@ func TestReaderGenerationRotationRestartAndTruncation(t *testing.T) {
 		t.Fatal("rewrote or duplicated immutable events")
 	}
 }
+
+func TestRestorePreservesProducerGenerationAndDoesNotRecount(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_ = os.Chmod(dir, 0750)
+	path := filepath.Join(dir, "auth-0123456789abcdef-2026100810.detail")
+	if err := os.WriteFile(path, []byte(record), 0640); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(path, 0640)
+	store := &memoryStore{cursors: map[string]string{}, payloads: map[string]json.RawMessage{}}
+	reader, err := newReader(Options{Directory: dir, Host: "original-producer", ProducerUID: os.Getuid(), EventGID: os.Getgid(), Store: store}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if n, err := reader.Poll(context.Background()); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	backup := path + ".restored"
+	if err = os.WriteFile(backup, []byte(record+record), 0640); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(backup, 0640)
+	if err = os.Rename(backup, path); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := reader.Poll(context.Background()); err != nil || n != 1 {
+		t.Fatal("restore recounted old event", n, err)
+	}
+	if len(store.payloads) != 2 {
+		t.Fatal("duplicate business events after restored inode")
+	}
+}

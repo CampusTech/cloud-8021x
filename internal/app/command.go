@@ -236,5 +236,20 @@ func NewCommand(options Options) *cobra.Command {
 		return (config.SecretRef{File: keyFile}).Validate("SCEP challenge signing key", true)
 	}
 	root.AddCommand(challenge)
+	profileOptions := &RunOptions{Logger: logger}
+	profile := profileCommand(profileOptions)
+	profile.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		cfg, err := load(cmd)
+		if err != nil {
+			return err
+		}
+		profileOptions.DryRun = dryRun
+		profileOptions.Debug = cfg.Debug
+		if !cmd.Flags().Changed("signing-key-file") {
+			return cmd.Flags().Set("signing-key-file", cfg.Inventory.Fleet.ChallengeSigningKey.File)
+		}
+		return nil
+	}
+	root.AddCommand(profile)
 	return root
 }

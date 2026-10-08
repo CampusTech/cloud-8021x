@@ -154,7 +154,10 @@ func (r *Reader) read(ctx context.Context, name string, limit int) (int, error) 
 	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 || int(st.Uid) != r.options.ProducerUID || int(st.Gid) != r.options.EventGID || st.Mode&0777 != 0640 {
 		return 0, errors.New("unsafe auth event file")
 	}
-	source := fmt.Sprintf("%s/%s/%d:%d", r.options.Host, name, st.Dev, st.Ino)
+	// The protected producer generation embedded in the filename is immutable.
+	// Retained backup restoration must preserve host and filename, while inode
+	// and device are transport details that change on a legitimate restore.
+	source := fmt.Sprintf("%s/%s", r.options.Host, name)
 	cursor, err := r.options.Store.Cursor(ctx, source)
 	if err != nil {
 		return 0, err

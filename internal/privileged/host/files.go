@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/CampusTech/cloud-8021x/internal/adapters/stepca"
@@ -26,7 +27,7 @@ var fixedFiles = map[string]bool{
 	"/etc/cloud-8021x/ec-intermediate.pem": true, "/etc/cloud-8021x/rsa-intermediate.pem": true,
 	"/etc/systemd/system/cloud-8021x-credentials.service": true, "/etc/systemd/system/cloud-8021x-metadata.service": true,
 	"/usr/sbin/policy-rc.d":         true,
-	"/etc/cloud-8021x/metadata.nft": true, "/etc/cloud-8021x/ddot.yaml": true, "/etc/cloud-8021x/client-cas.pem": true,
+	"/etc/cloud-8021x/metadata.nft": true, "/etc/cloud-8021x/ddot.yaml": true, "/etc/cloud-8021x/radius-server.pem": true, "/etc/cloud-8021x/client-cas.pem": true,
 	"/etc/sudoers.d/cloud-8021x": true, "/etc/tmpfiles.d/cloud-8021x.conf": true, "/etc/systemd/system/cloud-8021x.service": true, "/etc/systemd/system/cloud-8021x-bootstrap.service": true, "/etc/systemd/system/cloud-8021x-renew.service": true, "/etc/systemd/system/cloud-8021x-renew.timer": true, "/etc/systemd/system/cloud-8021x-sources.service": true, "/etc/systemd/system/cloud-8021x-sources.timer": true, "/etc/systemd/system/step-ca.service": true, "/etc/systemd/system/step-ca-rsa.service": true, "/etc/systemd/system/freeradius.service.d/cloud-8021x.conf": true,
 	"/usr/local/share/ca-certificates/acme-webhook.crt": true, "/etc/cloud-8021x/webhook.crt": true, "/run/cloud-8021x/credentials/webhook.key": true, "/etc/freeradius/3.0/certs/server-cert.pem": true, "/etc/freeradius/3.0/certs/server-key.pem": true,
 }
@@ -35,7 +36,7 @@ func AllowedFile(path string) bool {
 	if filepath.Clean(path) != path {
 		return false
 	}
-	if fixedFiles[path] {
+	if fixedFiles[path] || legacyWriterFile(path) {
 		return true
 	}
 	for _, base := range []string{"/etc/step-ca", "/etc/step-ca-rsa"} {
@@ -142,7 +143,7 @@ func Snapshot(file File) (SavedFile, error) {
 // Write stages on the destination filesystem, fsyncs, chowns, then atomically
 // replaces. Existing root/app-owned regular single-link files alone are adopted.
 func Write(file File) error {
-	if os.Geteuid() != 0 || file.UID < 0 || file.GID < 0 || (file.Mode != 0600 && file.Mode != 0644 && file.Mode != 0640 && file.Mode != 0440 && ((file.Path != "/usr/sbin/policy-rc.d" && file.Path != "/usr/local/bin/cloud-8021x") || file.Mode != 0755) && (!file.restoring || file.Mode > 0777 || file.Mode&0022 != 0)) || len(file.Data) > 256<<20 {
+	if os.Geteuid() != 0 || file.UID < 0 || file.GID < 0 || (file.Mode != 0600 && file.Mode != 0644 && file.Mode != 0640 && file.Mode != 0440 && ((file.Path != "/usr/sbin/policy-rc.d" && file.Path != "/usr/local/bin/cloud-8021x" && !slices.Contains(legacyWriterHelpers, file.Path)) || file.Mode != 0755) && (!file.restoring || file.Mode > 0777 || file.Mode&0022 != 0)) || len(file.Data) > 256<<20 {
 		return errors.New("invalid protected file operation")
 	}
 	parentOwner := file.UID

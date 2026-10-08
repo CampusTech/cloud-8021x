@@ -38,14 +38,16 @@ type RuntimeServices struct{ SourceDependencies SourceDependencies }
 
 func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 
-// Later orchestration tasks register the remaining concrete operations. Unimplemented
-// operations remain explicit errors; verify-leaf is already a real executable path.
+// Runtime dispatch keeps privileged actions separate from unprivileged service ownership.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
 	if o.Incoming && op != OperationBootstrap {
 		return errors.New("incoming release selector is bootstrap-only")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if op == OperationServe {
+		return serveDaemon(ctx, cfg, o)
 	}
 	if op == OperationDoctor || op == OperationMetricsEmit {
 		return diagnostics(ctx, op, cfg, o)

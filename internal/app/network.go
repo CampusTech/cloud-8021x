@@ -166,10 +166,6 @@ func applySources(ctx context.Context, o RunOptions, dependencies SourceDependen
 	if !cfg.Network.Discovery.Enabled {
 		return errors.New("source discovery is disabled")
 	}
-	sourceConfig, e := SourceConfig(cfg)
-	if e != nil {
-		return e
-	}
 	owner, e := user.Lookup(cfg.RuntimeUser)
 	if e != nil {
 		return errors.New("dedicated source producer account unavailable")
@@ -188,6 +184,14 @@ func applySources(ctx context.Context, o RunOptions, dependencies SourceDependen
 	verify, ops, e := dependencies(ctx, cfg)
 	if e != nil {
 		return e
+	}
+	return applySourceCandidate(ctx, cfg, o, candidates, verify, ops)
+}
+
+func applySourceCandidate(ctx context.Context, cfg config.Config, o RunOptions, candidates []domain.SourceCandidate, verify sources.Verifier, ops sources.Operations) error {
+	sourceConfig, err := SourceConfig(cfg)
+	if err != nil {
+		return err
 	}
 	apply := func() error {
 		if !o.DryRun {

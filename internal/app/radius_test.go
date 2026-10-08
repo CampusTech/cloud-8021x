@@ -37,9 +37,9 @@ func TestVerifyLeafCLIArgsAndFlags(t *testing.T) {
 		}
 	}
 }
-func TestRuntimeDispatcherKeepsOtherCommandsExplicitlyUnsupported(t *testing.T) {
+func TestRuntimeDispatcherServeRejectsMissingRuntimeAccount(t *testing.T) {
 	runtime := NewRuntimeServices()
-	if err := runtime.Run(context.Background(), OperationServe, configuredFixture(t), RunOptions{}); !errors.Is(err, ErrUnsupported) {
+	if err := runtime.Run(context.Background(), OperationServe, configuredFixture(t), RunOptions{}); err == nil || errors.Is(err, ErrUnsupported) {
 		t.Fatal(err)
 	}
 }
