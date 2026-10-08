@@ -27,6 +27,7 @@ def render(enabled=True, smallstep=False, webhook=False, certificate_inventory=F
         values[name + '_module_b64'] = base64.b64encode((ROOT / 'scripts' / (name + '.py')).read_bytes()).decode()
     values['windows_certificates_script_b64'] = base64.b64encode((ROOT / 'scripts/windows_certificates.ps1').read_bytes()).decode()
     policy = {'group_vlans': {'staff': 100, 'byod': 200}, 'fallback_vlan': None,
+              'vlan_names': {'100': 'Secure', '200': 'Guest "BYOD"'},
               'cache_max_age': 3600, 'certificate_inventory': certificate_inventory, 'certificate_max_age': 86400, 'cache_file': '/etc/freeradius/3.0/device-policy-cache.json'}
     values['vlan_policy_config_b64'] = base64.b64encode(json.dumps(policy if enabled else None).encode()).decode()
     values['radius_sources_config_b64'] = base64.b64encode(b'{"project":"test","clients":{}}').decode()

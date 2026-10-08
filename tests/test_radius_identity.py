@@ -120,6 +120,43 @@ class RadiusIdentityTests(unittest.TestCase):
         Path(self.module.KEY_FILE).unlink()
         self.assertEqual(self.module.enrich(self.request(token)), ())
 
+    def test_vlan_names_use_signed_original_vlan_and_trusted_location(self):
+        config = {'cache_file': str(self.cache), 'cache_max_age': 3600,
+                  'vlan_names': {'120': 'Wrong global name'},
+                  'locations': {
+                      'nyc': {'group_vlans': {'staff': 999}, 'vlan_names': {'120': 'Secure NYC'}},
+                      'atl': {'vlan_names': {'120': 'Guest ATL'}}}}
+        Path(self.module.CONFIG_FILE).write_text(json.dumps(config))
+        for location, name in [('nyc', 'Secure NYC'), ('atl', 'Guest ATL')]:
+            token = self.issue(location=location)
+            for accounting in (False, True):
+                request = self.request(token, accounting=accounting, location=location)
+                request['request'] += (('NAS-Identifier', 'spoofed-site'), ('Tmp-String-7', 'Forged name'))
+                attrs = dict(self.module.enrich(request, accounting=accounting))
+                self.assertEqual(attrs['Tunnel-Private-Group-Id'], '120')
+                self.assertEqual(attrs.get('Tmp-String-7'), name)
+        self.cache.unlink()
+        attrs = dict(self.module.enrich(self.request(self.issue(), accounting=True), accounting=True))
+        self.assertEqual(attrs.get('Tmp-String-7'), 'Secure NYC')
+        self.assertEqual(attrs['Tmp-String-2'], self.device)
+
+    def test_optional_global_vlan_names_and_unavailable_labels(self):
+        for names, expected in [({'120': 'Secure'}, 'Secure'), ({}, None),
+                                ({'120': ''}, None), ({'120': 123}, None),
+                                ({'120': 'x' * 129}, None), (None, None)]:
+            with self.subTest(names=names):
+                Path(self.module.CONFIG_FILE).write_text(json.dumps({
+                    'cache_file': str(self.cache), 'cache_max_age': 3600, 'vlan_names': names}))
+                attrs = dict(self.module.enrich(self.request(self.issue())))
+                self.assertEqual(attrs.get('Tmp-String-7'), expected)
+                self.assertEqual(attrs['Tunnel-Private-Group-Id'], '120')
+                self.assertEqual(attrs['Reply-Message'], 'actual@example.com')
+        Path(self.module.CONFIG_FILE).write_text(json.dumps({
+            'cache_file': str(self.cache), 'cache_max_age': 3600,
+            'vlan_names': {'120': 'Do not inherit'}, 'locations': {'nyc': {}}}))
+        self.assertNotIn('Tmp-String-7', dict(self.module.enrich(self.request(self.issue()))))
+        self.assertNotIn('Tmp-String-7', dict(self.module.enrich(self.request(self.issue(vlan=None)))))
+
     def test_issuance_rejects_unsafe_fields_and_oversize_class(self):
         for change in ({'key': b'short'}, {'device_id': ''}, {'device_id': 'a' * 97},
                        {'fingerprint': 'invalid'}, {'vlan': 0}, {'vlan': True},

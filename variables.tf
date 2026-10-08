@@ -442,6 +442,7 @@ variable "radius_vlan_policy" {
   description = "Dynamic VLAN authorization. Null disables it. locations keys match radius_clients office names; each location has its own complete group/fallback mapping or dynamic_vlans=false to retain authorization without VLAN assignment. Empty locations uses the global mapping. Unknown locations fail closed."
   type = object({
     group_vlans           = optional(map(number), {})
+    vlan_names            = optional(map(string), {})
     fallback_vlan         = optional(number)
     cache_max_age         = optional(number, 3600)
     cache_file            = optional(string, "/etc/freeradius/3.0/device-policy-cache.json")
@@ -452,9 +453,21 @@ variable "radius_vlan_policy" {
       dynamic_vlans = optional(bool, true)
       group_vlans   = optional(map(number), {})
       fallback_vlan = optional(number)
+      vlan_names    = optional(map(string), {})
     })), {})
   })
   default = null
+
+  validation {
+    condition = var.radius_vlan_policy == null ? true : alltrue(flatten([
+      for names in concat([var.radius_vlan_policy.vlan_names], [for policy in values(var.radius_vlan_policy.locations) : policy.vlan_names]) : [
+        for id, name in names :
+        can(regex("^[1-9][0-9]{0,3}$", id)) && try(tonumber(id) <= 4094, false) &&
+        try(length(name) > 0 && length(name) <= 128 && name == trimspace(name), false)
+      ]
+    ]))
+    error_message = "vlan_names keys must be canonical VLAN IDs from 1 through 4094; names must be 1-128 characters with no surrounding whitespace."
+  }
 
   validation {
     condition     = var.radius_vlan_policy == null ? true : (!var.radius_vlan_policy.attested_acme || var.radius_vlan_policy.certificate_inventory)

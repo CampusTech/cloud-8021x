@@ -51,9 +51,11 @@ radius_vlan_policy = {
   locations = {
     nyc = {
       group_vlans = { "fleet:1" = 100, "fleet:2" = 200 }
+      vlan_names  = { "100" = "Secure", "200" = "Guest" }
     }
     atl = {
       group_vlans = { "fleet:1" = 110, "fleet:2" = 220 }
+      vlan_names  = { "110" = "Secure", "220" = "Guest" }
     }
   }
 }
@@ -65,6 +67,28 @@ the matched, authenticated client's configured `shortname` as the location.
 `NAS-Identifier`, `NAS-IP-Address`, SSID, and device-supplied names cannot override
 it. Offices behind the same RADIUS proxy/egress need distinct trusted client
 paths before they can use separate location policies.
+
+### VLAN names in Datadog
+
+Optional `vlan_names` maps canonical string VLAN IDs to readable labels. In
+certificate inventory mode, verified authentication and accounting logs include
+both `vlan_id` and `vlan_name`; Datadog's event tables display the two together.
+Names are configured labels, not fetched automatically from UniFi. Use the
+actual network names, such as Secure, Guest, or Conferencing, at each site.
+
+With `locations` configured, each site's names are independent and do not
+inherit top-level `vlan_names`. Without locations, use top-level `vlan_names`.
+Keys must be VLAN IDs 1–4094 without leading zeros; names must be 1–128
+characters with no surrounding whitespace. Names affect only log display, not
+authorization or the RADIUS tunnel attributes.
+
+Accounting uses the **original signed VLAN ID**, not the device's current group
+mapping. Its name comes from the current configured label for that ID at the
+trusted site; renaming a network changes the label on subsequent events.
+Missing labels leave `vlan_name` empty while retaining the verified VLAN ID.
+Opted-out sites and unverified bindings have no VLAN name. Previously ingested
+logs are not backfilled. Create the `@vlan_name` string facet in Datadog for
+name searches and grouping; ID-based widgets still include older unnamed logs.
 
 ### Source CIDRs and automatic UniFi WAN discovery
 

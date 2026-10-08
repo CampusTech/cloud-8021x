@@ -45,7 +45,8 @@ class LogIdentityTests(unittest.TestCase):
             (root / 'cache').write_text(json.dumps({'updated_at': time.time(), 'devices': {
                 'fleet:7': {'serial': '', 'device_owner': 'owner"@example.com',
                             'device_name': 'Personal\niPhone', 'device_model': 'iPhone'}}}))
-            (root / 'config').write_text(json.dumps({'cache_file': str(root / 'cache'), 'cache_max_age': 3600}))
+            (root / 'config').write_text(json.dumps({'cache_file': str(root / 'cache'), 'cache_max_age': 3600,
+                'locations': {'nyc': {'vlan_names': {'210': 'Guest "BYOD"'}}}}))
             token = radius_identity.issue(b'k' * 64, 'fleet:7', 'ab' * 32, 210,
                                           'nyc', 'aa:bb:cc:dd:ee:ff', time.time())
             with patch.object(radius_identity, 'KEY_FILE', str(root / 'key')), \
@@ -67,17 +68,21 @@ class LogIdentityTests(unittest.TestCase):
                     self.assertEqual(record['device_owner'], 'owner"@example.com')
                     self.assertEqual(record['certificate_fingerprint'], 'ab' * 32)
                     self.assertEqual(record['vlan_id'], '210')
+                    self.assertEqual(record.get('vlan_name'), 'Guest "BYOD"')
                     self.assertEqual(record['event'], 'Acct-Start' if accounting else 'Access-Accept')
 
     def test_reject_json_does_not_inherit_unverified_reply_metadata(self):
         request = {'request': (('User-Name', 'victim'), ('Module-Failure-Message', 'denied"\nreason')),
-                   'reply': (('Tmp-String-2', 'victim-id'), ('Reply-Message', 'victim@example.com')),
+                   'reply': (('Tmp-String-2', 'victim-id'), ('Reply-Message', 'victim@example.com'),
+                             ('Tunnel-Private-Group-Id', '5'), ('Tmp-String-7', 'Forged Secure')),
                    'config': (('Tmp-String-5', 'Access-Reject'),)}
         record = json.loads(radius_log.record(request, ()))
         self.assertEqual(record['event'], 'Access-Reject')
         self.assertFalse(record['identity_verified'])
         self.assertEqual(record['device_owner'], '')
         self.assertEqual(record['device_id'], '')
+        self.assertEqual(record['vlan_id'], '')
+        self.assertEqual(record.get('vlan_name'), '')
         self.assertEqual(record['reject_reason'], 'denied"\nreason')
 
     def test_fingerprint_mode_never_attributes_claimed_username_without_verified_binding(self):

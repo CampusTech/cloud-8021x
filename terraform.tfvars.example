@@ -146,8 +146,14 @@ EOT
 #   certificate_max_age   = 86400 # Minimum 7200 seconds: two hourly collection cycles.
 #   cache_max_age         = 3600
 #   locations = {
-#     nyc = { group_vlans = { "fleet:1" = 100, "fleet:2" = 200 } }
-#     atl = { group_vlans = { "fleet:1" = 110, "fleet:2" = 220 } }
+#     nyc = {
+#       group_vlans = { "fleet:1" = 100, "fleet:2" = 200 }
+#       vlan_names  = { "100" = "Secure", "200" = "Guest" } # Optional log labels.
+#     }
+#     atl = {
+#       group_vlans = { "fleet:1" = 110, "fleet:2" = 220 }
+#       vlan_names  = { "110" = "Secure", "220" = "Guest" }
+#     }
 #     branch-office = { dynamic_vlans = false } # Use SSID network; still authorize devices.
 #   }
 # }

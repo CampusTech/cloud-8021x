@@ -409,6 +409,14 @@ The VLAN filter applies only to this section, so the overview and reject widgets
 continue to show events without an assignment. Infrastructure metrics have no
 per-VLAN dimension.
 
+In certificate inventory mode, optional site-specific `vlan_names` labels add
+`vlan_name` alongside `vlan_id` in authentication/accounting logs and both event
+tables (for example, `5` and `Secure`). Configure names in
+[`radius_vlan_policy`](docs/dynamic-vlans.md#vlan-names-in-datadog); names are
+display metadata and do not change authorization. Accounting labels the original
+signed VLAN using the current name at that site. Missing labels stay blank;
+older logs are not backfilled.
+
 VLAN IDs are local to each location. Use the site filter or source-IP breakdown
 to distinguish the same ID at different sites. Source IP remains available when
 UniFi site-name enrichment is absent. Distinct-device counts use `@device_id`
@@ -437,6 +445,7 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | `@device_id` | `@device_id` | String | Stable device identity, including serial-free BYOD |
 | `@certificate_fingerprint` | `@certificate_fingerprint` | String | Exact authenticated certificate |
 | Assigned VLAN | `@vlan_id` | String | VLAN filter, assignment trends, verified devices by VLAN |
+| Assigned VLAN Name | `@vlan_name` | String | Auth/accounting event tables, name searches and grouping |
 | RADIUS Source IP | `@src_ip` | String | Assignments by RADIUS Source / VLAN |
 | `@identity_verified` | `@identity_verified` | Boolean | Verified attribution versus diagnostic claims |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |

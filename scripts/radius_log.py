@@ -30,6 +30,7 @@ def record(request, enrichment, accounting=False):
               'device_name': reply.get('Filter-Id', ''),
               'device_model': reply.get('Login-LAT-Node', ''),
               'vlan_id': reply.get('Tunnel-Private-Group-Id', ''),
+              'vlan_name': reply.get('Tmp-String-7', ''),
               'ssid': reply.get('Login-LAT-Port', ''),
               'site_name': reply.get('Connect-Info', ''),
               'ap_name': reply.get('Callback-Id', '')}
