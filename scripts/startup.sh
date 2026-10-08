@@ -869,7 +869,10 @@ for i in $(seq 1 30); do
   curl -fsS -k https://127.0.0.1:8444/health >/dev/null 2>&1 && break
   sleep 1
 done
-since=$(systemctl show step-ca-rsa -p ActiveEnterTimestamp --value)
+# ActiveEnterTimestamp still points to the previous start during ExecStartPost.
+# Use the new process timestamp so a busy CA does not scan months of history.
+since=$(systemctl show step-ca-rsa -p ExecMainStartTimestamp --value)
+[ -n "$since" ] || { echo "CA start timestamp unavailable" >&2; exit 1; }
 if journalctl -u step-ca-rsa --since "$since" --no-pager 2>/dev/null | grep -q "does not have decrypter"; then
   echo "stepca-rsa-decrypter-probe: SCEP decrypter failed to initialize; failing unit to force restart" >&2
   exit 1
@@ -2252,14 +2255,29 @@ try:
         if not isinstance(vlan_config, dict) or not isinstance(vlan_config.get("certificate_inventory", False), bool):
             raise ValueError("invalid certificate inventory configuration")
         policy_ready = not (marker or vlan_config.get("certificate_inventory", False))
-        from fleet_certificates import refresh
+        from fleet_certificates import refresh, _requester
         cert_max_age = vlan_config.get("certificate_max_age", 86400)
         ca_file = "/etc/freeradius/3.0/certs/" + Path("/var/lib/cloud-8021x/client-ca-file").read_text().strip()
         with open("/run/fleet-certificate-credentials.json") as stream:
             collection_token = json.load(stream)["token"]
         if not isinstance(collection_token, str) or not collection_token.strip():
             raise ValueError("collector credential missing")
-        observations = refresh(base, collection_token, all_hosts, "/var/lib/cloud-8021x/certificate-state.json",
+        # A scoped maintainer must never receive the global observer's host set.
+        # Intersect complete authenticated lists, retaining all observer metadata.
+        collection_request = _requester(base, collection_token)
+        collection_ids = set()
+        collection_page = 0
+        while True:
+            path = f"/api/v1/fleet/hosts?page={collection_page}&per_page={page_size}"
+            scoped_hosts = collection_request("GET", path)["hosts"]
+            if not isinstance(scoped_hosts, list):
+                raise ValueError("invalid collector host list")
+            collection_ids.update(host["id"] for host in scoped_hosts)
+            if len(scoped_hosts) < page_size:
+                break
+            collection_page += 1
+        collection_hosts = [host for host in all_hosts if host["id"] in collection_ids]
+        observations = refresh(base, collection_token, collection_hosts, "/var/lib/cloud-8021x/certificate-state.json",
                                now=now, max_age=cert_max_age, ca_file=ca_file,
                                acme_profile_uuids=(json.loads(Path("/etc/freeradius/3.0/fleet-acme-profiles.json").read_text())
                                                    if vlan_config.get("attested_acme") is True else []),
