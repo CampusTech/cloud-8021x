@@ -104,7 +104,8 @@ func newStore(ctx context.Context, dsn string, c config.Database, privileged boo
 	p.ConnConfig.Fallbacks = nil
 	p.ConnConfig.ConnectTimeout = c.ConnectTimeout
 	p.ConnConfig.RuntimeParams = map[string]string{"application_name": "cloud-8021x", "synchronous_commit": "on", "statement_timeout": durationMS(c.QueryTimeout), "lock_timeout": durationMS(c.QueryTimeout), "idle_in_transaction_session_timeout": durationMS(c.QueryTimeout)}
-	p.MinConns = 0 // Even a configured warm minimum must not couple startup to PostgreSQL.
+	p.MinConns = 0 // Neither DSN warm minimum may couple startup to PostgreSQL.
+	p.MinIdleConns = 0
 	p.MaxConns = int32(c.MaxConnections)
 	p.MaxConnLifetime = 30 * time.Minute
 	p.MaxConnIdleTime = 5 * time.Minute

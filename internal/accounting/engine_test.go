@@ -156,3 +156,31 @@ func TestUnknownNetworkIdentityCannotCreateSharedSession(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageIDLegacyStringEscaping(t *testing.T) {
+	// Fixed digests from radius_usage.py's json.dumps([key, previous, current],
+	// separators=(",", ":")), with Python's default ensure_ascii=True.
+	cases := []struct{ name, session, want string }{
+		{"unicode", "東京", "3c5cc1b88a66e81ad7729b8debb69ea698b36b3897cb14a9f6954b1eafc10dbc"},
+		{"less-than", "a<b", "e00c0002a6ad09943f44bf9d83bcc827c92144098deee0fc2a0dd6b83f47df26"},
+		{"html", "a>&b", "459e2cd37b9503995ee3bf8c5b83d83e06192a4cc7ef01a0fb3777a60b26c243"},
+		{"astral", "session-😀", "770468394cd30962817c2d07513e43ff95add05aecb6cdea1ce3e53015baab8d"},
+		{"quotes-and-slashes", "a\"b\\c/d", "8734d0755c06267ea334ac17f92808b00e9b97031c65c58f0dff57bd043457fc"},
+		{"short-controls", "a\b\f\n\r\tb", "a62b27c0416a160bdb87d9e93effb1ea31af094942345c8a3dcbf56aaa234f3d"},
+		{"escaped-controls-and-del", "a\x01\x1f\x7fb", "0c47f9dbcdb13d90d2f012ff7d0d014cc7e478b54aaed0c858f733cbeb96efb9"},
+		{"line-separators", "a\u2028\u2029b", "24f0533f1656628333d06aa026d36ae97654031b927efa9f15b475e4a848cb26"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := raw("Start", "0", "0", "0")
+			start.Session.Value = tc.session
+			state, _, _ := Apply(State{}, event(t, start))
+			interim := raw("Interim-Update", "10", "100", "200")
+			interim.Session.Value = tc.session
+			_, interval, _ := Apply(state, event(t, interim))
+			if interval == nil || interval.ID != tc.want {
+				t.Fatalf("legacy usage ID mismatch: got %+v, want %s", interval, tc.want)
+			}
+		})
+	}
+}

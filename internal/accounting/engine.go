@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/CampusTech/cloud-8021x/internal/accounting/binding"
 )
@@ -158,6 +159,32 @@ func digest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// usageID preserves radius_usage.py's compact json.dumps default ensure_ascii
+// serialization. Go's default HTML escaping and literal Unicode differ from that
+// persisted contract. Only usage coordinates use this encoding; observation IDs
+// retain their existing format.
+func usageID(key [4]string, previous, current [3]uint64) string {
+	var encoded strings.Builder
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	// These fixed arrays contain only strings and uint64 values, so Encode cannot fail.
+	_ = encoder.Encode([]any{key, previous, current})
+	var canonical strings.Builder
+	for _, r := range strings.TrimSuffix(encoded.String(), "\n") {
+		switch {
+		case r < 0x7f:
+			canonical.WriteByte(byte(r))
+		case r <= 0xffff:
+			_, _ = fmt.Fprintf(&canonical, `\u%04x`, r)
+		default:
+			high, low := utf16.EncodeRune(r)
+			_, _ = fmt.Fprintf(&canonical, `\u%04x\u%04x`, high, low)
+		}
+	}
+	sum := sha256.Sum256([]byte(canonical.String()))
+	return hex.EncodeToString(sum[:])
+}
+
 // Apply mirrors the legacy checkpoint's uncertainty rules. Missing attribution
 // may inherit earlier verified evidence only within this exact session key.
 func Apply(s State, e Event) (State, *Interval, string) {
@@ -200,5 +227,5 @@ func Apply(s State, e Event) (State, *Interval, string) {
 	if e.Upload < prev[1] || e.Download < prev[2] {
 		return s, nil, "counter_reset"
 	}
-	return s, &Interval{ID: digest([]any{e.Key, prev, cur}), Key: e.Key, Previous: prev, Current: cur, Upload: e.Upload - prev[1], Download: e.Download - prev[2], Seconds: e.Duration - prev[0], Received: e.Received, Bits: s.Bits, Identity: s.Identity}, "interval"
+	return s, &Interval{ID: usageID(e.Key, prev, cur), Key: e.Key, Previous: prev, Current: cur, Upload: e.Upload - prev[1], Download: e.Download - prev[2], Seconds: e.Duration - prev[0], Received: e.Received, Bits: s.Bits, Identity: s.Identity}, "interval"
 }

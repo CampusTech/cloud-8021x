@@ -208,3 +208,58 @@ republishing. Payload/history retention and explicit recovery policy remain to b
 wired; exact totals come from the PostgreSQL ledger, not an end-to-end
 exactly-once telemetry guarantee. ImportOnce coordinates imports transactionally
 but does not itself stop legacy processes. No production readiness claim is made.
+
+## Review fix round 1 (base 1eb387b)
+
+Both Important review findings are fixed together; no other scope changed.
+
+1. `newStore` now explicitly resets **both** pgx `MinConns` and `MinIdleConns`
+   to zero before pool construction. The DSN cannot re-enable background warm
+   connections or proportional idle-resource allocation. The regression checks
+   both runtime and migration constructors, with typed maximum 2 and DSN
+   `pool_min_idle_conns=4`, `pool_min_conns=2147483647`, and
+   `pool_max_conns=2147483647`. The idle value deliberately stays small so the
+   pre-fix run cannot allocate enormous resources. The resulting pool config
+   must be min_idle=0/min=0/max=2 and connection construction/total counts zero.
+   It uses a local synthetic CA and an unreachable address, without PostgreSQL.
+2. Usage hashing now uses a dedicated Go-only canonical serializer matching
+   `radius_usage.py`'s compact `json.dumps` default `ensure_ascii=True`: no HTML
+   escaping, lowercase Unicode escapes, surrogate pairs for astral characters,
+   and Python-compatible DEL/control/quote/backslash handling. Observation IDs
+   retain their existing encoding. Fixed expected SHA-256 values were generated
+   from the exact legacy Python expression during development, then committed
+   as Go fixture constants; no Python server or test runtime dependency exists.
+   Eight fixtures cover 東京, a<b, a>&b, an astral emoji, quotes/slashes/backslashes,
+   short control escapes, generic controls plus DEL, and Unicode line separators.
+   The existing plain-ASCII usage digest and receipt independence test also pass.
+
+Actual RED, before implementation changes:
+
+`go test ./internal/accounting ./internal/storage/postgres -run 'Test(UsageIDLegacyStringEscaping|DSNPoolSettingsCannotOverrideLazyBounds)'`
+
+- Unicode/HTML/astral/DEL usage fixture subtests failed with legacy digest mismatch.
+  東京 produced `7ff14793fabdc7d6b99390f1c8c220ae347d50697d6116f820830e648cc4749d`
+  instead of `3c5cc1b88a66e81ad7729b8debb69ea698b36b3897cb14a9f6954b1eafc10dbc`.
+- Both runtime and migration pool subtests failed:
+  `DSN overrode lazy bounds: min_idle=4 min=0 max=2`.
+
+Actual GREEN after final Go changes:
+
+`go test -race ./internal/accounting ./internal/storage/postgres -run 'Test(UsageIDLegacy|DSNPoolSettingsCannotOverrideLazyBounds|LazyBoundedRedactedConnection|InvalidConnectionConfigurationDoesNotLeak)'`
+
+```text
+ok github.com/CampusTech/cloud-8021x/internal/accounting 1.179s
+ok github.com/CampusTech/cloud-8021x/internal/storage/postgres 1.210s
+```
+
+`goimports` applied to all four modified Go files; `golangci-lint run` returned
+`0 issues.`; `git diff --check` was clean. The real PostgreSQL, full root,
+FreeRADIUS, and SCEP suites were not repeated: these changes affect deterministic
+hash serialization and pool configuration before connection construction, covered
+by the targeted tests. Earlier database evidence remains the applicable evidence
+for unchanged transactional/TLS/role behavior.
+
+Self-review: fixed coordinate types guarantee JSON encoding cannot fail; only
+usage IDs adopt the legacy serialization, preserving observation-ID stability.
+The pool regression safely reproduces the allocation bypass without using a large
+idle-resource count. No unresolved concern identified in these fixes.
