@@ -112,3 +112,53 @@ Default/example input is now `/run/radius-verified-leaves`; handoffs remain `/ru
 An existing `/run/freeradius/verified-leaves` configuration is unsafe when `/run/freeradius` is freerad-writable; bootstrap must fail its compatibility preflight and move/configure the leaf source at the new protected path. Symlink aliases, hardlinks and permission widening are not migration mechanisms. Update the root-managed fixed configuration and TLS-hook leaf/temp directory together before activation. Keep the narrow fixed-config sudo contract and distinct daemon UID; no daemon root/freerad execution or DAC/CHOWN capability is added.
 
 Positive installed root-to-freerad/application-UID ownership, protected `/run` ancestry and the full TLS-hook invocation remain assigned to Task 8's disposable Linux fixture, with native hook proof in Task 6. This fix's actual RuntimeServices regressions execute as the non-root macOS user, and separate root-policy checks cover ownership/writable-ancestor rules; Linux build passes. No positive root mutation claim is made here.
+
+
+## Actual-root Linux confinement evidence
+
+Controller-requested evidence follow-up on implementation `cb2003d697d99bf5f945bc7da0c049cbca1285de`; no source changes were needed. This supersedes the preceding limit for actual-root reader execution only. Installed cross-UID handoff ownership, narrow sudo invocation and native TLS integration still belong to Tasks 8/6.
+
+Built the focused identity test binary for Linux arm64 and ran it as actual UID/GID 0 in a **new** disposable `debian:12-slim` container named `cloud8021x-task2-root-confinement-cb2003d`. The image was already cached (`--pull never`); the container had no network, all capabilities dropped, no-new-privileges, and only a read-only mount of the temporary test binary. Root tests create their private fixtures under `/run`, exercising the operational root-owned ancestor policy rather than the non-root temporary-directory exception.
+
+Exact command (shell variables retain the unique artifact path):
+
+```sh
+set -e
+leaf_test_artifact=$(mktemp /private/tmp/cloud8021x-task2-root-leaf.XXXXXX)
+trap 'rm -f "$leaf_test_artifact"' EXIT
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$leaf_test_artifact" ./internal/identity
+chmod 0555 "$leaf_test_artifact"
+docker run --rm --pull never --name cloud8021x-task2-root-confinement-cb2003d --label cloud8021x.task=task2-root-confinement --network none --user 0:0 --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$leaf_test_artifact,target=/identity-root.test,readonly" debian:12-slim /bin/sh -c 'id; exec /identity-root.test -test.v -test.run "^(TestLeafDirectory.*|TestPrivilegedLeafAncestryRequiresRootAndNoWritableParent)$" -test.count=1'
+docker ps -a --filter name=cloud8021x-task2-root-confinement-cb2003d --format '{{.Names}}'
+docker ps -a --filter name=cloud8021x-daemon-fr-c7d492 --format '{{.Names}} {{.Status}}'
+```
+
+Exit status **0**. Output:
+
+```text
+uid=0(root) gid=0(root) groups=0(root)
+=== RUN   TestLeafDirectoryRejectsEverySymlinkComponent
+--- PASS: TestLeafDirectoryRejectsEverySymlinkComponent (0.00s)
+=== RUN   TestLeafDirectoryDescriptorRemainsPinnedAfterPathReplacement
+--- PASS: TestLeafDirectoryDescriptorRemainsPinnedAfterPathReplacement (0.00s)
+=== RUN   TestLeafDirectoryValidatesPrivateOwnershipAndUnwritableAncestry
+--- PASS: TestLeafDirectoryValidatesPrivateOwnershipAndUnwritableAncestry (0.00s)
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/hardlink
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/symlink
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/public
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/escape
+=== RUN   TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/absolute
+--- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes (0.00s)
+    --- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/hardlink (0.00s)
+    --- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/symlink (0.00s)
+    --- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/public (0.00s)
+    --- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/escape (0.00s)
+    --- PASS: TestLeafDirectoryRejectsHardlinkedSymlinkedOrPublicLeavesAndEscapes/absolute (0.00s)
+=== RUN   TestPrivilegedLeafAncestryRequiresRootAndNoWritableParent
+--- PASS: TestPrivilegedLeafAncestryRequiresRootAndNoWritableParent (0.00s)
+PASS
+cloud8021x-daemon-fr-c7d492 Up 52 minutes
+```
+
+The disposable container query returned no entries after `--rm`; the shell EXIT trap removed only its unique temporary binary. The pre-existing `cloud8021x-daemon-fr-c7d492` container was not mutated or removed. No production, network credentials, image pulls or unrelated suites were used. `git diff --check` passed for this report-only follow-up.
