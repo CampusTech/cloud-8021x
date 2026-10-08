@@ -21,11 +21,11 @@ Review Focus: Authentication trust boundaries, freshness, Class/counter parity, 
 
 Files: root go.mod/go.sum, cmd/cloud-8021x, internal/app, internal/config, moved internal/webhook packages, examples/cloud-8021x.yaml; existing webhook compatibility entrypoint.
 
-- [ ] Add failing CLI/config tests for strict versioned YAML, unknown fields, bounds, secret-file references, debug/meaningful dry-run, flags overriding config, cancellation.
-- [ ] Move/reuse existing tested webhook code into root module under internal/webhook; preserve old executable alias and existing challenge commands/listener behavior through reusable app package. Update imports/harness module paths without replacing tested protocol logic.
-- [ ] Define typed application config for listeners, inventory/policy/network scopes, PostgreSQL runtime/migration/native-writer refs, telemetry, CA, backend paths, schedules; validate sensitive combinations and reject Okta/Jamf.
-- [ ] CLI owns construction only; injected services drive commands, later tasks fill real runtime. No pretend-success stubs; unfinished operations return explicit unsupported until their implementation task.
-- [ ] Run root/webhook compatibility tests, existing SCEP tests, formatting/lint; commit task.
+- [x] Add failing CLI/config tests for strict versioned YAML, unknown fields, bounds, secret-file references, debug/meaningful dry-run, flags overriding config, cancellation.
+- [x] Move/reuse existing tested webhook code into root module under internal/webhook; preserve old executable alias and existing challenge commands/listener behavior through reusable app package. Update imports/harness module paths without replacing tested protocol logic.
+- [x] Define typed application config for listeners, inventory/policy/network scopes, PostgreSQL runtime/migration/native-writer refs, telemetry, CA, backend paths, schedules; validate sensitive combinations and reject Okta/Jamf.
+- [x] CLI owns construction only; injected services drive commands, later tasks fill real runtime. No pretend-success stubs; unfinished operations return explicit unsupported until their implementation task.
+- [x] Run root/webhook compatibility tests, existing SCEP tests, formatting/lint; commit task.
 
 ## Task 2: Policy, identity and hardware VLAN encoding
 
@@ -75,6 +75,7 @@ Files: internal/adapters/freeradius, internal/templates/freeradius, internal/eve
 - [ ] Embed static EAP/REST/verified-leaf/source templates and native accounting detail writer/buffered reader/PostgreSQL SQL module. Replay uses plain append INSERT, catchall nullable raw fields, zero startup connections and bounded retries; only replay invokes SQL.
 - [ ] SQL intake preserves original native receipt/source context and replay identity. Failure prevents replay advancement. Native local buffer is not replicated/fsynced; acknowledge/document that boundary honestly.
 - [ ] Embed separate final post-auth logs recording final outcomes with sensitive attrs suppressed before disk. Go reader handles escaped/bounded grammar, incomplete tails, file generation IDs and PostgreSQL cursor/event/outbox atomicity; retain files through outages.
+- [ ] Add a bounded native detail writer ferror/fclose error-check patch under patches/freeradius; build against selected exact distribution/source ABI and prove /dev/full suppresses accounting ACK while ordinary buffering/replay and observational auth logging preserve behavior. No fsync/second spool/REST dependency.
 - [ ] Validate configs with real FreeRADIUS, run actual Start/Interim/Stop/duplicate/database-outage replay and secret-redaction tests; commit.
 
 ## Task 7: OTel telemetry and durable OTLP export
@@ -114,7 +115,7 @@ Files: root *.tf, scripts/startup.sh, .github/workflows, VERSION, examples, READ
 - [ ] Provision cloud8021x DB/least-privilege roles/secrets on existing HA PostgreSQL without changing step-ca DBs. Non-secret YAML + secret references, daemon/DDOT/native replay config. Preserve opt-out/Wi-Fi scope.
 - [ ] Replace 3991-line startup with pinned binary download, mandatory checksum and bootstrap. No generated executable Bash/Python, MySQL/MariaDB, old usage collector or DD read credentials in enabled runtime.
 - [ ] Remove all active Okta/Jamf variables/resources/options/examples/docs. Use explicit reviewed Terraform state-removal migration preserving obsolete rollback secrets, not destructive resource deletion.
-- [ ] Build one binary and compatibility release aliases, pinned checksums/version, root module CI/security/lint and module harness updates; do not publish release in this task.
+- [ ] Build one application binary and compatibility aliases plus the narrowly patched native FreeRADIUS artifact/package from exact verified source/ABI; pin versions/mandatory checksums, detect incompatible replacement, update root CI/security/lint and module harnesses. Keep backend as FreeRADIUS. Do not publish a release in this task.
 - [ ] Keep development Python parity tests only where useful, Windows PowerShell; retire server Python/Bash files and update docs/profile examples for actual new paths and rollback/HA/ack limitations.
 - [ ] Terraform fmt/validate, template/render/checksum/release tests; commit.
 
