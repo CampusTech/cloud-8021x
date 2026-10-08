@@ -46,6 +46,9 @@ func (s *Store) ResumeWriterFence(ctx context.Context, id int64, identity Writer
 	if others {
 		return errors.New("another unresolved root operation blocks writer recovery")
 	}
+	if _, e = tx.Exec(ctx, `INSERT INTO bootstrap_private.maintenance_recoveries(attempt,operation) VALUES($1,$2)`, id, operation); e != nil {
+		return safeError(e)
+	}
 	if _, e = tx.Exec(ctx, `UPDATE bootstrap_private.maintenance SET outcome='started',expires_at=clock_timestamp()+interval '30 seconds' WHERE id=$1`, id); e != nil {
 		return safeError(e)
 	}

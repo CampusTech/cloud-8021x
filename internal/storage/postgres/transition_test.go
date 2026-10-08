@@ -162,7 +162,7 @@ func TestPostgresWriterUpgradePreservesOriginalEvidence(t *testing.T) {
 func TestPostgresResumeWriterFenceIsExactAndKeepsUnknownQuarantined(t *testing.T) {
 	s, c := integration(t)
 	ctx := context.Background()
-	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance"); e != nil {
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	identity := WriterFenceIdentity{Transition: strings.Repeat("5", 64), Node: "radius-primary", ConfigSHA256: strings.Repeat("a", 64)}

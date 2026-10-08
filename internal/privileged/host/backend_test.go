@@ -51,10 +51,18 @@ func TestCompanionRestartNeverLeavesListeningRadiusWithUnavailablePolicy(t *test
 		}
 		return nil, nil
 	}
+	cleanup := false
+	b.AuthCleanup = func(context.Context) error {
+		if active {
+			t.Fatal("cleanup before native producer stopped")
+		}
+		cleanup = true
+		return nil
+	}
 	if e := b.Activate(context.Background()); e != nil {
 		t.Fatal(e)
 	}
-	if !active || !policy {
+	if !active || !policy || !cleanup {
 		t.Fatalf("activation incomplete %v", events)
 	}
 }

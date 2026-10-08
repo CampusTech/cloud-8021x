@@ -21,6 +21,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/inventory"
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
+	"github.com/CampusTech/cloud-8021x/internal/migration"
 )
 
 //go:embed windows_certificates.ps1
@@ -166,6 +167,7 @@ func (c *Collector) boundHost(ctx context.Context, id domain.DeviceID) (host, re
 	}
 	key := sha256.Sum256([]byte(binding))
 	r.Key = hex.EncodeToString(key[:])
+	r.LegacyScope = migration.LegacyCollectionScope(c.Maintainer.base, uint64(h.ID), h.UUID)
 	return h, r, nil
 }
 

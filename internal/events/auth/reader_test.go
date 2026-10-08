@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,4 +196,38 @@ func TestRestorePreservesProducerGenerationAndDoesNotRecount(t *testing.T) {
 	if len(store.payloads) != 2 {
 		t.Fatal("duplicate business events after restored inode")
 	}
+}
+
+func TestReaderCapacityBeyondLegacyLimitRemainsBounded(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_ = os.Chmod(dir, 0750)
+	for i := 0; i < 2048; i++ {
+		name := fmt.Sprintf("auth-0123456789abcdef-%010d.detail", i)
+		if e := os.WriteFile(filepath.Join(dir, name), nil, 0640); e != nil {
+			t.Fatal(e)
+		}
+	}
+	store := &countingCursorStore{memoryStore: memoryStore{cursors: map[string]string{}, payloads: map[string]json.RawMessage{}}}
+	files, level := 0, 0
+	r, e := newReader(Options{Directory: dir, Host: "fixture", ProducerUID: os.Getuid(), EventGID: os.Getgid(), Store: store, Capacity: func(n, l int) { files, level = n, l }}, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = r.Close() }()
+	if _, e = r.Poll(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	if store.calls > 128 || files != 2048 || level != 1 {
+		t.Fatalf("unbounded or hidden capacity calls=%d files=%d level=%d", store.calls, files, level)
+	}
+}
+
+type countingCursorStore struct {
+	memoryStore
+	calls int
+}
+
+func (s *countingCursorStore) Cursor(ctx context.Context, source string) (string, error) {
+	s.calls++
+	return s.memoryStore.Cursor(ctx, source)
 }

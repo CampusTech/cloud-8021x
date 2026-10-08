@@ -30,3 +30,17 @@ func TestInstalledPrivilegeSeparation(t *testing.T) {
 		}
 	}
 }
+
+func TestProtectedSourceTimerRetainsOneMinuteCadence(t *testing.T) {
+	files, e := Render()
+	if e != nil {
+		t.Fatal(e)
+	}
+	timer := string(files["/etc/systemd/system/cloud-8021x-sources.timer"])
+	if !strings.Contains(timer, "OnActiveSec=1min") || !strings.Contains(timer, "OnUnitActiveSec=1min") {
+		t.Fatal("source cadence absent", timer)
+	}
+	if !strings.Contains(string(files["/etc/systemd/system/cloud-8021x-sources.service"]), "sources apply") {
+		t.Fatal("timer bypasses protected command")
+	}
+}

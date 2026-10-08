@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CampusTech/cloud-8021x/internal/config"
+
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
 )
@@ -58,5 +60,28 @@ func TestRootSourceSchedulePersistsBeforeApplyingExactCandidate(t *testing.T) {
 	}
 	if strings.Contains(string(store.payload), "sudo") {
 		t.Fatal("command in candidate")
+	}
+}
+
+func TestSourceMaintenanceIdentityBindsNodeConfigAttempt(t *testing.T) {
+	cfg := config.Config{InstanceID: "radius-primary", StateTransition: strings.Repeat("a", 64)}
+	cfg.Network.Discovery.Firewall.Node = "radius-primary"
+	p := json.RawMessage(`{"node":"radius-primary","candidate":[{"provider_id":"test"}]}`)
+	first, e := sourceMaintenanceIdentity(cfg, "sources:"+strings.Repeat("b", 64), 1, p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	second, e := sourceMaintenanceIdentity(cfg, "sources:"+strings.Repeat("b", 64), 2, p)
+	if e != nil || first == second {
+		t.Fatal("generation not bound", e)
+	}
+	cfg.Debug = true
+	third, e := sourceMaintenanceIdentity(cfg, "sources:"+strings.Repeat("b", 64), 1, p)
+	if e != nil || first == third {
+		t.Fatal("config not bound", e)
+	}
+	cfg.Network.Discovery.Firewall.Node = "radius-secondary"
+	if _, e = sourceMaintenanceIdentity(cfg, "sources:"+strings.Repeat("b", 64), 1, p); e == nil {
+		t.Fatal("peer attempt accepted")
 	}
 }

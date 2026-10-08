@@ -121,7 +121,7 @@ func TestPostgresHistoricalSourceRecoveryRequiresProtectedExactQuarantine(t *tes
 	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance,bootstrap_private.transitions CASCADE"); e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { _, _ = s.pool.Exec(context.Background(), "TRUNCATE bootstrap_private.maintenance") })
+	t.Cleanup(func() { _, _ = s.pool.Exec(context.Background(), "TRUNCATE bootstrap_private.maintenance CASCADE") })
 	transition := strings.Repeat("c", 64)
 	if _, e := s.pool.Exec(ctx, `INSERT INTO bootstrap_private.transitions(id,enabled) VALUES($1,true)`, transition); e != nil {
 		t.Fatal(e)

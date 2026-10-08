@@ -78,6 +78,7 @@ func (t *Trust) verify(der []byte, now time.Time) (string, domain.Timestamp, err
 type reservation struct {
 	ManagedOnly     bool    `json:"managed_only"`
 	Key             string  `json:"collection_key"`
+	LegacyScope     string  `json:"legacy_scope,omitempty"`
 	UUID            string  `json:"command_uuid"`
 	HostID          int     `json:"host_id"`
 	HostUUID        string  `json:"host_uuid"`

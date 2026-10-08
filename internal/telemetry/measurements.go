@@ -23,7 +23,7 @@ type Measurements struct {
 
 func newMeasurements(m metric.Meter, failures *atomic.Uint64) *Measurements {
 	x := &Measurements{gauges: map[string]metric.Float64Gauge{}}
-	for _, n := range []string{"backend.up", "backend.uptime", "spool.files", "spool.bytes", "spool.oldest_age", "spool.free_bytes", "native.write_failures", "native.replay_failures", "inventory.age", "source.age", "ledger.sessions", "ledger.intake", "ledger.quarantine", "outbox.depth", "outbox.oldest_age", "usage.age", "job.age", "claim.errors", "export.errors"} {
+	for _, n := range []string{"backend.up", "backend.uptime", "auth.files", "auth.capacity", "spool.files", "spool.bytes", "spool.oldest_age", "spool.free_bytes", "native.write_failures", "native.replay_failures", "inventory.age", "source.age", "ledger.sessions", "ledger.intake", "ledger.quarantine", "outbox.depth", "outbox.oldest_age", "usage.age", "job.age", "claim.errors", "export.errors"} {
 		x.gauges[n], _ = m.Float64Gauge("cloud8021x." + n)
 	}
 	x.duration, _ = m.Float64Histogram("cloud8021x.operation.duration", metric.WithUnit("s"))

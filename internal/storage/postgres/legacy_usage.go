@@ -40,53 +40,7 @@ func (s *Store) ImportLegacyUsage(ctx context.Context, id string, data []byte, h
 		if enabled || blocked {
 			return errors.New("usage import requires stopped transition")
 		}
-		for _, session := range checkpoint.Tracker.Sessions {
-			seen, err := migration.ReceiptTime([]byte(session.LastSeen))
-			if err != nil {
-				return err
-			}
-			var identity *binding.Attribution
-			if session.Identity != nil {
-				fp, e := domain.NormalizeFingerprint(session.Identity.Fingerprint)
-				if e == nil {
-					identity = &binding.Attribution{DeviceID: domain.DeviceID(session.Identity.DeviceID), Fingerprint: fp}
-					var vlan int
-					var text string
-					if raw := session.Display["vlan_id"]; json.Unmarshal(raw, &text) == nil {
-						vlan, _ = strconv.Atoi(text)
-					} else {
-						_ = json.Unmarshal(raw, &vlan)
-					}
-					if domain.ValidVLAN(vlan) {
-						identity.VLAN = &vlan
-					}
-				}
-			}
-			raw, err := json.Marshal(identity)
-			if err != nil {
-				return err
-			}
-			if _, err = tx.Exec(ctx, `INSERT INTO ledger.sessions(session_key,pending,initialized,duration,upload,download,bits,marked,stopped,last_seen,identity) VALUES($1,false,true,$2,$3,$4,$5,$6,$7,$8,$9)`, accounting.SessionKey(session.Key), u64(session.Duration), u64(session.Upload), u64(session.Download), session.CounterBits, session.FormatMarked, session.Stopped, seen, raw); err != nil {
-				return err
-			}
-		}
-		for _, pending := range checkpoint.Pending {
-			var p struct {
-				ID string `json:"usage_id"`
-			}
-			if json.Unmarshal(pending, &p) != nil {
-				return errors.New("invalid pending usage")
-			}
-			workID := "legacy-usage:" + p.ID
-			if _, err := tx.Exec(ctx, `INSERT INTO ledger.work(id,kind,payload,state,receipt) VALUES($1,'legacy-usage',$2,'quarantine','{"reason":"legacy_delivery_requires_reconciliation"}')`, workID, []byte(pending)); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO ledger.quarantine(work_id,reason,payload) VALUES($1,'legacy_delivery_requires_reconciliation',$2)`, workID, []byte(pending)); err != nil {
-				return err
-			}
-		}
-		_, err := tx.Exec(ctx, `INSERT INTO bootstrap_private.legacy_usage(transition,document,hosts) VALUES($1,$2,$3)`, id, data, hosts)
-		return err
+		return importLegacyUsageTx(ctx, tx, id, data, hosts, checkpoint)
 	})
 }
 
@@ -222,4 +176,54 @@ func decodeSessionKey(input string) ([4]string, error) {
 		return parts, errors.New("invalid ledger session key")
 	}
 	return parts, nil
+}
+
+func importLegacyUsageTx(ctx context.Context, tx pgx.Tx, id string, data []byte, hosts []string, checkpoint migration.UsageCheckpoint) error {
+	for _, session := range checkpoint.Tracker.Sessions {
+		seen, err := migration.ReceiptTime([]byte(session.LastSeen))
+		if err != nil {
+			return err
+		}
+		var identity *binding.Attribution
+		if session.Identity != nil {
+			fp, e := domain.NormalizeFingerprint(session.Identity.Fingerprint)
+			if e == nil {
+				identity = &binding.Attribution{DeviceID: domain.DeviceID(session.Identity.DeviceID), Fingerprint: fp}
+				var vlan int
+				var text string
+				if raw := session.Display["vlan_id"]; json.Unmarshal(raw, &text) == nil {
+					vlan, _ = strconv.Atoi(text)
+				} else {
+					_ = json.Unmarshal(raw, &vlan)
+				}
+				if domain.ValidVLAN(vlan) {
+					identity.VLAN = &vlan
+				}
+			}
+		}
+		raw, err := json.Marshal(identity)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO ledger.sessions(session_key,pending,initialized,duration,upload,download,bits,marked,stopped,last_seen,identity) VALUES($1,false,true,$2,$3,$4,$5,$6,$7,$8,$9)`, accounting.SessionKey(session.Key), u64(session.Duration), u64(session.Upload), u64(session.Download), session.CounterBits, session.FormatMarked, session.Stopped, seen, raw); err != nil {
+			return err
+		}
+	}
+	for _, pending := range checkpoint.Pending {
+		var p struct {
+			ID string `json:"usage_id"`
+		}
+		if json.Unmarshal(pending, &p) != nil {
+			return errors.New("invalid pending usage")
+		}
+		workID := "legacy-usage:" + p.ID
+		if _, err := tx.Exec(ctx, `INSERT INTO ledger.work(id,kind,payload,state,receipt) VALUES($1,'legacy-usage',$2,'quarantine','{"reason":"legacy_delivery_requires_reconciliation"}')`, workID, []byte(pending)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO ledger.quarantine(work_id,reason,payload) VALUES($1,'legacy_delivery_requires_reconciliation',$2)`, workID, []byte(pending)); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO bootstrap_private.legacy_usage(transition,document,hosts) VALUES($1,$2,$3)`, id, data, hosts)
+	return err
 }

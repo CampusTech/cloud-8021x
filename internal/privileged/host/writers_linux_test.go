@@ -305,3 +305,35 @@ func TestInstalledLegacyWriterInterruptedRecovery(t *testing.T) {
 		t.Fatal("original recovery evidence altered", e)
 	}
 }
+
+func TestInstalledLegacyWriterRecoversExactStaleMaskTemporary(t *testing.T) {
+	if os.Getenv("C8021X_WRITER_FIXTURE") != "task9" {
+		t.Skip("owned fixture")
+	}
+	path := "/etc/systemd/system/cloud-8021x-sources.service"
+	if e := os.WriteFile(path, []byte("[Service]\nExecStart=/usr/local/bin/cloud-8021x sources apply\n"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	temporary := filepath.Join(filepath.Dir(path), ".cloud8021x-mask-"+filepath.Base(path))
+	if e := os.Symlink("/dev/null", temporary); e != nil {
+		t.Fatal(e)
+	}
+	if e := maskWriterUnit(path); e != nil {
+		t.Fatal("exact interrupted mask could not resume", e)
+	}
+	if target, e := os.Readlink(path); e != nil || target != "/dev/null" {
+		t.Fatal(target, e)
+	}
+	if e := os.Remove(path); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(path, []byte("original"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink("/etc/passwd", temporary); e != nil {
+		t.Fatal(e)
+	}
+	if e := maskWriterUnit(path); e == nil {
+		t.Fatal("foreign temporary accepted")
+	}
+}

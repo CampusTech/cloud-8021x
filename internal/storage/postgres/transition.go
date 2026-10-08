@@ -32,7 +32,7 @@ func createTransitions(ctx context.Context, tx pgx.Tx, r Roles) error {
 			return err
 		}
 	}
-	return nil
+	return createLegacyBundle(ctx, tx, r)
 }
 
 // RecordWriterFence accepts only a live root maintenance transaction. Receipt

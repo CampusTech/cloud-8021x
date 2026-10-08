@@ -55,9 +55,11 @@ type Options struct {
 	// Enrich reads immutable local inventory/metadata and verified Class only.
 	Enrich              func(*Event, Record)
 	MaxFiles, MaxEvents int
+	Capacity            func(files, level int)
 }
 type Reader struct {
 	mu        sync.Mutex
+	next      string
 	directory *os.File
 	options   Options
 }
@@ -70,7 +72,7 @@ func newReader(o Options, strict bool) (*Reader, error) {
 		return nil, errors.New("invalid auth reader configuration")
 	}
 	if o.MaxFiles == 0 {
-		o.MaxFiles = 1024
+		o.MaxFiles = 4096
 	}
 	if o.MaxEvents == 0 {
 		o.MaxEvents = 256
@@ -123,12 +125,31 @@ func (r *Reader) Poll(ctx context.Context) (int, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
+	if r.options.Capacity != nil {
+		level := 0
+		if len(names) >= 2048 {
+			level = 1
+		}
+		if len(names) >= 3584 {
+			level = 2
+		}
+		if len(names) > r.options.MaxFiles {
+			level = 3
+		}
+		r.options.Capacity(len(names), level)
+	}
 	if len(names) > r.options.MaxFiles {
 		return 0, errors.New("auth directory file limit exceeded")
 	}
 	sort.Strings(names)
 	total := 0
-	for _, name := range names {
+	start := sort.SearchStrings(names, r.next)
+	if start >= len(names) {
+		start = 0
+	}
+	for i := 0; i < len(names) && i < 128; i++ {
+		name := names[(start+i)%len(names)]
+		r.next = name + "\x00"
 		if !filename.MatchString(name) {
 			continue
 		}

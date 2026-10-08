@@ -120,8 +120,18 @@ ExecStart=/usr/local/bin/cloud-8021x --config /etc/cloud-8021x/config.yaml ` + c
 UMask=0077
 TimeoutStartSec=5min
 `)
-		// Source scheduling is coordinated by Task9; the timer is installed disabled
-		// until the durable claim binds candidate-sha256. No unclaimed apply timer.
+		// The fixed root command claims exact persisted work before privileged I/O.
+		if name == "sources" {
+			files["/etc/systemd/system/cloud-8021x-sources.timer"] = []byte(`[Unit]
+Description=Apply verified discovered RADIUS sources
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=1min
+AccuracySec=1s
+[Install]
+WantedBy=timers.target
+`)
+		}
 		if name == "renew" {
 			files["/etc/systemd/system/cloud-8021x-renew.timer"] = []byte(`[Unit]
 Description=Check server certificate renewal

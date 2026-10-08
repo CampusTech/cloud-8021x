@@ -12,6 +12,7 @@ import (
 )
 
 type RadiusBackend struct {
+	AuthCleanup       func(context.Context) error
 	releaseBarrier    func(context.Context) error
 	CollectorAccounts *Accounts
 	collectorStart    func(context.Context) error
@@ -105,6 +106,11 @@ func (b *RadiusBackend) Activate(ctx context.Context) error {
 			still, e := b.Running(ctx)
 			if e != nil || still {
 				return errors.New("native listener did not stop before policy replacement")
+			}
+		}
+		if b.AuthCleanup != nil {
+			if e = b.AuthCleanup(ctx); e != nil {
+				return e
 			}
 		}
 		if _, e = b.command(ctx, "/usr/bin/systemctl", "daemon-reload"); e != nil {
@@ -302,4 +308,15 @@ func (b *RadiusBackend) stopCompanions(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// StartSourceTimer runs only AFTER the installation maintenance gate completes,
+// so a timer cannot reserve an attempt that immediately collides with bootstrap.
+func StartSourceTimer(ctx context.Context, enabled bool) error {
+	action := "enable"
+	if !enabled {
+		action = "disable"
+	}
+	_, e := execute(ctx, "/usr/bin/systemctl", action, "--now", "cloud-8021x-sources.timer")
+	return e
 }

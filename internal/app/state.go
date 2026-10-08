@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/CampusTech/cloud-8021x/internal/adapters/fleet"
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/privileged/host"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
@@ -106,7 +107,14 @@ func protectedStateFence(ctx context.Context, cfg config.Config, o RunOptions) e
 	identity := postgres.WriterFenceIdentity{Transition: cfg.StateTransition, Node: node, ConfigSHA256: hash}
 	if o.MaintenanceAttempt > 0 {
 		return repository.ResumeWriterFence(ctx, o.MaintenanceAttempt, identity, func(ctx context.Context) (string, error) {
-			return host.RecoverLegacyWriterFence(ctx, cfg.StateTransition, node, hash)
+			receipt, e := host.RecoverLegacyWriterFence(ctx, cfg.StateTransition, node, hash)
+			if e != nil {
+				return "", e
+			}
+			if _, e = host.CaptureLegacyState(cfg.StateTransition, node, values[cfg.Policy.ClassSigningKey.File]); e != nil {
+				return "", e
+			}
+			return receipt, nil
 		})
 	}
 	operation, e := identity.Operation()
@@ -156,7 +164,14 @@ func preparedWriterFence(ctx context.Context, cfg config.Config, values map[stri
 		return "", e
 	}
 	if !known {
-		return host.FenceLegacyWriters(ctx, cfg.StateTransition, node, next)
+		receipt, e := host.FenceLegacyWriters(ctx, cfg.StateTransition, node, next)
+		if e != nil {
+			return "", e
+		}
+		if _, e = host.CaptureLegacyState(cfg.StateTransition, node, values[cfg.Policy.ClassSigningKey.File]); e != nil {
+			return "", e
+		}
+		return receipt, nil
 	}
 	old, e := readProtectedSourceConfig()
 	if e != nil {
@@ -210,4 +225,63 @@ func currentWriterLayout() ([]host.File, error) {
 		return nil, e
 	}
 	return bootCredentialLayout(old, accounts), nil
+}
+
+// The protected selector and committed credential cache supply the endpoint and
+// scoped Fleet credential for read-only result recovery. The caller supplies only the original guard ID.
+func protectedLegacyRecovery(ctx context.Context, cfg config.Config, o RunOptions) error {
+	cfg, e := protectedConfiguration(cfg, o)
+	if e != nil {
+		return e
+	}
+	if e = cfg.Validate(); e != nil {
+		return e
+	}
+	if len(o.LegacyGuardID) != 64 {
+		return errors.New("exact legacy guard digest required")
+	}
+	if _, e = hex.DecodeString(o.LegacyGuardID); e != nil {
+		return e
+	}
+	if !cfg.Inventory.Enabled || cfg.Inventory.Provider != "fleet" {
+		return errors.New("configured Fleet inventory required")
+	}
+	if o.DryRun {
+		if o.Output == nil {
+			return nil
+		}
+		return json.NewEncoder(o.Output).Encode(map[string]any{"dry_run": true, "operation": "state recover-collection", "guard": o.LegacyGuardID})
+	}
+	accounts, e := host.ReadAccounts()
+	if e != nil {
+		return e
+	}
+	values, e := host.CommittedCredentials(bootCredentialLayout(cfg, accounts))
+	if e != nil {
+		return e
+	}
+	repository, e := postgres.NewMigration(ctx, string(values[cfg.Database.MigrationDSN.File]), cfg.Database)
+	if e != nil {
+		return e
+	}
+	defer repository.Close()
+	client, e := fleet.NewClient(cfg.Inventory.Fleet.BaseURL, string(bytes.TrimSpace(values[cfg.Inventory.Fleet.MaintainerToken.File])), nil, cfg.Inventory.Fleet.Timeout)
+	if e != nil {
+		return e
+	}
+	gate := postgres.MaintenanceGate{Store: repository}
+	return gate.With(ctx, "legacy-collection:"+o.LegacyGuardID, func(ctx context.Context) error {
+		guard, e := repository.LegacyCollectionGuard(ctx, o.LegacyGuardID)
+		if e != nil {
+			return e
+		}
+		if guard.State == "resolved" {
+			return nil
+		}
+		proof, e := client.RecoverLegacyCommand(ctx, guard.Source, guard.HostUUID, guard.Host, guard.Command, o.LegacyExecutionID)
+		if e != nil {
+			return e
+		}
+		return repository.ResolveLegacyCollection(ctx, o.LegacyGuardID, proof)
+	})
 }

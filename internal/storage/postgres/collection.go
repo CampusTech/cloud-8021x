@@ -16,7 +16,8 @@ var _ inventory.CollectionRepository = (*Store)(nil)
 // database clock enforces cadence even if callers disagree about the current hour.
 func (s *Store) ReserveCollection(ctx context.Context, id, kind, key string, payload json.RawMessage, cadence time.Duration, maxPending int) (bool, error) {
 	var binding struct {
-		Key string `json:"collection_key"`
+		Key         string `json:"collection_key"`
+		LegacyScope string `json:"legacy_scope"`
 	}
 	if id == "" || len(id) > 512 || kind == "" || len(kind) > 64 || key == "" || len(key) > 128 || cadence < time.Hour || cadence > 30*24*time.Hour || maxPending < 1 || maxPending > 2 || len(payload) > 1<<20 || json.Unmarshal(payload, &binding) != nil || binding.Key != key {
 		return false, errors.New("invalid collection reservation")
@@ -30,6 +31,18 @@ func (s *Store) ReserveCollection(ctx context.Context, id, kind, key string, pay
 	defer rollback(tx)
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,80214))", key); err != nil {
 		return false, safeError(err)
+	}
+	if binding.LegacyScope != "" {
+		if !transitionDigest.MatchString(binding.LegacyScope) {
+			return false, errors.New("invalid legacy collection scope")
+		}
+		var guarded bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ledger.legacy_collection_guards WHERE scope=$1 AND state='quarantine')`, binding.LegacyScope).Scan(&guarded); err != nil {
+			return false, safeError(err)
+		}
+		if guarded {
+			return false, nil
+		}
 	}
 	var pending int
 	var recent bool

@@ -218,3 +218,14 @@ func TestUnifiedChallengeHelpDoesNotOfferLegacyEnvironmentFallback(t *testing.T)
 		t.Fatal("lost legacy environment help")
 	}
 }
+
+func TestLegacyRecoveryCommandRetainsExactIdentity(t *testing.T) {
+	r := new(recorder)
+	_, err := execute(t, context.Background(), r, "--dry-run", "state", "recover-collection", "--guard", strings.Repeat("a", 64), "--execution-id", "original-script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.operation != OperationStateRecoverCollection || r.options.LegacyGuardID != strings.Repeat("a", 64) || r.options.LegacyExecutionID != "original-script" {
+		t.Fatalf("lost recovery identity: %+v", r)
+	}
+}

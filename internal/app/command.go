@@ -16,19 +16,20 @@ import (
 type Operation string
 
 const (
-	OperationServe              Operation = "serve"
-	OperationBootstrap          Operation = "bootstrap"
-	OperationRefreshCredentials Operation = "bootstrap credentials"
-	OperationInventorySync      Operation = "inventory sync"
-	OperationSitesSync          Operation = "sites sync"
-	OperationMetricsEmit        Operation = "metrics emit"
-	OperationCertificatesRenew  Operation = "certificates renew"
-	OperationRadiusVerifyLeaf   Operation = "radius verify-leaf"
-	OperationSourcesApply       Operation = "sources apply"
-	OperationStateFence         Operation = "state fence"
-	OperationStateMigrate       Operation = "state migrate"
-	OperationStateExport        Operation = "state export"
-	OperationDoctor             Operation = "doctor"
+	OperationServe                  Operation = "serve"
+	OperationBootstrap              Operation = "bootstrap"
+	OperationRefreshCredentials     Operation = "bootstrap credentials"
+	OperationInventorySync          Operation = "inventory sync"
+	OperationSitesSync              Operation = "sites sync"
+	OperationMetricsEmit            Operation = "metrics emit"
+	OperationCertificatesRenew      Operation = "certificates renew"
+	OperationRadiusVerifyLeaf       Operation = "radius verify-leaf"
+	OperationSourcesApply           Operation = "sources apply"
+	OperationStateRecoverCollection Operation = "state recover-collection"
+	OperationStateFence             Operation = "state fence"
+	OperationStateMigrate           Operation = "state migrate"
+	OperationStateExport            Operation = "state export"
+	OperationDoctor                 Operation = "doctor"
 )
 
 // ErrUnsupported is returned until the operation has a real injected service.
@@ -36,7 +37,11 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
+	LegacyGuardID         string
+	LegacyExecutionID     string
 	MaintenanceAttempt    int64
+	SourceWorkID          string
+	SourceGeneration      int64
 	Version               string
 	Incoming              bool
 	FenceOnly             bool
@@ -69,6 +74,8 @@ func NewCommand(options Options) *cobra.Command {
 	var debug, dryRun, incoming, fenceOnly bool
 	var policyAddress string
 	var maintenanceAttempt int64
+	var sourceWorkID string
+	var sourceGeneration int64
 	logger := options.Logger
 	if logger == nil {
 		logger = logrus.New()
@@ -123,6 +130,7 @@ func NewCommand(options Options) *cobra.Command {
 	operation := func(name string, op Operation) *cobra.Command {
 		var leaf VerifiedLeafOptions
 		var sourceDigest string
+		var legacyGuardID, legacyExecutionID string
 		cmd := &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := load(cmd)
 			if err != nil {
@@ -132,17 +140,27 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
 			}
 			return options.Services.Run(cmd.Context(), op, cfg, run)
 		}}
+		if op == OperationStateRecoverCollection {
+			cmd.Flags().StringVar(&legacyGuardID, "guard", "", "Exact imported legacy pending guard digest")
+			cmd.Flags().StringVar(&legacyExecutionID, "execution-id", "", "Original Windows execution identity hint, verified against retained nonce and script")
+		}
+		if op == OperationStateMigrate {
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Continue exact original committed bundle publication after helper exit proof")
+		}
 		if op == OperationStateFence {
 			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume this exact expired writer fence attempt after protected quiescence proof")
 		}
 		if op == OperationSourcesApply {
+			cmd.Flags().StringVar(&sourceWorkID, "reconcile-work", "", "Reconcile only this quarantined historical source work ID")
+			cmd.Flags().Int64Var(&sourceGeneration, "generation", 0, "Exact quarantined source generation")
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Exact prior source maintenance attempt to prove read-only")
 			cmd.Flags().StringVar(&sourceDigest, "candidate-sha256", "", "Require this canonical claimed candidate digest before privileged I/O")
 		}
 		if op == OperationRadiusVerifyLeaf {
@@ -202,7 +220,7 @@ func NewCommand(options Options) *cobra.Command {
 		{"state", []struct {
 			name string
 			op   Operation
-		}{{"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
+		}{{"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
 	} {
 		parent := &cobra.Command{Use: group.name}
 		for _, a := range group.actions {

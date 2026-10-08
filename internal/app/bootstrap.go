@@ -201,7 +201,14 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return e
 		}
 		return repository.ResumeWriterFence(ctx, o.MaintenanceAttempt, postgres.WriterFenceIdentity{Transition: cfg.StateTransition, Node: node, ConfigSHA256: hash}, func(ctx context.Context) (string, error) {
-			return host.RecoverLegacyWriterFence(ctx, cfg.StateTransition, node, hash)
+			receipt, e := host.RecoverLegacyWriterFence(ctx, cfg.StateTransition, node, hash)
+			if e != nil {
+				return "", e
+			}
+			if _, e = host.CaptureLegacyState(cfg.StateTransition, node, credentials[cfg.Policy.ClassSigningKey.File]); e != nil {
+				return "", e
+			}
+			return receipt, nil
 		})
 	}
 	if e = bootstrapTransition(ctx, cfg, o, repository, gate.With, func(ctx context.Context, _, _, _ string) (string, error) {
@@ -223,12 +230,15 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 	if renew {
 		operation = "certificates renew"
 	}
-	return withBootstrapReport(ctx, gate.With, operation, o.Output, func(ctx context.Context, outcome *bootstrapOutcome) (result error) {
+	e = withBootstrapReport(ctx, gate.With, operation, o.Output, func(ctx context.Context, outcome *bootstrapOutcome) (result error) {
 		writerLayout, e := currentWriterLayout()
 		if e != nil {
 			return e
 		}
 		if _, e = host.RevalidateLegacyWriterFence(ctx, cfg.StateTransition, cfg.InstanceID, writerLayout); e != nil {
+			return e
+		}
+		if _, e = host.ReadCapturedLegacyState(cfg.StateTransition, cfg.InstanceID, credentials[cfg.Policy.ClassSigningKey.File]); e != nil {
 			return e
 		}
 		ecSigner, e := cloud.Signer(ctx, cfg.Bootstrap.ECKMS)
@@ -301,6 +311,8 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return e
 		}
 		var previous *host.RadiusBackend
+		var priorAuth *host.AuthGeneration
+		var rollbackAuth string
 		if known {
 			oldConfig, err := readFixedProtectedConfig(privilegedConfigFile)
 			if err != nil {
@@ -332,6 +344,19 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			previous = &host.RadiusBackend{Local: oldConfig.Bootstrap.LocalAddress, Peer: oldConfig.Bootstrap.PeerAddress, Secret: bytes.TrimSpace(oldSecret), Expected: oldExpected, Companions: true, ECDNS: oldConfig.Bootstrap.ECDNS, RSADNS: oldConfig.Bootstrap.RSADNS, CATrust: oldTrust}
 		} else if e = host.CheckInitialListeners(cfg); e != nil {
 			return e
+		}
+		if known {
+			rollbackAuth, e = host.CurrentAuthGeneration()
+			if e != nil {
+				return e
+			}
+			priorAuth, e = host.CaptureAuthGeneration(ctx, backend)
+			if e != nil {
+				priorAuth = nil
+				if o.Logger != nil {
+					o.Logger.WithError(e).Warn("auth generation unproven; retaining original files")
+				}
+			}
 		}
 		var transaction *host.Transaction
 		begin := func() error {
@@ -467,7 +492,15 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if _, e = rand.Read(generation[:]); e != nil {
 			return e
 		}
-		tree, e := native.RenderWithSecrets(cfg, hex.EncodeToString(generation[:]), credentials)
+		authGeneration := hex.EncodeToString(generation[:])
+		backend.AuthCleanup = func(ctx context.Context) error {
+			_, cleanupErr := host.PruneClosedAuthGenerations(ctx, backend, cfg.Hostname, authGeneration, rollbackAuth, accounts, repository)
+			if cleanupErr != nil && o.Logger != nil {
+				o.Logger.WithError(cleanupErr).Warn("auth cleanup retained uncertain files")
+			}
+			return nil
+		}
+		tree, e := native.RenderWithSecrets(cfg, authGeneration, credentials)
 		if e != nil {
 			return e
 		}
@@ -496,9 +529,16 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if e = transaction.CompleteInstalled(); e != nil {
 			return e
 		}
+		if e = host.CompleteAuthGeneration(ctx, backend, transaction.Reference(), authGeneration, priorAuth); e != nil {
+			return e
+		}
 		outcome.Changed, outcome.Installation = true, transaction.Reference()
 		return nil
 	})
+	if e != nil {
+		return e
+	}
+	return gate.With(ctx, "activate-source-timer", func(ctx context.Context) error { return host.StartSourceTimer(ctx, cfg.Network.Discovery.Enabled) })
 }
 func refreshRootCredentials(ctx context.Context, cfg config.Config, o RunOptions) error {
 	cfg, e := protectedConfiguration(cfg, o)

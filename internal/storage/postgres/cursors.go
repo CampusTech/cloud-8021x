@@ -105,3 +105,34 @@ func (s *Store) ImportOnce(ctx context.Context, id, checksum string, apply func(
 	}
 	return true, nil
 }
+
+// AuthCursors bounds a quiescent root retention pass to one database query.
+func (s *Store) AuthCursors(ctx context.Context, sources []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(sources) > 4096 {
+		return nil, errors.New("auth cursor batch exceeds bound")
+	}
+	if len(sources) == 0 {
+		return out, nil
+	}
+	for _, source := range sources {
+		if source == "" || len(source) > 512 {
+			return nil, errors.New("invalid auth cursor source")
+		}
+	}
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	rows, e := s.pool.Query(ctx, `SELECT source,cursor FROM ledger.auth_cursors WHERE source=ANY($1)`, sources)
+	if e != nil {
+		return nil, safeError(e)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source, cursor string
+		if e = rows.Scan(&source, &cursor); e != nil {
+			return nil, safeError(e)
+		}
+		out[source] = cursor
+	}
+	return out, safeError(rows.Err())
+}

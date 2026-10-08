@@ -31,7 +31,7 @@ func TestMaintenanceUncertainBlocksLaterNodes(t *testing.T) {
 func TestMaintenancePrivateStateAndLostFence(t *testing.T) {
 	s, c := integration(t)
 	ctx := context.Background()
-	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance"); e != nil {
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	runtime := runtimeStore(t, s, c)
@@ -88,7 +88,7 @@ func TestMaintenanceNestedScopeAndCAJournal(t *testing.T) {
 	if e := s.Migrate(ctx, Roles{Runtime: "app_runtime", Native: "app_native"}); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance, bootstrap_private.ca_publication"); e != nil {
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance, bootstrap_private.ca_publication CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	gate := MaintenanceGate{Store: s, Lease: time.Second}
@@ -137,7 +137,7 @@ func TestMaintenanceNestedScopeAndCAJournal(t *testing.T) {
 func TestInstallationJournalContainsOnlyReferenceAndRejectsSecretBytes(t *testing.T) {
 	s, c := integration(t)
 	ctx := context.Background()
-	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance"); e != nil {
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	const sentinel = "PRIVATE_KEY_RADIUS_SQL_FLEET_SENTINEL"

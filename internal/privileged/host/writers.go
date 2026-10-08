@@ -285,6 +285,18 @@ func maskWriterUnit(path string) error {
 	// Snapshot and protected parent prevent attacker-selected targets. Rename the
 	// fixed /dev/null symlink atomically over the original root regular unit.
 	temp := ".cloud8021x-mask-" + name
+	var temporary unix.Stat_t
+	if e = unix.Fstatat(dir, temp, &temporary, unix.AT_SYMLINK_NOFOLLOW); e == nil {
+		target, e := os.Readlink(filepath.Join(filepath.Dir(path), temp))
+		if e != nil || target != "/dev/null" || temporary.Mode&unix.S_IFMT != unix.S_IFLNK || temporary.Uid != 0 || temporary.Gid != 0 {
+			return errors.New("unknown interrupted mask temporary")
+		}
+		if e = unix.Unlinkat(dir, temp, 0); e != nil {
+			return e
+		}
+	} else if !errors.Is(e, unix.ENOENT) {
+		return e
+	}
 	if e = unix.Symlinkat("/dev/null", dir, temp); e != nil {
 		return e
 	}

@@ -34,10 +34,11 @@ type ApplyJob struct {
 	Coordinator SourceCoordinator
 	Owner, Node string
 	Apply       func(context.Context, json.RawMessage) error
+	ApplyClaim  func(context.Context, jobs.Claim, json.RawMessage) error
 }
 
 func (j ApplyJob) Run(ctx context.Context, candidate []byte) error {
-	if j.Coordinator == nil || j.Apply == nil || j.Owner == "" || (j.Node != "radius-primary" && j.Node != "radius-secondary") || len(candidate) > 1<<19 {
+	if j.Coordinator == nil || (j.Apply == nil && j.ApplyClaim == nil) || j.Owner == "" || (j.Node != "radius-primary" && j.Node != "radius-secondary") || len(candidate) > 1<<19 {
 		return errors.New("source apply coordination unavailable")
 	}
 	var proposed []domain.SourceCandidate
@@ -70,7 +71,11 @@ func (j ApplyJob) Run(ctx context.Context, candidate []byte) error {
 	}
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	e = j.Apply(bounded, append(json.RawMessage(nil), work.Candidate...))
+	if j.ApplyClaim != nil {
+		e = j.ApplyClaim(bounded, *claim, append(json.RawMessage(nil), work.Candidate...))
+	} else {
+		e = j.Apply(bounded, append(json.RawMessage(nil), work.Candidate...))
+	}
 	outcome := jobs.Succeeded
 	if e != nil {
 		outcome = jobs.Uncertain

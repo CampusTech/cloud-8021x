@@ -213,7 +213,10 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	if e != nil {
 		return fail(e)
 	}
-	reader, e := auth.New(auth.Options{Directory: cfg.Paths.AuthLogDir, Host: cfg.Hostname, ProducerUID: producerUID, EventGID: eventGID, Store: authStore, Enrich: auth.Enricher(cfg, key, local.Snapshots(), metadata)})
+	reader, e := auth.New(auth.Options{Directory: cfg.Paths.AuthLogDir, Host: cfg.Hostname, ProducerUID: producerUID, EventGID: eventGID, Store: authStore, Capacity: func(n, level int) {
+		sdk.Metrics.Observe(ctx, "auth.files", float64(n))
+		sdk.Metrics.Observe(ctx, "auth.capacity", float64(level))
+	}, Enrich: auth.Enricher(cfg, key, local.Snapshots(), metadata)})
 	if e != nil {
 		return fail(e)
 	}
