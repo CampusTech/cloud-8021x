@@ -1,0 +1,139 @@
+# Non-secret configuration. Bootstrap provisions protected credential files;
+# the daemon cannot read CA keys or the migration/native-writer credentials.
+# Durations use Go duration syntax (for example 1h, 15m, 120s).
+schema_version: 1
+debug: false
+instance_id: radius-example
+environment: development
+hostname: radius-example
+
+listeners:
+  policy:
+    address: 127.0.0.1:9080
+    token: {file: /run/cloud-8021x/policy-token}
+    max_concurrency: 64
+    max_body_bytes: 16384
+    timeout: 2s
+  webhook:
+    enabled: true
+    address: 127.0.0.1:9444
+    cert_file: /etc/acme-authz-webhook/server.crt
+    key_file: {file: /etc/acme-authz-webhook/server.key}
+    client_ca_files: [/etc/acme-authz-webhook/client-cas.pem]
+    client_dns_names: [step-ca.internal]
+  broker:
+    enabled: false
+  health_address: 127.0.0.1:9082
+  metrics_address: 127.0.0.1:9083
+
+inventory:
+  enabled: true
+  provider: fleet
+  fleet:
+    base_url: https://fleet.example.edu
+    observer_token: {file: /run/cloud-8021x/fleet-observer-token}
+    maintainer_token: {file: /run/cloud-8021x/fleet-maintainer-token}
+    managed_certificates: true
+    timeout: 5s
+    poll_interval: 1h
+    max_pending_age: 24h
+    cache_file: /var/cache/cloud-8021x/fleet.json
+    challenge_signing_key: {file: /run/cloud-8021x/scep-challenge-key}
+    scep_provisioner: wifi-scep
+    acme_profile_uuids: []
+    # null/omitted: collect all eligible non-exempt hosts; []: queue no hosts.
+    scep_profile_uuids: null
+
+policy:
+  identity_mode: fingerprint
+  inventory_max_age: 1h
+  certificate_max_age: 24h
+  handoff_max_age: 120s
+  class_max_age: 720h
+  class_signing_key: {file: /run/cloud-8021x/accounting-class-key}
+  attested_acme:
+    enabled: false
+  rules:
+    - {group_id: 'fleet:1', location_id: nyc, vlan: 20}
+
+network:
+  providers:
+    - id: campus-unifi
+      kind: unifi
+      base_url: https://unifi.example.edu
+      credential: {file: /run/cloud-8021x/unifi-token}
+      scopes: [nyc-site]
+      timeout: 5s
+    - id: campus-meraki
+      kind: meraki
+      base_url: https://api.meraki.com
+      credential: {file: /run/cloud-8021x/meraki-token}
+      scopes: [campus-organization]
+      timeout: 5s
+  locations:
+    - {id: nyc, provider_id: campus-unifi, site_id: nyc-site, vlan_enabled: true}
+    - {id: sacramento, provider_id: campus-meraki, site_id: sacramento-network, vlan_enabled: false}
+  discovery:
+    enabled: false
+    max_age: 15m
+    candidate_file: /var/lib/cloud-8021x/sources-candidate.json
+
+# Authenticated configured clients supply the trusted location. NAS packet
+# attributes and controller display metadata do not select this mapping.
+radius_clients:
+  - id: nyc-wifi
+    location_id: nyc
+    cidrs: [192.0.2.10/32]
+    secret: {file: /run/cloud-8021x/radius-nyc-secret}
+    medium: wifi
+    signaling_profile: unifi-numeric
+  - id: sacramento-wifi
+    location_id: sacramento
+    cidrs: [192.0.2.11/32]
+    secret: {file: /run/cloud-8021x/radius-sacramento-secret}
+    medium: wifi
+
+database:
+  runtime_dsn: {file: /run/cloud-8021x/postgres-runtime-dsn}
+  migration_dsn: {file: /etc/cloud-8021x/postgres-migration-dsn}
+  native_writer_dsn: {file: /etc/freeradius/3.0/postgres-native-dsn}
+  ca_file: /etc/cloud-8021x/postgres-ca.pem
+  tls_mode: verify-full
+  min_connections: 0
+  max_connections: 8
+  connect_timeout: 5s
+  query_timeout: 5s
+
+telemetry:
+  enabled: false
+  endpoint: http://127.0.0.1:4318
+  transport: http
+  logs: true
+  metrics: true
+  traces: true
+  trace_sample_ratio: 0.1
+  queue_size: 1024
+  timeout: 5s
+  shutdown_timeout: 10s
+
+ca:
+  provider: step-ca
+  url: https://ca.example.edu
+  root_files: [/etc/step-ca/certs/root_ca.crt]
+  intermediate_files: [/etc/step-ca/certs/intermediate_ca.crt]
+  config_file: /etc/step-ca/config/ca.json
+  server_cert_file: /etc/freeradius/certs/server.pem
+  server_key_file: {file: /etc/freeradius/certs/server.key}
+  readiness_file: /var/lib/step-ca/ready
+
+paths:
+  handoff_dir: /run/radius-certificate-bindings
+
+schedules:
+  inventory: 5m
+  certificates: 1h
+  sites: 5m
+  sources: 1m
+  metrics: 1m
+  accounting_workers: 2
+  export_workers: 1

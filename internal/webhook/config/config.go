@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/broker"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/broker"
 )
 
 type Config struct {

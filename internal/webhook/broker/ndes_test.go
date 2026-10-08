@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
 )
 
 // This is the expression in stock Fleet ee/server/service/scep/scep_proxy.go.

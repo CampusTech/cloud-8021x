@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/broker"
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
-	"github.com/CampusTech/cloud-8021x/webhook/internal/server"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/broker"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/server"
 	"github.com/smallstep/scep"
 	"github.com/smallstep/scep/x509util"
 )

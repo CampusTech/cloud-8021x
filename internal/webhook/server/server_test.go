@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/authorize"
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
-	"github.com/CampusTech/cloud-8021x/webhook/internal/fleet"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/authorize"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/fleet"
 )
 
 func sigOf(secret, body string) string {

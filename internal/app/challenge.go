@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -6,14 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
 // challengeCmd is an administrator/MDM-side issuer. It deliberately exposes no
 // unauthenticated HTTP minting endpoint and never accepts a signing key in argv.
-func challengeCmd() *cobra.Command {
+func challengeCmd() *cobra.Command { return challengeCommand(false) }
+
+func challengeCommand(inheritFlags bool) *cobra.Command {
 	var identity, provisioner, output, keyFile string
 	var ttl time.Duration
 	var dryRun, debug bool
@@ -22,7 +24,17 @@ func challengeCmd() *cobra.Command {
 		Short: "Issue a device-bound SCEP challenge for trusted per-device MDM delivery",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			key := []byte(os.Getenv("SCEP_CHALLENGE_SIGNING_KEY"))
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
+			if inheritFlags {
+				dryRun, _ = cmd.Flags().GetBool("dry-run")
+				debug, _ = cmd.Flags().GetBool("debug")
+			}
+			var key []byte
+			if !inheritFlags {
+				key = []byte(os.Getenv("SCEP_CHALLENGE_SIGNING_KEY"))
+			}
 			if keyFile != "" {
 				data, err := os.ReadFile(keyFile)
 				if err != nil {
@@ -64,7 +76,9 @@ func challengeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&output, "out", "", "New private output file (never overwrites)")
 	cmd.Flags().StringVar(&keyFile, "signing-key-file", "", "Server-only signing key file; otherwise SCEP_CHALLENGE_SIGNING_KEY")
 	cmd.Flags().DurationVar(&ttl, "ttl", 15*time.Minute, "Enrollment validity, maximum 24h; renewal needs a fresh challenge")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without writing a challenge")
-	cmd.Flags().BoolVar(&debug, "debug", false, "Log non-secret issuance metadata")
+	if !inheritFlags {
+		cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without writing a challenge")
+		cmd.Flags().BoolVar(&debug, "debug", false, "Log non-secret issuance metadata")
+	}
 	return cmd
 }

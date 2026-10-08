@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/fleet"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/fleet"
 )
 
 type fakeLookup struct {

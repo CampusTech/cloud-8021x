@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
 )
 
 func TestChallengeCommand(t *testing.T) {
 	key := strings.Repeat("secret-key-", 4)
 	t.Setenv("SCEP_CHALLENGE_SIGNING_KEY", key)
 	output := filepath.Join(t.TempDir(), "challenge")
-	cmd := newRootCmd()
+	cmd := NewCompatibilityCommand("test")
 	cmd.SetArgs([]string{"scep-challenge", "--identity", "byod-enrollment-id", "--provisioner", "wifi-scep", "--out", output})
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
@@ -47,7 +47,7 @@ func TestChallengeCommandDryRunAndInvalidTTL(t *testing.T) {
 	t.Setenv("SCEP_CHALLENGE_SIGNING_KEY", strings.Repeat("k", 32))
 	for _, args := range [][]string{{"--dry-run"}, {"--ttl", "25h"}} {
 		output := filepath.Join(t.TempDir(), "challenge")
-		cmd := newRootCmd()
+		cmd := NewCompatibilityCommand("test")
 		cmd.SetArgs(append([]string{"scep-challenge", "--identity", "device", "--provisioner", "wifi-scep", "--out", output}, args...))
 		err := cmd.Execute()
 		if (args[0] == "--dry-run") != (err == nil) {

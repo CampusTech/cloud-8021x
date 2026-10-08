@@ -6,7 +6,7 @@ package authorize
 import (
 	"context"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/fleet"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/fleet"
 	"github.com/sirupsen/logrus"
 )
 

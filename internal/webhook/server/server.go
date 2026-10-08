@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/challenge"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
 
-	"github.com/CampusTech/cloud-8021x/webhook/internal/signature"
-	"github.com/CampusTech/cloud-8021x/webhook/internal/types"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/signature"
+	"github.com/CampusTech/cloud-8021x/internal/webhook/types"
 	"github.com/sirupsen/logrus"
 )
 
