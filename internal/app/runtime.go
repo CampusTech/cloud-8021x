@@ -52,6 +52,9 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	if op == OperationDoctor || op == OperationMetricsEmit {
 		return diagnostics(ctx, op, cfg, o)
 	}
+	if op == OperationStateRecoverWork {
+		return protectedWorkRecovery(ctx, cfg, o)
+	}
 	if op == OperationStateRecoverAuth {
 		return protectedAuthRecovery(ctx, cfg, o)
 	}

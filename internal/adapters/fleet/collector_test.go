@@ -124,3 +124,39 @@ func TestManagedOnlyFleetOSVersionFormats(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectionMissingResultNeverProvesTerminal(t *testing.T) {
+	for _, platform := range []string{"apple", "windows"} {
+		t.Run(platform, func(t *testing.T) {
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Fatal("recovery submitted")
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer srv.Close()
+			client, e := NewClient(srv.URL, "maintainer", srv.Client(), time.Second)
+			if e != nil {
+				t.Fatal(e)
+			}
+			collector := Collector{Maintainer: client}
+			_, terminal, e := collector.poll(context.Background(), reservation{Transport: platform, UUID: "original", ExecutionID: "original-execution"}, time.Hour)
+			if e != nil || terminal {
+				t.Fatalf("missing retained result released original reservation: terminal=%v err=%v", terminal, e)
+			}
+		})
+	}
+}
+
+func TestCollectionTerminalErrorRequiresOriginalTimestamp(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"host_uuid":"host","command_uuid":"original","request_type":"CertificateList","status":"Error","updated_at":"2026-10-08T09:00:00Z"}]}`))
+	}))
+	defer srv.Close()
+	client, _ := NewClient(srv.URL, "maintainer", srv.Client(), time.Second)
+	c := Collector{Maintainer: client, Now: func() time.Time { return time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC) }}
+	_, terminal, e := c.poll(context.Background(), reservation{Transport: "apple", UUID: "original", HostUUID: "host", CreatedAt: float64(time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC).Unix()), EnrolledAt: float64(time.Date(2026, 10, 8, 8, 0, 0, 0, time.UTC).Unix())}, 24*time.Hour)
+	if e == nil || terminal {
+		t.Fatal("terminal error predating the original command released its reservation")
+	}
+}

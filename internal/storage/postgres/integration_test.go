@@ -44,7 +44,7 @@ func runtimeStore(t *testing.T, _ *Store, c config.Database) *Store {
 }
 func reset(t *testing.T, s *Store) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), "TRUNCATE ledger.intake,ledger.sessions,ledger.observations,ledger.intervals,ledger.work,ledger.attempts,ledger.quarantine,ledger.reconciliations,ledger.auth_cursors,ledger.import_markers RESTART IDENTITY CASCADE")
+	_, err := s.pool.Exec(context.Background(), "TRUNCATE bootstrap_private.auth_quarantine,ledger.legacy_collection_guards,ledger.intake,ledger.sessions,ledger.observations,ledger.intervals,ledger.work,ledger.attempts,ledger.quarantine,ledger.reconciliations,ledger.auth_cursors,ledger.import_markers RESTART IDENTITY CASCADE")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -769,3 +769,5 @@ The checked-in [daemon dashboard](docs/telemetry/daemon-dashboard.json) uses max
 aggregation by shared cluster for shared PostgreSQL ledger gauges; adding values
 reported by both nodes would double-count the same backlog. Native auth file
 capacity remains host-local, with soft/critical/hard thresholds of 2048/3584/4096.
+
+The unified daemon [operator runbook](docs/daemon-operations.md) covers exact state import/publication, cold export, retained-work recovery, source history, native retention and optional profile compatibility.

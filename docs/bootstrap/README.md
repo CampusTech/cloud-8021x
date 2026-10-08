@@ -174,7 +174,7 @@ failure. The fixed `/etc/systemd/system/freeradius.service.d/accounting-key.conf
 is snapshotted and replaced with a comment to remove the old boot refetch
 relationship; failure restores its exact contents. Task 10 subsequently retires
 `radius-accounting-key.service` and `/usr/local/bin/radius-accounting-key.sh`.
-Task 9 must retain the original shared key when importing legacy Class bindings. Secret Manager revocation
+State migration retains the original shared key when importing legacy Class bindings. Secret Manager revocation
 alone does not erase a committed local boot cache; emergency revocation/rotation
 must coordinate backend credentials, guarded bootstrap and service activation.
 Protect root-local LKG/cache backups with the same controls as the original keys.
@@ -217,11 +217,11 @@ The fixed boot/recovery units are:
 - `cloud-8021x-credentials.service`: offline exact committed credential restore;
   `cloud-8021x-metadata.service`: fixed metadata deny/DNS exception rules.
 - Root `cloud-8021x-renew.service` and hourly randomized renewal timer.
-- Root `cloud-8021x-sources.service`, installed **without a timer**. Task 9 must
-  wire durable per-node claim, StartAttempt and the exact persisted candidate SHA
-  before enabling scheduling; the daemon writes candidates only.
+- Root `cloud-8021x-sources.service` and one-minute source timer. The fixed root
+  command uses the durable per-node claim, StartAttempt and exact persisted
+  candidate SHA before its protected action; the daemon writes candidates only.
 
-Task 9 must emit READY=1 only after the policy and private readiness listeners
+The daemon emits READY=1 only after the policy and private readiness listeners
 are actually available with fresh observed policy/certificate readiness. The
 private readiness handler is `native.ReadinessHandler`; fixed private HTTP18122
 allows only configured local/peer IPv4 addresses, with a separate shared health
@@ -267,8 +267,8 @@ Unknown/malformed references or bounded-query overflow stop cleanup/application.
 Fixed source paths remain `/etc/cloud-8021x/sources/clients.conf`,
 `/var/lib/cloud-8021x-source-state/state.json` and
 `/var/lib/cloud-8021x-source-proof`. Bootstrap creates an empty discovered-client
-include only when genuinely absent. Task 9 must use the existing SourceCoordinator
-and exact canonical persisted candidate payload before invoking this root action.
+include only when genuinely absent. The integrated command uses SourceCoordinator
+and the exact canonical persisted candidate payload before invoking this root action.
 
 The Agent YAML merge preserves host checks/tags and removes duplicate legacy
 application/auth/accounting/source/bootstrap log tails from the native integration.
@@ -322,3 +322,5 @@ certification. The storage fixture tests actual loop mounts and ENOSPC on its ow
 image. No host services, production cloud, Fleet, vendor or Datadog endpoints are
 mutated. The SCEP fixture uses Go-rendered product config and actual local step-ca;
 its local signer substitute does not certify production KMS or Cloud SQL.
+
+For the integrated daemon import/publication, cold rollback export and retained-work procedures, see the [daemon operator runbook](../daemon-operations.md). Source scheduling now uses the protected per-node claim and exact persisted candidate before the root action; the installed timer is enabled only through that guarded integration.

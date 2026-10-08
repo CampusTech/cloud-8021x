@@ -367,7 +367,7 @@ func (c *Collector) poll(ctx context.Context, r reservation, age time.Duration) 
 		var row windowsResult
 		err := c.Maintainer.request(ctx, "GET", "/api/v1/fleet/scripts/results/"+url.PathEscape(r.ExecutionID), nil, &row)
 		if errors.Is(err, errNotFound) {
-			return nil, true, nil
+			return nil, false, nil
 		}
 		if err != nil {
 			return nil, false, err
@@ -395,7 +395,7 @@ func (c *Collector) poll(ctx context.Context, r reservation, age time.Duration) 
 	}
 	err := c.Maintainer.request(ctx, "GET", "/api/v1/fleet/commands/results?"+url.Values{"command_uuid": {r.UUID}}.Encode(), nil, &response)
 	if errors.Is(err, errNotFound) {
-		return nil, true, nil
+		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
@@ -418,6 +418,9 @@ func (c *Collector) poll(ctx context.Context, r reservation, age time.Duration) 
 		return nil, false, nil
 	}
 	if row.Status == "Error" || row.Status == "CommandFormatError" {
+		if _, err = observed(row.UpdatedAt, r, c.now(), age); err != nil {
+			return nil, false, err
+		}
 		return nil, true, nil
 	}
 	if row.Status != "Acknowledged" {

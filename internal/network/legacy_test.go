@@ -31,3 +31,25 @@ func TestLegacyFallbackCannotExtendOriginalOneHourTTL(t *testing.T) {
 		t.Fatal("incoming retention extended original legacy TTL")
 	}
 }
+
+func TestAuthenticatedVLANGenerationSuppressesLegacyFallback(t *testing.T) {
+	now := time.Now()
+	for _, names := range [][]domain.VLANMetadata{nil, {{SiteID: "site", ID: 120, Name: "Current staff"}}} {
+		s := new(Store)
+		if e := s.SetLegacyVLANs([]LegacyVLAN{{ProviderID: "p", SiteID: "site", ObservedAt: domain.Unix(now.Add(-time.Minute)), Names: map[int]string{120: "Historical staff"}, Provenance: "legacy-config-bound"}}); e != nil {
+			t.Fatal(e)
+		}
+		batch := domain.NetworkSnapshot{ProviderID: "p", Scope: domain.InventoryScope{ProviderID: "p", IDs: []string{"site"}}, Scopes: []domain.NetworkScopeResult{{ScopeID: "site", Status: domain.CapabilityAvailable, ObservedAt: domain.Unix(now), VLANStatus: domain.CapabilityAvailable, VLANObservedAt: domain.Unix(now)}}, VLANs: names}
+		if e := s.Publish(batch); e != nil {
+			t.Fatal(e)
+		}
+		want := ""
+		if len(names) > 0 {
+			want = "Current staff"
+		}
+		got := s.Resolve("p", "site", "", 120, now, time.Hour)
+		if got.VLAN != want || got.Provenance != "" {
+			t.Fatalf("authenticated current generation did not supersede legacy: %#v", got)
+		}
+	}
+}

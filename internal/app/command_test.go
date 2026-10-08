@@ -229,3 +229,14 @@ func TestLegacyRecoveryCommandRetainsExactIdentity(t *testing.T) {
 		t.Fatalf("lost recovery identity: %+v", r)
 	}
 }
+
+func TestRecoverWorkCLIRequiresClosedOriginalSelection(t *testing.T) {
+	r := new(recorder)
+	_, e := execute(t, context.Background(), r, "state", "recover-work", "--kind", "outbox-republish", "--work", "auth:original", "--generation", "7", "--payload-sha256", strings.Repeat("a", 64), "--request", strings.Repeat("b", 64), "--accept-possible-duplicates", "--dry-run")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r.options.RecoveryKind != "outbox-republish" || r.options.RecoveryWork != "auth:original" || r.options.RecoveryGeneration != 7 || !r.options.AcceptDuplicates {
+		t.Fatalf("exact recovery selection lost: %#v", r.options)
+	}
+}

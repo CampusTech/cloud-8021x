@@ -25,6 +25,7 @@ const (
 	OperationCertificatesRenew      Operation = "certificates renew"
 	OperationRadiusVerifyLeaf       Operation = "radius verify-leaf"
 	OperationSourcesApply           Operation = "sources apply"
+	OperationStateRecoverWork       Operation = "state recover-work"
 	OperationStateRecoverAuth       Operation = "state recover-auth"
 	OperationStateRecoverCollection Operation = "state recover-collection"
 	OperationStateFence             Operation = "state fence"
@@ -38,23 +39,27 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
-	AuthFilename, AuthRangeSHA256 string
-	AuthOffset                    int64
-	LegacyGuardID                 string
-	LegacyExecutionID             string
-	MaintenanceAttempt            int64
-	SourceWorkID                  string
-	SourceGeneration              int64
-	Version                       string
-	Incoming                      bool
-	FenceOnly                     bool
-	SourceCandidateSHA256         string
-	ConfigFile                    string
-	VerifiedLeaf                  *VerifiedLeafOptions
-	Debug                         bool
-	DryRun                        bool
-	Output                        io.Writer
-	Logger                        *logrus.Logger
+	RecoveryKind, RecoveryWork, RecoveryRequest, RecoveryPayloadSHA string
+	RecoveryGeneration                                              int64
+	RecoveryExecutions                                              []string
+	AcceptDuplicates                                                bool
+	AuthFilename, AuthRangeSHA256                                   string
+	AuthOffset                                                      int64
+	LegacyGuardID                                                   string
+	LegacyExecutionID                                               string
+	MaintenanceAttempt                                              int64
+	SourceWorkID                                                    string
+	SourceGeneration                                                int64
+	Version                                                         string
+	Incoming                                                        bool
+	FenceOnly                                                       bool
+	SourceCandidateSHA256                                           string
+	ConfigFile                                                      string
+	VerifiedLeaf                                                    *VerifiedLeafOptions
+	Debug                                                           bool
+	DryRun                                                          bool
+	Output                                                          io.Writer
+	Logger                                                          *logrus.Logger
 }
 type Services interface {
 	Run(context.Context, Operation, config.Config, RunOptions) error
@@ -136,6 +141,7 @@ func NewCommand(options Options) *cobra.Command {
 		var legacyGuardID, legacyExecutionID string
 		var authFilename, authRangeSHA256 string
 		var authOffset int64
+		var recovery RunOptions
 		cmd := &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := load(cmd)
 			if err != nil {
@@ -145,13 +151,23 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{AuthFilename: authFilename, AuthRangeSHA256: authRangeSHA256, AuthOffset: authOffset, LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{RecoveryKind: recovery.RecoveryKind, RecoveryWork: recovery.RecoveryWork, RecoveryRequest: recovery.RecoveryRequest, RecoveryPayloadSHA: recovery.RecoveryPayloadSHA, RecoveryGeneration: recovery.RecoveryGeneration, RecoveryExecutions: recovery.RecoveryExecutions, AcceptDuplicates: recovery.AcceptDuplicates, AuthFilename: authFilename, AuthRangeSHA256: authRangeSHA256, AuthOffset: authOffset, LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
 			}
 			return options.Services.Run(cmd.Context(), op, cfg, run)
 		}}
+		if op == OperationStateRecoverWork {
+			cmd.Flags().StringVar(&recovery.RecoveryKind, "kind", "", "Closed recovery mode: fleet-terminal, outbox-republish, outbox-receipt")
+			cmd.Flags().StringVar(&recovery.RecoveryWork, "work", "", "Exact original ledger work ID")
+			cmd.Flags().Int64Var(&recovery.RecoveryGeneration, "generation", 0, "Exact original work generation")
+			cmd.Flags().StringVar(&recovery.RecoveryPayloadSHA, "payload-sha256", "", "Exact original PostgreSQL payload digest (dry-run inspects)")
+			cmd.Flags().StringVar(&recovery.RecoveryRequest, "request", "", "Unique 64-hex operator request; repeats never resend")
+			cmd.Flags().StringSliceVar(&recovery.RecoveryExecutions, "execution-id", nil, "Bounded original Windows execution hints")
+			cmd.Flags().BoolVar(&recovery.AcceptDuplicates, "accept-possible-duplicates", false, "Explicitly accept possible duplicate downstream telemetry")
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove exact original stopped helper; never sends")
+		}
 		if op == OperationStateRecoverAuth {
 			cmd.Flags().StringVar(&authFilename, "file", "", "Exact native auth basename")
 			cmd.Flags().StringVar(&authRangeSHA256, "sha256", "", "Exact original malformed record digest; dry-run can inspect it")
@@ -236,7 +252,7 @@ func NewCommand(options Options) *cobra.Command {
 		{"state", []struct {
 			name string
 			op   Operation
-		}{{"recover-auth", OperationStateRecoverAuth}, {"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
+		}{{"recover-work", OperationStateRecoverWork}, {"recover-auth", OperationStateRecoverAuth}, {"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
 	} {
 		parent := &cobra.Command{Use: group.name}
 		for _, a := range group.actions {

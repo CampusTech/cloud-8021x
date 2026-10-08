@@ -173,6 +173,52 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 			if e != nil || !bytes.Equal(complete, original) {
 				t.Fatal("original publication receipt changed", e)
 			}
+			// Each exact publication artifact independently rejects truncated,
+			// substituted, linked or foreign-owned evidence. Restore only fixture bytes.
+			for _, name := range []string{"publication-original.json", "publication-complete.json", "published-bundle.json"} {
+				path := filepath.Join(dir, name)
+				valid, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, mutation := range []string{"short", "owner", "hardlink", "symlink"} {
+					t.Run(name+"/"+mutation, func(t *testing.T) {
+						other := path + ".fixture"
+						switch mutation {
+						case "short":
+							err = os.WriteFile(path, []byte("{"), 0600)
+						case "owner":
+							err = os.Chown(path, accounts.RuntimeUID, accounts.RuntimeGID)
+						case "hardlink":
+							err = os.Link(path, other)
+						case "symlink":
+							err = os.Rename(path, other)
+							if err == nil {
+								err = os.Symlink(other, path)
+							}
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = ValidateStatePublicationRecovery(p, raw); err == nil {
+							t.Fatal("unsafe publication evidence accepted")
+						}
+						if err = PublishCapturedState(p, raw); err == nil {
+							t.Fatal("unsafe publication was rewritten")
+						}
+						if err = os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+						_ = os.Remove(other)
+						if err = os.WriteFile(path, valid, 0600); err != nil {
+							t.Fatal(err)
+						}
+						if err = ValidateStatePublicationRecovery(p, raw); err != nil {
+							t.Fatal("fixture restoration failed", err)
+						}
+					})
+				}
+			}
 			if e = os.WriteFile(filepath.Join(dir, "published-bundle.json"), []byte(`{"foreign":true}`), 0600); e != nil {
 				t.Fatal(e)
 			}

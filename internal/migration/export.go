@@ -131,18 +131,20 @@ type RollbackExport struct {
 	WorkersBlocked bool                       `json:"workers_blocked"`
 }
 type LedgerExport struct {
-	AuthQuarantine   []json.RawMessage `json:"auth_quarantine"`
-	SchemaVersion    int               `json:"schema_version"`
-	Work             []json.RawMessage `json:"work"`
-	Attempts         []json.RawMessage `json:"attempts"`
-	Reconciliations  []json.RawMessage `json:"reconciliations"`
-	CollectionGuards []json.RawMessage `json:"collection_guards"`
-	Sessions         []json.RawMessage `json:"sessions"`
-	Intake           []json.RawMessage `json:"intake"`
-	Observations     []json.RawMessage `json:"observations"`
-	Intervals        []json.RawMessage `json:"intervals"`
-	Quarantine       []json.RawMessage `json:"quarantine"`
-	AuthCursors      []json.RawMessage `json:"auth_cursors"`
+	OperatorRecoveries       []json.RawMessage `json:"operator_recoveries"`
+	OperatorRecoveryOutcomes []json.RawMessage `json:"operator_recovery_outcomes"`
+	AuthQuarantine           []json.RawMessage `json:"auth_quarantine"`
+	SchemaVersion            int               `json:"schema_version"`
+	Work                     []json.RawMessage `json:"work"`
+	Attempts                 []json.RawMessage `json:"attempts"`
+	Reconciliations          []json.RawMessage `json:"reconciliations"`
+	CollectionGuards         []json.RawMessage `json:"collection_guards"`
+	Sessions                 []json.RawMessage `json:"sessions"`
+	Intake                   []json.RawMessage `json:"intake"`
+	Observations             []json.RawMessage `json:"observations"`
+	Intervals                []json.RawMessage `json:"intervals"`
+	Quarantine               []json.RawMessage `json:"quarantine"`
+	AuthCursors              []json.RawMessage `json:"auth_cursors"`
 }
 
 func validateRetainedCandidates(candidates []domain.SourceCandidate) error {

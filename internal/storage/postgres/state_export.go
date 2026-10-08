@@ -136,6 +136,8 @@ func (s *Store) ExportState(ctx context.Context, id string) ([]byte, error) {
 		query  string
 		target *[]json.RawMessage
 	}{
+		{`SELECT row_to_json(t) FROM bootstrap_private.operator_recovery t ORDER BY request_id LIMIT 100001`, &out.Ledger.OperatorRecoveries},
+		{`SELECT row_to_json(t) FROM bootstrap_private.operator_recovery_outcomes t ORDER BY request_id LIMIT 100001`, &out.Ledger.OperatorRecoveryOutcomes},
 		{`SELECT row_to_json(t) FROM bootstrap_private.auth_quarantine t ORDER BY source,start_offset LIMIT 100001`, &out.Ledger.AuthQuarantine},
 		{`SELECT row_to_json(t) FROM ledger.work t ORDER BY id LIMIT 100001`, &out.Ledger.Work},
 		{`SELECT row_to_json(t) FROM ledger.attempts t ORDER BY work_id,generation LIMIT 100001`, &out.Ledger.Attempts},
