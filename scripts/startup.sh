@@ -2568,9 +2568,9 @@ def fetch_pages(opener, url, key, envelope=False):
                                         'Accept': 'application/json'})
         with opener.open(request, timeout=20) as response:
             page = json.load(response)
-            if envelope and isinstance(page, dict):
-                if 'items' not in page:
-                    raise ValueError('Missing Meraki page items')
+            if envelope:
+                if not isinstance(page, dict) or 'items' not in page:
+                    raise ValueError('Missing Meraki page items envelope')
                 page = page['items']
             if not isinstance(page, list) or any(not isinstance(item, dict) for item in page):
                 raise ValueError('Invalid Meraki page')

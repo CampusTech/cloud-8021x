@@ -143,7 +143,7 @@ class MerakiBuilderTests(unittest.TestCase):
         from unittest.mock import Mock
         import io
         from email.message import Message
-        for failure in ('http', 'json', 'schema', 'cap', 'cycle'):
+        for failure in ('http', 'json', 'schema', 'bare_list', 'cap', 'cycle'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
                 module = builder_module()
                 module.MAX_PAGES = 1
@@ -154,6 +154,7 @@ class MerakiBuilderTests(unittest.TestCase):
                     'http': [response(devices()), OSError('request failed')],
                     'json': [response(devices()), bad],
                     'schema': [response(devices()), response({'unexpected': []})],
+                    'bare_list': [response(devices()), response(statuses())],
                     'cap': [response(devices(), '<' + base + '?startingAfter=x>; rel=next')],
                     'cycle': [response(devices(), '<' + base + '?perPage=500>; rel=next')],
                 }
