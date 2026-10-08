@@ -563,6 +563,26 @@ resource "google_compute_security_policy" "smallstep" {
   project = google_project.this.project_id
   name    = "smallstep-ca-armor"
 
+  # Office NATs put every device at a site behind one public IP. An ACME order
+  # is ~10 requests, so ~10 Macs enrolling in the same minute tripped the
+  # per-IP ban below and 429'd the whole office for 5 minutes (2026-10-08
+  # rollout: profile installs failed with NSURLErrorDomain 429). Trusted office
+  # egress IPs skip rate limiting entirely.
+  dynamic "rule" {
+    for_each = length(var.armor_trusted_cidrs) > 0 ? [1] : []
+    content {
+      action   = "allow"
+      priority = 100
+      match {
+        versioned_expr = "SRC_IPS_V1"
+        config {
+          src_ip_ranges = var.armor_trusted_cidrs
+        }
+      }
+      description = "trusted office egress IPs: no rate limit"
+    }
+  }
+
   rule {
     action   = "rate_based_ban"
     priority = 1000

@@ -269,7 +269,7 @@ the legacy attribute carriers as well:
 | `device_owner` | Fleet/Jamf cache (via `Reply-Message`) | `robbie@campus.edu` |
 | `device_name` | Fleet/Jamf cache (via `Filter-Id`) | `Robbie's MacBook Pro` |
 | `device_model` | Fleet/Jamf cache (via `Login-LAT-Node`) | `MacBook Pro (16-inch, 2024) M4 Max` |
-| `src_ip` | `Packet-Src-IP-Address` | `216.200.20.23` |
+| `src_ip` | `Packet-Src-IP-Address` | `203.0.113.10` |
 | `nas_ip` | `NAS-IP-Address` | `192.168.1.143` |
 | `nas_port` | `NAS-Port` | `5` |
 | `calling_station` | `Calling-Station-Id` (client MAC) | `70-8C-F2-C4-D2-B5` |
