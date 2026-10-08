@@ -73,6 +73,7 @@ type Receipt struct {
 	Files          []SavedFile  `json:"files"`
 }
 type Transaction struct {
+	committed       bool
 	rollbackBackend Activation
 	receipt         Receipt
 	directory       string
@@ -316,6 +317,9 @@ func (t *Transaction) Rollback(ctx context.Context, b Activation, restart bool) 
 	if t == nil {
 		return errors.New("missing rollback receipt")
 	}
+	if t.committed {
+		return errors.New("completed installation cannot be rolled back by a reporting failure")
+	}
 	if t.receipt.Phase == "rolled-back" {
 		return nil
 	}
@@ -363,11 +367,6 @@ func (t *Transaction) Rollback(ctx context.Context, b Activation, restart bool) 
 	if e := t.restoreLegacyOwnership(); e != nil {
 		return e
 	}
-	if backend, ok := b.(*RadiusBackend); ok && t.receipt.PackageBarrier {
-		if e := t.UnmaskPackages(ctx, backend); e != nil {
-			return e
-		}
-	}
 	if t.receipt.WasRunning && t.rollbackBackend != nil && (activationStarted || (t.receipt.Packages != nil && t.receipt.Packages.Changed)) {
 		if e := t.rollbackBackend.Validate(ctx); e != nil {
 			return e
@@ -376,6 +375,11 @@ func (t *Transaction) Rollback(ctx context.Context, b Activation, restart bool) 
 			return e
 		}
 		if e := t.rollbackBackend.Healthy(ctx); e != nil {
+			return e
+		}
+	}
+	if backend, ok := b.(*RadiusBackend); ok && t.receipt.PackageBarrier {
+		if e := t.UnmaskPackages(ctx, backend); e != nil {
 			return e
 		}
 	}

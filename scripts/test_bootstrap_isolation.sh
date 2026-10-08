@@ -12,4 +12,4 @@ GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -o "$fixture/cloud-8021x" ./cmd
 cp examples/cloud-8021x.yaml "$fixture/config.yaml"
 docker run -d --name "$container" --label cloud8021x.test=task8 --label cloud8021x.disposable=true --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 -v "$fixture:/fixture:ro" debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 sleep infinity >/dev/null
 docker exec "$container" sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends nftables iproute2 util-linux ca-certificates sudo passwd openssl' >/dev/null
-docker exec -e C8021X_ISOLATION_FIXTURE=task8 "$container" /fixture/host.test -test.run '^TestInstalled(MetadataIsolation|ProtectedTransactionAndSudo|CredentialRebootConsistency|ArtifactInputs)$' -test.v
+docker exec -e C8021X_ISOLATION_FIXTURE=task8 "$container" /fixture/host.test -test.run '^TestInstalled(MetadataIsolation|ProtectedTransactionAndSudo|CredentialRebootConsistency|BootstrapDiscoveryFiles|CompletionPublicationRollback|ArtifactInputs)$' -test.v

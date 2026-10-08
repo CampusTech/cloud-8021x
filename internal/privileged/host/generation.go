@@ -61,7 +61,10 @@ func KnownInstallation() (bool, error) {
 	return true, nil
 }
 func (t *Transaction) CompleteInstalled() error {
-	if t == nil || t.receipt.Phase != "complete" {
+	return t.completeInstalled(publishGeneration)
+}
+func (t *Transaction) completeInstalled(publish func(string) error) error {
+	if t == nil || t.committed || t.receipt.Phase != "complete" {
 		return errors.New("installation readiness is incomplete")
 	}
 	binary, err := installedHash("/usr/local/bin/cloud-8021x", 256<<20)
@@ -76,11 +79,29 @@ func (t *Transaction) CompleteInstalled() error {
 	if err != nil {
 		return err
 	}
+	// Completion is a file in the same protected local rollback receipt as the
+	// credential cache. Persist the exact prior bytes/owner/mode before publication:
+	// rename can succeed even when its following directory sync reports failure.
+	previous, err := Snapshot(File{Path: transactionRoot + "/current.json", Mode: 0600})
+	if err != nil {
+		return err
+	}
+	t.receipt.Files = append(t.receipt.Files, previous)
+	if err = t.persist(t.receipt.Phase); err != nil {
+		return err
+	}
 	temporary := filepath.Join(t.directory, "current.json")
 	if err = privateWrite(temporary, data, 0600); err != nil {
 		return err
 	}
-	if err = os.Rename(temporary, transactionRoot+"/current.json"); err != nil {
+	if err = publish(temporary); err != nil {
+		return err
+	}
+	t.committed = true
+	return nil
+}
+func publishGeneration(temporary string) error {
+	if err := os.Rename(temporary, transactionRoot+"/current.json"); err != nil {
 		return err
 	}
 	directory, err := os.Open(transactionRoot)
@@ -90,6 +111,7 @@ func (t *Transaction) CompleteInstalled() error {
 	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
+
 func (t *Transaction) CaptureInitialState(ctx context.Context, current, previous Activation) error {
 	active, err := current.Running(ctx)
 	if err != nil {

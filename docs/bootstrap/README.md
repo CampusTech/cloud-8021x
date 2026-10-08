@@ -66,7 +66,11 @@ upgrade or follow the deployment's security exception process.
 Go suppresses maintainer service actions with a restored `policy-rc.d`, a
 journaled native runtime mask and the official Agent installer bypass
 `DOCKER_DD_AGENT=1` in the fixed dpkg-only environment. It explicitly provisions
-required accounts and service files. No caller environment selects executables.
+required accounts and service files. The package mask remains held throughout
+candidate preparation and validation, including daemon recovery via `Wants=`;
+only guarded companion readiness releases it. Prior-generation rollback retains
+the same barrier through its validation and companion readiness. No caller
+environment selects executables.
 
 Root-only `/var/lib/cloud-8021x-bootstrap/<32-hex-id>/receipt.json` contains exact
 prior file bytes, ownership/modes, package plan and native tree snapshot.
@@ -75,7 +79,25 @@ The complete candidate tree is validated with real `freeradius -XC` before servi
 activation. Original parent ownership evidence is stored beside the receipt and
 restored on rollback. Incomplete/displaced trees and receipts are retained for
 reconciliation, not automatically deleted. `current.json` binds a completed
-installation to actual application/config hashes.
+installation to actual application/config hashes. Its exact prior bytes, owner and
+mode enter the root-private receipt before replacement. A rename or directory-sync
+failure rolls back that binding with the prior credential cache and installed files.
+Once publication is durable, the live transaction refuses further rollback. Receipt
+phase `complete` records successful activation; the matching durable `current.json`
+and credential-cache binding establish installation publication. A receipt alone is
+not permission to retry or undo an installation.
+
+Result output occurs after the shared maintenance gate completes. A closed output
+pipe reports a delivery error without rolling back installed state or marking the
+journal uncertain. Lost database completion acknowledgement still leaves shared
+maintenance uncertain and blocks subsequent changes; no retry or new generation is
+automatic. Explicit future rollback of a completed installation requires a new
+coordinated transaction, not replaying its old receipt.
+
+Discovery-enabled bootstrap and renewal prepare only the fixed
+`/etc/cloud-8021x/sources/clients.conf` include. Missing parents are safely created;
+only a missing include is initialized. An existing protected include remains exact,
+and unsafe or unreadable existing files fail closed.
 
 ## CA trust, secrets and boot credentials
 

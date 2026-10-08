@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
@@ -184,7 +186,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 	if renew {
 		operation = "certificates renew"
 	}
-	return gate.With(ctx, operation, func(ctx context.Context) (result error) {
+	return withBootstrapReport(ctx, gate.With, operation, o.Output, func(ctx context.Context, outcome *bootstrapOutcome) (result error) {
 		ecSigner, e := cloud.Signer(ctx, cfg.Bootstrap.ECKMS)
 		if e != nil {
 			return e
@@ -345,16 +347,11 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return err
 		}
 		files = append(files, collectorFiles...)
-		if cfg.Network.Discovery.Enabled {
-			include := host.File{Path: "/etc/cloud-8021x/sources/clients.conf", Data: []byte("# No source candidates have been applied.\n"), Mode: 0600}
-			old, err := host.Snapshot(include)
-			if err != nil {
-				return err
-			}
-			if !old.Exists {
-				files = append(files, include)
-			}
+		discoveryFiles, err := host.BootstrapDiscoveryFiles(cfg.Network.Discovery.Enabled)
+		if err != nil {
+			return err
 		}
+		files = append(files, discoveryFiles...)
 		if !renew {
 			if e = host.VerifyCollector(manifest); e != nil {
 				return e
@@ -376,9 +373,6 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 				return e
 			}
 			if old.Exists && oldWebhook.Exists && bytes.Equal(old.Data, certificate.Chain) && bytes.Equal(oldWebhook.Data, webhook.Certificate) {
-				if o.Output != nil {
-					return json.NewEncoder(o.Output).Encode(map[string]any{"operation": "certificates renew", "changed": false})
-				}
 				return nil
 			}
 		}
@@ -438,9 +432,6 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if e = transaction.Prepare(tree, files); e != nil {
 			return e
 		}
-		if e = transaction.UnmaskPackages(ctx, backend); e != nil {
-			return e
-		}
 		if e = transaction.Apply(ctx, backend); e != nil {
 			return e
 		}
@@ -453,9 +444,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if e = transaction.CompleteInstalled(); e != nil {
 			return e
 		}
-		if o.Output != nil {
-			return json.NewEncoder(o.Output).Encode(map[string]any{"operation": operation, "changed": true, "installation": transaction.Reference()})
-		}
+		outcome.Changed, outcome.Installation = true, transaction.Reference()
 		return nil
 	})
 }
@@ -481,4 +470,25 @@ func refreshRootCredentials(ctx context.Context, cfg config.Config, o RunOptions
 		return e
 	}
 	return host.InstallMetadata(ctx, accounts.RuntimeUID)
+}
+
+type bootstrapOutcome struct {
+	Operation    string `json:"operation"`
+	Changed      bool   `json:"changed"`
+	Installation string `json:"installation,omitempty"`
+}
+
+func withBootstrapReport(ctx context.Context, gate func(context.Context, string, func(context.Context) error) error, operation string, output io.Writer, action func(context.Context, *bootstrapOutcome) error) error {
+	outcome := bootstrapOutcome{Operation: operation}
+	// Output is deliberately outside both the rollback defer and durable shared
+	// maintenance completion. A closed pipe cannot undo or relabel committed work.
+	if e := gate(ctx, operation, func(ctx context.Context) error { return action(ctx, &outcome) }); e != nil {
+		return e
+	}
+	if output != nil {
+		if e := json.NewEncoder(output).Encode(outcome); e != nil {
+			return fmt.Errorf("%s completed; output reporting failed: %w", operation, e)
+		}
+	}
+	return nil
 }

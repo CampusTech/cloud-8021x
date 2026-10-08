@@ -16,7 +16,9 @@ import (
 )
 
 var fixedFiles = map[string]bool{
-	legacyClassKey: true, "/etc/systemd/system/freeradius.service.d/accounting-key.conf": true,
+	"/etc/cloud-8021x/sources/clients.conf": true,
+	transactionRoot + "/current.json":       true,
+	legacyClassKey:                          true, "/etc/systemd/system/freeradius.service.d/accounting-key.conf": true,
 	credentialCachePath:               true,
 	"/etc/datadog-agent/datadog.yaml": true, "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml": true, "/etc/systemd/system/datadog-agent-ddot.service": true, "/etc/systemd/system/datadog-agent.service.d/cloud-8021x.conf": true, "/etc/systemd/system/var-lib-cloud8021x-collector.mount": true,
 	"/usr/local/bin/cloud-8021x": true, "/etc/cloud-8021x/config.yaml": true,
@@ -283,4 +285,23 @@ func (f File) acceptsOwner(uid int) bool {
 		return true
 	}
 	return f.adoptUID > 0 && uid == f.adoptUID && (f.Path == "/etc/datadog-agent/datadog.yaml" || f.Path == "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml" || f.Path == legacyClassKey)
+}
+
+// BootstrapDiscoveryFiles initializes only the fixed missing discovery include.
+func BootstrapDiscoveryFiles(enabled bool) ([]File, error) {
+	if !enabled {
+		return nil, nil
+	}
+	include := File{Path: "/etc/cloud-8021x/sources/clients.conf", Data: []byte("# No source candidates have been applied.\n"), Mode: 0600}
+	if err := PrepareFileDirectories([]File{include}); err != nil {
+		return nil, err
+	}
+	old, err := Snapshot(include)
+	if err != nil {
+		return nil, err
+	}
+	if old.Exists {
+		return nil, nil
+	}
+	return []File{include}, nil
 }
