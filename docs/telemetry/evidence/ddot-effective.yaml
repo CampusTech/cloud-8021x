@@ -1,0 +1,234 @@
+connectors: {}
+exporters:
+  datadog/ordinary:
+    api:
+      fail_on_invalid_key: false
+      key: '[REDACTED]'
+      site: us5.datadoghq.com
+    force_attempt_http2: true
+    host_metadata:
+      enabled: false
+      hostname_source: config_or_system
+      reporter_period: 30m0s
+      tags: []
+    hostname: ""
+    hostname_detection_timeout: 25s
+    idle_conn_timeout: 1m30s
+    logs:
+      batch_wait: 5
+      compression_level: 6
+      endpoint: https://http-intake.logs.us5.datadoghq.com
+      use_compression: true
+    max_idle_conns: 100
+    metrics:
+      delta_ttl: 3600
+      endpoint: https://api.us5.datadoghq.com
+      histograms:
+        mode: distributions
+        send_aggregation_metrics: false
+      instrumentation_scope_metadata_as_tags: true
+      resource_attributes_as_tags: false
+      summaries:
+        mode: gauges
+      sums:
+        cumulative_monotonic_mode: to_delta
+        initial_cumulative_monotonic_value: auto
+    only_metadata: false
+    orchestrator_explorer:
+      enabled: false
+      endpoint: https://orchestrator.us5.datadoghq.com/api/v2/orchmanif
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_elapsed_time: 5m0s
+      max_interval: 30s
+      multiplier: 1.5
+      randomization_factor: 0.5
+    sending_queue:
+      batch: null
+      block_on_overflow: false
+      num_consumers: 10
+      queue_size: 1000
+      sizer: {}
+      storage: null
+      wait_for_result: false
+    timeout: 15s
+    traces:
+      compute_stats_by_span_kind: true
+      compute_top_level_by_span_kind: true
+      ignore_resources: []
+      peer_tags: []
+      peer_tags_aggregation: true
+      span_name_as_resource_name: false
+      span_name_remappings: {}
+  otlp_http/business:
+    compression: none
+    encoding: proto
+    force_attempt_http2: true
+    headers:
+    - name: dd-api-key
+      value: '[REDACTED]'
+    idle_conn_timeout: 1m30s
+    logs_endpoint: http://127.0.0.1:18080/v1/logs
+    max_idle_conns: 100
+    metrics_endpoint: ""
+    profiles_endpoint: ""
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_elapsed_time: 0s
+      max_interval: 2s
+      multiplier: 1.5
+      randomization_factor: 0.5
+    sending_queue:
+      batch: null
+      block_on_overflow: false
+      num_consumers: 1
+      queue_size: 4096
+      sizer: {}
+      storage: file_storage/accounting
+      wait_for_result: false
+    timeout: 1s
+    traces_endpoint: ""
+    write_buffer_size: 524288
+extensions:
+  ddflare:
+    cors: null
+    endpoint: 127.0.0.1:7777
+    idle_timeout: 0s
+    read_header_timeout: 0s
+    tls: null
+    transport: tcp
+    write_timeout: 0s
+  file_storage/accounting:
+    compaction:
+      check_interval: 5s
+      directory: /task7/queue
+      max_transaction_size: 65536
+      rebound_needed_threshold_mib: 100
+      rebound_trigger_threshold_mib: 10
+    directory: /task7/queue
+    directory_permissions: "0750"
+    fsync: true
+    timeout: 1s
+processors:
+  batch/ordinary:
+    metadata_cardinality_limit: 1000
+    metadata_keys: []
+    send_batch_max_size: 256
+    send_batch_size: 256
+    timeout: 1s
+  transform/business:
+    error_mode: propagate
+    flatten_data: false
+    log_statements:
+    - conditions: []
+      context: resource
+      error_mode: ""
+      statements:
+      - set(attributes["service.name"], "radius-auth") where attributes["business.category"]
+        == "auth"
+      - set(attributes["service.name"], "radius-acct") where attributes["business.category"]
+        == "accounting"
+      - set(attributes["service.name"], "radius-usage") where attributes["business.category"]
+        == "usage"
+    metric_statements: []
+    profile_statements: []
+    trace_statements: []
+receivers:
+  otlp/business:
+    protocols:
+      grpc: null
+      http:
+        cors: null
+        endpoint: 127.0.0.1:4319
+        idle_timeout: 0s
+        keep_alives_enabled: true
+        logs_url_path: /v1/logs
+        max_request_body_size: 1048576
+        metrics_url_path: /v1/metrics
+        read_header_timeout: 0s
+        tls: null
+        traces_url_path: /v1/traces
+        transport: tcp
+        write_timeout: 0s
+  otlp/ordinary:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+        keepalive:
+          enforcement_policy: {}
+          server_parameters: {}
+        read_buffer_size: 524288
+        transport: tcp
+      http:
+        cors: null
+        endpoint: 127.0.0.1:4318
+        idle_timeout: 0s
+        keep_alives_enabled: true
+        logs_url_path: /v1/logs
+        metrics_url_path: /v1/metrics
+        read_header_timeout: 0s
+        tls: null
+        traces_url_path: /v1/traces
+        transport: tcp
+        write_timeout: 0s
+service:
+  extensions:
+  - file_storage/accounting
+  - ddflare
+  pipelines:
+    logs/business:
+      exporters:
+      - otlp_http/business
+      processors:
+      - transform/business
+      receivers:
+      - otlp/business
+    logs/ordinary:
+      exporters:
+      - datadog/ordinary
+      processors:
+      - batch/ordinary
+      receivers:
+      - otlp/ordinary
+    metrics/ordinary:
+      exporters:
+      - datadog/ordinary
+      processors:
+      - batch/ordinary
+      receivers:
+      - otlp/ordinary
+    traces/ordinary:
+      exporters:
+      - datadog/ordinary
+      processors:
+      - batch/ordinary
+      receivers:
+      - otlp/ordinary
+  telemetry:
+    logs:
+      encoding: console
+      error_output_paths:
+      - stderr
+      level: info
+      output_paths:
+      - stderr
+      sampling:
+        enabled: true
+        initial: 10
+        thereafter: 100
+        tick: 10s
+    metrics:
+      level: Normal
+      readers:
+      - pull:
+          exporter:
+            prometheus:
+              host: localhost
+              port: 8888
+              without_scope_info: true
+              without_type_suffix: true
+              without_units: true
+    resource:
+      schema_url: https://opentelemetry.io/schemas/1.40.0

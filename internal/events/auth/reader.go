@@ -25,6 +25,7 @@ type Store interface {
 	AuthEvent(context.Context, string, string, string, string, json.RawMessage) error
 }
 type Event struct {
+	Serial           string    `json:"serial"`
 	ID               string    `json:"event_id"`
 	Event            string    `json:"event"`
 	Host             string    `json:"host"`

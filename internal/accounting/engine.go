@@ -52,15 +52,17 @@ type State struct {
 	Identity                   *binding.Attribution
 }
 type Interval struct {
-	ID                string    `json:"usage_id"`
-	Key               [4]string `json:"session_key"`
-	Previous, Current [3]uint64
-	Upload            uint64               `json:"upload_delta_bytes"`
-	Download          uint64               `json:"download_delta_bytes"`
-	Seconds           uint64               `json:"interval_seconds"`
-	Received          time.Time            `json:"timestamp"`
-	Bits              int                  `json:"counter_bits"`
-	Identity          *binding.Attribution `json:"identity"`
+	// Original producer context survives shared-worker export; absent on legacy payloads.
+	Host, Location, CalledStation, NASPort string
+	ID                                     string    `json:"usage_id"`
+	Key                                    [4]string `json:"session_key"`
+	Previous, Current                      [3]uint64
+	Upload                                 uint64               `json:"upload_delta_bytes"`
+	Download                               uint64               `json:"download_delta_bytes"`
+	Seconds                                uint64               `json:"interval_seconds"`
+	Received                               time.Time            `json:"timestamp"`
+	Bits                                   int                  `json:"counter_bits"`
+	Identity                               *binding.Attribution `json:"identity"`
 }
 
 var macRE = regexp.MustCompile(`^[0-9a-f]{12}$`)
@@ -227,5 +229,5 @@ func Apply(s State, e Event) (State, *Interval, string) {
 	if e.Upload < prev[1] || e.Download < prev[2] {
 		return s, nil, "counter_reset"
 	}
-	return s, &Interval{ID: usageID(e.Key, prev, cur), Key: e.Key, Previous: prev, Current: cur, Upload: e.Upload - prev[1], Download: e.Download - prev[2], Seconds: e.Duration - prev[0], Received: e.Received, Bits: s.Bits, Identity: s.Identity}, "interval"
+	return s, &Interval{ID: usageID(e.Key, prev, cur), Key: e.Key, Previous: prev, Current: cur, Upload: e.Upload - prev[1], Download: e.Download - prev[2], Seconds: e.Duration - prev[0], Received: e.Received, Bits: s.Bits, Identity: s.Identity, Host: e.Host, Location: e.Location, CalledStation: e.CalledStation, NASPort: e.NASPort}, "interval"
 }

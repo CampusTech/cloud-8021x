@@ -76,6 +76,9 @@ func InventoryEnricher(key []byte, snapshots *domain.SnapshotStore, maxAge time.
 			return
 		}
 		if m := view.MetadataFor(attribution.DeviceID); m != nil {
+			if m.Serial != "" {
+				e.Serial = m.Serial
+			}
 			if m.Owner != "" {
 				e.DeviceOwner = m.Owner
 			}

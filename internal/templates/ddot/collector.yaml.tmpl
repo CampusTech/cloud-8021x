@@ -1,0 +1,74 @@
+# DDOT 7.82.0 / Collector 0.155.0. Ordinary telemetry is not a durable receipt.
+extensions:
+  file_storage/accounting:
+    directory: {{quote .QueueDirectory}}
+    fsync: true
+    compaction:
+      directory: {{quote .QueueDirectory}}
+  ddflare:
+    endpoint: 127.0.0.1:7777
+receivers:
+  otlp/ordinary:
+    protocols:
+      http: {endpoint: 127.0.0.1:4318}
+      grpc: {endpoint: 127.0.0.1:4317}
+  otlp/business:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4319
+        max_request_body_size: 1048576
+processors:
+  batch/ordinary:
+    send_batch_size: 256
+    send_batch_max_size: 256
+    timeout: 1s
+  transform/business:
+    error_mode: propagate
+    log_statements:
+      - context: resource
+        statements:
+          - set(attributes["service.name"], "radius-auth") where attributes["business.category"] == "auth"
+          - set(attributes["service.name"], "radius-acct") where attributes["business.category"] == "accounting"
+          - set(attributes["service.name"], "radius-usage") where attributes["business.category"] == "usage"
+exporters:
+  # DDOT's datadog logs exporter acknowledges an in-memory Agent channel and
+  # hardcodes default retries. It MUST NOT be used for the durable business path.
+  datadog/ordinary:
+    api: {key: "${env:DD_API_KEY}", site: {{quote .Site}}}
+    host_metadata: {enabled: false}
+  otlp_http/business:
+    logs_endpoint: {{quote .LogsEndpoint}}
+    headers: {dd-api-key: "${env:DD_API_KEY}"}
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      sizer: bytes
+      queue_size: {{.QueueBytes}}
+      block_on_overflow: false
+      wait_for_result: false
+      storage: file_storage/accounting
+service:
+  extensions: [file_storage/accounting, ddflare]
+  pipelines:
+    logs/business:
+      receivers: [otlp/business]
+      processors: [transform/business]
+      exporters: [otlp_http/business]
+    logs/ordinary:
+      receivers: [otlp/ordinary]
+      processors: [batch/ordinary]
+      exporters: [datadog/ordinary]
+    traces/ordinary:
+      receivers: [otlp/ordinary]
+      processors: [batch/ordinary]
+      exporters: [datadog/ordinary]
+    metrics/ordinary:
+      receivers: [otlp/ordinary]
+      processors: [batch/ordinary]
+      exporters: [datadog/ordinary]

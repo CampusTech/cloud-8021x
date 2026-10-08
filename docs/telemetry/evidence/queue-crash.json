@@ -1,0 +1,17 @@
+{
+  "version": "7.82.0",
+  "collector": "v0.155.0",
+  "acknowledged_before_kill": 2,
+  "received_after_restart": 2,
+  "blocked_sink_attempts": 5,
+  "overflow": {
+    "status": 503,
+    "body": "{\"code\":14, \"message\":\"sending queue is full\"}"
+  },
+  "queue_files": [
+    "exporter_otlp_http_business_logs"
+  ],
+  "hard_kill": "SIGKILL",
+  "encoding": "protobuf",
+  "no_daemon_resend": true
+}

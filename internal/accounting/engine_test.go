@@ -184,3 +184,19 @@ func TestUsageIDLegacyStringEscaping(t *testing.T) {
 		})
 	}
 }
+
+func TestIntervalRetainsOriginalProducerContext(t *testing.T) {
+	e := Event{Key: [4]string{"192.0.2.1", "192.0.2.2", "aabbccddeeff", "session"}, Status: "Interim-Update", Duration: 20, Upload: 200, Download: 300, Bits: 64, Marked: true, Received: time.Now(), Host: "origin", Location: "nyc", CalledStation: "aa:bb:cc:dd:ee:ff:ssid", NASPort: "19"}
+	s := State{Initialized: true, Duration: 10, Upload: 100, Download: 100, Bits: 64, Marked: true, LastSeen: e.Received.Add(-time.Minute)}
+	_, interval, _ := Apply(s, e)
+	if interval == nil || interval.Host != e.Host || interval.Location != e.Location || interval.CalledStation != e.CalledStation || interval.NASPort != e.NASPort {
+		t.Fatalf("lost producer context: %+v", interval)
+	}
+	id := interval.ID
+	e.Host = "another"
+	e.Location = "other"
+	_, other, _ := Apply(s, e)
+	if other == nil || other.ID != id {
+		t.Fatal("display context changed semantic usage ID")
+	}
+}

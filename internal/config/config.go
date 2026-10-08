@@ -194,6 +194,8 @@ type Database struct {
 	QueryTimeout        time.Duration `yaml:"query_timeout"`
 }
 type Telemetry struct {
+	// BusinessEndpoint is a separate synchronous HTTP/protobuf durable receiver.
+	BusinessEndpoint string        `yaml:"business_endpoint"`
 	Enabled          bool          `yaml:"enabled"`
 	Endpoint         string        `yaml:"endpoint"`
 	Transport        string        `yaml:"transport"`
@@ -258,7 +260,7 @@ func Defaults() Config {
 		Policy:      Policy{IdentityMode: "fingerprint", InventoryMaxAge: time.Hour, CertificateMaxAge: 24 * time.Hour, HandoffMaxAge: 120 * time.Second, ClassMaxAge: 30 * 24 * time.Hour},
 		Network:     Network{Discovery: Discovery{MaxAge: 15 * time.Minute}},
 		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
-		Telemetry:   Telemetry{Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
+		Telemetry:   Telemetry{BusinessEndpoint: "http://127.0.0.1:4319", Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
 		CA:          CA{Provider: "step-ca"},
 		Backends:    Backends{RadiusVerifyLeafDir: "/run/radius-verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
 		Paths:       Paths{StateDir: "/var/lib/cloud-8021x", CacheDir: "/var/cache/cloud-8021x", HandoffDir: "/run/radius-certificate-bindings", InventoryFile: "/var/lib/cloud-8021x/inventory.json", MetadataFile: "/var/lib/cloud-8021x/metadata.json", AuthLogDir: "/var/log/freeradius/auth", AccountingSpoolDir: "/var/log/freeradius/radacct", DowngradeGuardFile: "/var/lib/cloud-8021x/fingerprint-enforced", LegacyStateDir: "/var/lib/fleet-radius"},
@@ -580,8 +582,11 @@ func (c Config) Validate() error {
 	if math.IsNaN(t.TraceSampleRatio) || t.TraceSampleRatio < 0 || t.TraceSampleRatio > 1 || t.QueueSize < 1 || t.QueueSize > 65536 || !duration(t.Timeout, time.Minute) || !duration(t.ShutdownTimeout, time.Minute) {
 		return errors.New("telemetry sampling, queue or timeout out of bounds")
 	}
-	if t.Enabled {
-		u, e := url.Parse(t.Endpoint)
+	for index, endpoint := range []string{t.BusinessEndpoint, t.Endpoint} {
+		if index == 1 && !t.Enabled {
+			continue
+		}
+		u, e := url.Parse(endpoint)
 		if e != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 			return errors.New("telemetry requires a credential-free HTTP(S) endpoint")
 		}

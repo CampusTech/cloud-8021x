@@ -216,3 +216,18 @@ func TestBrokerWildcardCollidesWithCanonicalWebhookBinding(t *testing.T) {
 		t.Fatalf("different broker port rejected: %v", err)
 	}
 }
+
+func TestDedicatedBusinessTelemetryEndpoint(t *testing.T) {
+	c, err := Decode(strings.NewReader(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Telemetry.BusinessEndpoint != "http://127.0.0.1:4319" {
+		t.Fatal("missing durable endpoint")
+	}
+	for _, endpoint := range []string{"http://example.com:4319", "https://user:secret@example.com", "https://example.com?secret=x"} {
+		if _, err = Decode(strings.NewReader(validYAML + "telemetry:\n  business_endpoint: " + endpoint + "\n")); err == nil {
+			t.Fatal("unsafe business endpoint accepted")
+		}
+	}
+}

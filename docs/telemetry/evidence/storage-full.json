@@ -1,0 +1,9 @@
+{
+  "storage_failure": "ENOSPC",
+  "failed_handoff": {
+    "status": 503,
+    "body": "{\"code\":14, \"message\":\"write /task7/queue/exporter_otlp_http_business_logs: no space left on device\"}"
+  },
+  "queue_capacity_bytes": 10485760,
+  "filesystem_bytes": 65536
+}
