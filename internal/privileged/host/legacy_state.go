@@ -33,7 +33,7 @@ func readLegacyStateComponent(key string, uid int) (*migration.LegacyFile, error
 	if !ok {
 		return nil, errors.New("unknown legacy component")
 	}
-	parent, e := parentDescriptor(path, uid, false)
+	parent, e := stateParentDescriptor(path, uid)
 	if errors.Is(e, unix.ENOENT) {
 		return nil, nil
 	}
@@ -110,7 +110,7 @@ func CaptureLegacyState(id, node string, class []byte) ([]byte, error) {
 		}
 	}
 	b.UsageAbsent = components["usage"] == nil
-	guard, e := Snapshot(File{Path: legacyDowngradeGuard})
+	guard, e := snapshotState(File{Path: legacyDowngradeGuard})
 	if e != nil {
 		return nil, e
 	}

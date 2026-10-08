@@ -56,7 +56,7 @@ func TestPrivateLeafHandoffExactHashExclusiveAndSingleUse(t *testing.T) {
 	if err := h.Record(path, token, nil, now); err == nil {
 		t.Fatal("overwritten")
 	}
-	cert, err := h.Consume(token, now.Add(time.Millisecond))
+	cert, err := h.Consume(token, f.ModTime().Add(time.Millisecond))
 	digest := sha256.Sum256([]byte("verified DER"))
 	if err != nil || !cert.Valid() || cert.Fingerprint() != hex.EncodeToString(digest[:]) {
 		t.Fatal(cert, err)

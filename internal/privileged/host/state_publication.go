@@ -71,14 +71,14 @@ func validatePublicationFiles(p StatePublication, data []byte) error {
 	if e != nil {
 		return e
 	}
-	snapshot, e := Snapshot(File{Path: daemonPolicySnapshot, UID: accounts.RuntimeUID})
+	snapshot, e := snapshotState(File{Path: daemonPolicySnapshot, UID: accounts.RuntimeUID})
 	if e != nil {
 		return e
 	}
 	if !snapshot.Exists || !bytes.Equal(snapshot.Data, b.Policy) {
 		return errors.New("local authorization snapshot differs from original staged state")
 	}
-	guard, e := Snapshot(File{Path: legacyDowngradeGuard, UID: accounts.RuntimeUID})
+	guard, e := snapshotState(File{Path: legacyDowngradeGuard, UID: accounts.RuntimeUID})
 	if e != nil {
 		return e
 	}
@@ -161,13 +161,21 @@ func PublishCapturedState(p StatePublication, data []byte) error {
 	if e != nil {
 		return e
 	}
-	if e = privateWrite(filepath.Join(dir, "published-bundle.json"), data, 0600); e != nil {
+	if _, e = readPrivateCache(filepath.Join(dir, "published-bundle.json"), 96<<20); errors.Is(e, os.ErrNotExist) {
+		if e = privateWrite(filepath.Join(dir, "published-bundle.json"), data, 0600); e != nil {
+			return e
+		}
+	} else if e != nil {
 		return e
 	}
 	if e = syncWriterDirectory(dir); e != nil {
 		return e
 	}
-	if e = privateWrite(filepath.Join(dir, "publication-complete.json"), original, 0600); e != nil {
+	if _, e = readPrivateCache(filepath.Join(dir, "publication-complete.json"), 4096); errors.Is(e, os.ErrNotExist) {
+		if e = privateWrite(filepath.Join(dir, "publication-complete.json"), original, 0600); e != nil {
+			return e
+		}
+	} else if e != nil {
 		return e
 	}
 	return syncWriterDirectory(dir)

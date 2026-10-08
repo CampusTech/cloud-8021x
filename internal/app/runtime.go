@@ -40,7 +40,7 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 
 // Runtime dispatch keeps privileged actions separate from unprivileged service ownership.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
-	if (o.Incoming || o.FenceOnly) && op != OperationBootstrap {
+	if (o.Incoming && op != OperationBootstrap) || (o.FenceOnly && op != OperationBootstrap && op != OperationStateExport) {
 		return errors.New("incoming release selector is bootstrap-only")
 	}
 	if err := ctx.Err(); err != nil {
@@ -52,8 +52,14 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	if op == OperationDoctor || op == OperationMetricsEmit {
 		return diagnostics(ctx, op, cfg, o)
 	}
+	if op == OperationStateRecoverAuth {
+		return protectedAuthRecovery(ctx, cfg, o)
+	}
 	if op == OperationStateRecoverCollection {
 		return protectedLegacyRecovery(ctx, cfg, o)
+	}
+	if op == OperationStateExport {
+		return protectedStateExport(ctx, cfg, o)
 	}
 	if op == OperationStateMigrate {
 		return protectedStateMigrate(ctx, cfg, o)

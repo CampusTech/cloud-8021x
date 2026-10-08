@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -77,6 +78,10 @@ func parentDescriptor(path string, owner int, create bool) (int, error) {
 	if !AllowedFile(path) {
 		return -1, errors.New("unapproved installed file")
 	}
+	return openParentDescriptor(path, owner, create)
+}
+
+func openParentDescriptor(path string, owner int, create bool) (int, error) {
 	fd, e := unix.Open("/", unix.O_DIRECTORY|unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if e != nil {
 		return -1, e
@@ -93,7 +98,7 @@ func parentDescriptor(path string, owner int, create bool) (int, error) {
 		next, e := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		_ = unix.Close(fd)
 		if e != nil {
-			return -1, errors.New("unsafe installed directory")
+			return -1, fmt.Errorf("unsafe installed directory: %w", e)
 		}
 		fd = next
 		var st unix.Stat_t
@@ -104,10 +109,29 @@ func parentDescriptor(path string, owner int, create bool) (int, error) {
 	}
 	return fd, nil
 }
+
+// stateParentDescriptor is read-only: these inputs never enter AllowedFile.
+func stateParentDescriptor(path string, owner int) (int, error) {
+	allowed := path == daemonPolicySnapshot || path == legacyDowngradeGuard || path == "/var/lib/cloud-8021x/metadata.json" || path == "/var/lib/cloud-8021x/sources-candidate.json" || path == "/var/lib/cloud-8021x-source-state/state.json"
+	for _, fixed := range legacyStatePaths {
+		allowed = allowed || path == fixed
+	}
+	allowed = allowed || (filepath.Dir(path) == "/var/cache/cloud-8021x/runtime" && regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$`).MatchString(filepath.Base(path)))
+	if !allowed || filepath.Clean(path) != path {
+		return -1, errors.New("unapproved state input")
+	}
+	return openParentDescriptor(path, owner, false)
+}
+func snapshotState(file File) (SavedFile, error) {
+	return snapshotUsing(file, stateParentDescriptor)
+}
 func Snapshot(file File) (SavedFile, error) {
+	return snapshotUsing(file, func(path string, owner int) (int, error) { return parentDescriptor(path, owner, false) })
+}
+func snapshotUsing(file File, parent func(string, int) (int, error)) (SavedFile, error) {
 	saved := SavedFile{File: file, ReplacementUID: file.UID}
 	saved.Data = nil
-	dir, e := parentDescriptor(file.Path, file.UID, false)
+	dir, e := parent(file.Path, file.UID)
 	if e != nil {
 		return saved, e
 	}

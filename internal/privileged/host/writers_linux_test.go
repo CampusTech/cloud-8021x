@@ -165,6 +165,83 @@ func TestInstalledLegacyWriterFenceRetainsAndRestoresExactFiles(t *testing.T) {
 	if e = os.Rename(radiusParent+"/fixture-prior", radiusDirectory); e != nil {
 		t.Fatal(e)
 	}
+	// A copied rollback changes directory inodes. Only the exact completed
+	// transaction and original manifest may add a new protected observation.
+	rollback, e := BeginTransaction(func(string) error { return nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = rollback.BindWriterRetirement(id, nil); e != nil {
+		t.Fatal(e)
+	}
+	if e = rollback.snapshotRadius(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(radiusDirectory, radiusParent+"/fixture-before-copy"); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Mkdir(radiusDirectory, 0755); e != nil {
+		t.Fatal(e)
+	}
+	rollback.receipt.TreeSwapped = true
+	if e = rollback.restoreRadius(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
+		t.Fatal("unrecorded copy accepted")
+	}
+	if e = rollback.recordRollbackLineage(); e != nil {
+		t.Fatal(e)
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
+		t.Fatal("unfinished rollback accepted")
+	}
+	if e = rollback.persist("rolled-back"); e != nil {
+		t.Fatal(e)
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e != nil {
+		t.Fatal("completed exact copied rollback rejected", e)
+	}
+	originalDirectoryInfo, e := os.Stat(radiusDirectory)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(radiusDirectory+"/foreign.py", []byte("foreign"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
+		t.Fatal("mutated rollback tree accepted")
+	}
+	if e = os.Remove(radiusDirectory + "/foreign.py"); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Chtimes(radiusDirectory, originalDirectoryInfo.ModTime(), originalDirectoryInfo.ModTime()); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Chmod(legacyVLANModule, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
+		t.Fatal("mutated rollback metadata accepted")
+	}
+	if e = os.Chmod(legacyVLANModule, 0644); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(radiusDirectory, radiusParent+"/fixture-observed-copy"); e != nil {
+		t.Fatal(e)
+	}
+	if output, e := exec.Command("/usr/bin/cp", "--archive", "--", radiusParent+"/fixture-observed-copy", radiusDirectory).CombinedOutput(); e != nil {
+		t.Fatal(e, string(output))
+	}
+	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
+		t.Fatal("arbitrary exact-byte copy reused stale tuple observation")
+	}
+	if e = os.RemoveAll(radiusDirectory); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(radiusParent+"/fixture-observed-copy", radiusDirectory); e != nil {
+		t.Fatal(e)
+	}
 	if err = restoreLegacyWriterFiles(id, run); err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +373,25 @@ func TestInstalledLegacyWriterInterruptedRecovery(t *testing.T) {
 	if e = os.WriteFile(p, inertHelper, 0755); e != nil {
 		t.Fatal(e)
 	}
+	before, e := os.Stat(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	lastUnit := writerUnitPaths(legacyWriterUnits)[len(legacyWriterUnits)-1]
+	badTemp := filepath.Join(filepath.Dir(lastUnit), ".cloud8021x-mask-"+filepath.Base(lastUnit))
+	if e = os.Symlink("/etc/passwd", badTemp); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = recoverLegacyWriterFence(context.Background(), id, "radius-primary", hash, run); e == nil {
+		t.Fatal("late foreign temporary accepted")
+	}
+	afterRejected, e := os.Stat(p)
+	if e != nil || !os.SameFile(before, afterRejected) {
+		t.Fatal("recovery mutated files before complete temporary validation")
+	}
+	if e = os.Remove(badTemp); e != nil {
+		t.Fatal(e)
+	}
 	got, e := recoverLegacyWriterFence(context.Background(), id, "radius-primary", hash, run)
 	if e != nil || got != digestBytes(original) {
 		t.Fatal("exact interrupted recovery", got, e)
@@ -336,4 +432,13 @@ func TestInstalledLegacyWriterRecoversExactStaleMaskTemporary(t *testing.T) {
 	if e := maskWriterUnit(path); e == nil {
 		t.Fatal("foreign temporary accepted")
 	}
+}
+
+func mustWriterReceipt(t *testing.T, id string) writerReceipt {
+	t.Helper()
+	r, _, e := loadWriterReceipt(id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r
 }

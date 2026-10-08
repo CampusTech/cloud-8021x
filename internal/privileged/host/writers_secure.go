@@ -380,6 +380,12 @@ func writerDirectoryMode(d writerDirectory, nativeUID int) uint32 {
 
 // Read every recorded live directory binding before restoration writes any file.
 func verifyWriterLineage(r writerReceipt) error {
+	if e := verifyWriterLineageExact(r); e == nil {
+		return nil
+	}
+	return verifyRollbackLineage(r)
+}
+func verifyWriterLineageExact(r writerReceipt) error {
 	for _, d := range r.Directories {
 		parent, e := writerParent(d.Path, 0)
 		if e != nil {

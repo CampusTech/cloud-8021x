@@ -25,6 +25,7 @@ const (
 	OperationCertificatesRenew      Operation = "certificates renew"
 	OperationRadiusVerifyLeaf       Operation = "radius verify-leaf"
 	OperationSourcesApply           Operation = "sources apply"
+	OperationStateRecoverAuth       Operation = "state recover-auth"
 	OperationStateRecoverCollection Operation = "state recover-collection"
 	OperationStateFence             Operation = "state fence"
 	OperationStateMigrate           Operation = "state migrate"
@@ -37,21 +38,23 @@ const (
 var ErrUnsupported = errors.New("operation is not implemented")
 
 type RunOptions struct {
-	LegacyGuardID         string
-	LegacyExecutionID     string
-	MaintenanceAttempt    int64
-	SourceWorkID          string
-	SourceGeneration      int64
-	Version               string
-	Incoming              bool
-	FenceOnly             bool
-	SourceCandidateSHA256 string
-	ConfigFile            string
-	VerifiedLeaf          *VerifiedLeafOptions
-	Debug                 bool
-	DryRun                bool
-	Output                io.Writer
-	Logger                *logrus.Logger
+	AuthFilename, AuthRangeSHA256 string
+	AuthOffset                    int64
+	LegacyGuardID                 string
+	LegacyExecutionID             string
+	MaintenanceAttempt            int64
+	SourceWorkID                  string
+	SourceGeneration              int64
+	Version                       string
+	Incoming                      bool
+	FenceOnly                     bool
+	SourceCandidateSHA256         string
+	ConfigFile                    string
+	VerifiedLeaf                  *VerifiedLeafOptions
+	Debug                         bool
+	DryRun                        bool
+	Output                        io.Writer
+	Logger                        *logrus.Logger
 }
 type Services interface {
 	Run(context.Context, Operation, config.Config, RunOptions) error
@@ -131,6 +134,8 @@ func NewCommand(options Options) *cobra.Command {
 		var leaf VerifiedLeafOptions
 		var sourceDigest string
 		var legacyGuardID, legacyExecutionID string
+		var authFilename, authRangeSHA256 string
+		var authOffset int64
 		cmd := &cobra.Command{Use: name, Short: string(op), Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := load(cmd)
 			if err != nil {
@@ -140,16 +145,27 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{AuthFilename: authFilename, AuthRangeSHA256: authRangeSHA256, AuthOffset: authOffset, LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
 			}
 			return options.Services.Run(cmd.Context(), op, cfg, run)
 		}}
+		if op == OperationStateRecoverAuth {
+			cmd.Flags().StringVar(&authFilename, "file", "", "Exact native auth basename")
+			cmd.Flags().StringVar(&authRangeSHA256, "sha256", "", "Exact original malformed record digest; dry-run can inspect it")
+			cmd.Flags().Int64Var(&authOffset, "offset", 0, "Exact committed malformed byte offset")
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove exact already-committed quarantine after lost acknowledgement")
+		}
 		if op == OperationStateRecoverCollection {
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove only the retained committed original terminal resolution")
 			cmd.Flags().StringVar(&legacyGuardID, "guard", "", "Exact imported legacy pending guard digest")
 			cmd.Flags().StringVar(&legacyExecutionID, "execution-id", "", "Original Windows execution identity hint, verified against retained nonce and script")
+		}
+		if op == OperationStateExport {
+			cmd.Flags().BoolVar(&fenceOnly, "fence-only", false, "Revoke shared work and physically fence this node for cold rollback")
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume only the exact interrupted export-fence attempt")
 		}
 		if op == OperationStateMigrate {
 			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Continue exact original committed bundle publication after helper exit proof")
@@ -220,7 +236,7 @@ func NewCommand(options Options) *cobra.Command {
 		{"state", []struct {
 			name string
 			op   Operation
-		}{{"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
+		}{{"recover-auth", OperationStateRecoverAuth}, {"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
 	} {
 		parent := &cobra.Command{Use: group.name}
 		for _, a := range group.actions {

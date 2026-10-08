@@ -291,16 +291,10 @@ func DecodeBundle(raw []byte) (Bundle, error) {
 			}
 		}
 	}
-	// Readiness is explanatory, never certificate authority. Preserve its exact
-	// legacy report while bounding and validating required original observation.
-	if len(b.Readiness) > 0 {
-		var r map[string]json.RawMessage
-		if domain.DecodeJSONStrict(b.Readiness, &r) != nil || len(r) > 32 {
-			return bad()
-		}
-		if _, e := ReceiptTime(r["updated_at"]); e != nil {
-			return bad()
-		}
+	// This explanatory report retains the exact Python version-one shape and
+	// original observation. It never grants certificate authorization.
+	if len(b.Readiness) > 0 && validateReadiness(b.Readiness) != nil {
+		return bad()
 	}
 	return b, nil
 }

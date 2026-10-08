@@ -269,19 +269,23 @@ func protectedLegacyRecovery(ctx context.Context, cfg config.Config, o RunOption
 	if e != nil {
 		return e
 	}
-	gate := postgres.MaintenanceGate{Store: repository}
-	return gate.With(ctx, "legacy-collection:"+o.LegacyGuardID, func(ctx context.Context) error {
-		guard, e := repository.LegacyCollectionGuard(ctx, o.LegacyGuardID)
-		if e != nil {
-			return e
-		}
-		if guard.State == "resolved" {
-			return nil
-		}
-		proof, e := client.RecoverLegacyCommand(ctx, guard.Source, guard.HostUUID, guard.Host, guard.Command, o.LegacyExecutionID)
-		if e != nil {
-			return e
-		}
-		return repository.ResolveLegacyCollection(ctx, o.LegacyGuardID, proof)
-	})
+	unlock, e := host.AcquireWriterOperation()
+	if e != nil {
+		return e
+	}
+	defer unlock()
+	node, hash, e := transitionBinding(cfg)
+	if e != nil {
+		return e
+	}
+	operation := "legacy-collection:" + stateDigest([]byte(cfg.StateTransition+":"+node+":"+hash+":"+o.LegacyGuardID+":"+o.LegacyExecutionID))
+	if o.MaintenanceAttempt > 0 {
+		return repository.ReconcileMaintenance(ctx, o.MaintenanceAttempt, func(ctx context.Context, original postgres.MaintenanceEvidence) error {
+			if original.Operation != operation || original.Installation != "" {
+				return errors.New("different original legacy resolution attempt")
+			}
+			return repository.LegacyCollectionResolved(ctx, o.LegacyGuardID)
+		})
+	}
+	return resolveLegacyGuard(ctx, repository, client, postgres.MaintenanceGate{Store: repository}, o.LegacyGuardID, operation, o.LegacyExecutionID)
 }

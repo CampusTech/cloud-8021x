@@ -231,3 +231,19 @@ func (s *countingCursorStore) Cursor(ctx context.Context, source string) (string
 	s.calls++
 	return s.memoryStore.Cursor(ctx, source)
 }
+
+func TestMalformedRangeRecoveryCannotSkipValidOrPartialEvents(t *testing.T) {
+	for _, raw := range []string{record, record + record, record[:len(record)-1]} {
+		if ValidateMalformedRange([]byte(raw)) == nil {
+			t.Fatal("accepted valid, multi-record, or partial quarantine")
+		}
+	}
+	bad := strings.Replace(record, "C8021X-Receipt = 1791453600", "C8021X-Receipt = invalid", 1)
+	if e := ValidateMalformedRange([]byte(bad)); e != nil {
+		t.Fatal(e)
+	}
+	bad = strings.Replace(record, "C8021X-Client", "Unknown-Attribute", 1)
+	if e := ValidateMalformedRange([]byte(bad)); e != nil {
+		t.Fatal(e)
+	}
+}

@@ -6,11 +6,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"math"
 	"math/big"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -211,12 +209,18 @@ func ReceiptTime(raw []byte) (time.Time, error) {
 		}
 		text = s
 	}
-	value, e := strconv.ParseFloat(text, 64)
-	if e != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < -62135596800 || value > 253402300799 {
+
+	if len(text) > 128 || !regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$`).MatchString(text) {
 		return time.Time{}, errors.New("invalid receipt")
 	}
-	whole, fraction := math.Modf(value)
-	return time.Unix(int64(whole), int64(fraction*1e9)).UTC(), nil
+	value, ok := new(big.Rat).SetString(text)
+	if !ok || value.Cmp(new(big.Rat).SetInt64(-62135596800)) < 0 || value.Cmp(new(big.Rat).SetInt64(253402300799)) > 0 {
+		return time.Time{}, errors.New("invalid receipt")
+	}
+	whole := new(big.Int).Quo(value.Num(), value.Denom())
+	remainder := new(big.Int).Rem(value.Num(), value.Denom())
+	nanos := new(big.Int).Quo(new(big.Int).Mul(remainder, big.NewInt(1e9)), value.Denom())
+	return time.Unix(whole.Int64(), nanos.Int64()).UTC(), nil
 }
 func exactCounter(raw []byte) (uint64, error) {
 	text := string(raw)

@@ -190,6 +190,9 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 }
 func finishWriterFence(ctx context.Context, directory string, receipt writerReceipt, data []byte, run commandRunner, probe func() error) (string, error) {
 	var err error
+	if err = validateMaskTemporaries(writerUnitPaths(legacyWriterUnits)); err != nil {
+		return "", err
+	}
 	// Snapshots are now durable. A crash from here is uncertain and cannot silently
 	// overwrite these originals on the next run.
 	if err = protectWriterLineage(receipt, false); err != nil {
@@ -427,6 +430,19 @@ func restoreLegacyWriterFiles(id string, run commandRunner) error {
 		return e
 	}
 	defer unlock()
+	// Verification above may have consumed a completed copied-rollback binding.
+	// Preserve original restore owners/modes, using only the now-proven tuples.
+	if e = verifyWriterLineage(receipt); e != nil {
+		return e
+	}
+	current, _, e := snapshotWriterLineage()
+	if e != nil || len(current) != len(receipt.Directories) {
+		return errors.New("restore lineage unavailable")
+	}
+	for i := range receipt.Directories {
+		receipt.Directories[i].Device = current[i].Device
+		receipt.Directories[i].Inode = current[i].Inode
+	}
 	for _, saved := range receipt.Files {
 		if !legacyWriterFile(saved.Path) {
 			return errors.New("unrecognized writer rollback path")
@@ -457,4 +473,30 @@ func restoreLegacyWriterFiles(id string, run commandRunner) error {
 	}
 	_, e = run(context.Background(), "/usr/bin/systemctl", "daemon-reload")
 	return e
+}
+
+// Check the complete fixed unit allowlist before any protection, file write or
+// native stop. Even an already masked unit may have an unknown stale temporary.
+func validateMaskTemporaries(paths []string) error {
+	for _, path := range paths {
+		dir, e := parentDescriptor(path, 0, false)
+		if e != nil {
+			return e
+		}
+		name := ".cloud8021x-mask-" + filepath.Base(path)
+		var st unix.Stat_t
+		e = unix.Fstatat(dir, name, &st, unix.AT_SYMLINK_NOFOLLOW)
+		_ = unix.Close(dir)
+		if errors.Is(e, unix.ENOENT) {
+			continue
+		}
+		if e != nil {
+			return e
+		}
+		target, e := os.Readlink(filepath.Join(filepath.Dir(path), name))
+		if e != nil || target != "/dev/null" || st.Mode&unix.S_IFMT != unix.S_IFLNK || st.Uid != 0 || st.Gid != 0 {
+			return errors.New("unknown interrupted mask temporary")
+		}
+	}
+	return nil
 }

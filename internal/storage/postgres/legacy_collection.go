@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/CampusTech/cloud-8021x/internal/adapters/fleet"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
@@ -38,7 +39,7 @@ func (s *Store) ResolveLegacyCollection(ctx context.Context, id string, evidence
 		return errors.New("protected legacy recovery required")
 	}
 	raw, e := json.Marshal(evidence)
-	if e != nil || len(raw) > 1<<20 || evidence.HostID == 0 || (evidence.Outcome != "terminal" && evidence.Outcome != "absent") {
+	if e != nil || len(raw) > 1<<20 || evidence.HostID == 0 || evidence.Outcome != "terminal" {
 		return errors.New("invalid authenticated terminal evidence")
 	}
 	ctx, cancel := s.bounded(ctx)
@@ -57,6 +58,27 @@ func (s *Store) ResolveLegacyCollection(ctx context.Context, id string, evidence
 	}
 	if e = commit(ctx, tx); e != nil {
 		return ErrUncertain
+	}
+	return nil
+}
+
+// Proof-only recovery of an already committed resolution. No new evidence,
+// submission, certificate observation or guard state is written here.
+func (s *Store) LegacyCollectionResolved(ctx context.Context, id string) error {
+	if !transitionDigest.MatchString(id) {
+		return errors.New("invalid original guard ID")
+	}
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	var state, uuid, command string
+	var hostID string
+	var raw []byte
+	if e := s.pool.QueryRow(ctx, `SELECT state,host_uuid,command_uuid,host_id::text,evidence FROM ledger.legacy_collection_guards WHERE id=$1`, id).Scan(&state, &uuid, &command, &hostID, &raw); e != nil {
+		return safeError(e)
+	}
+	var proof fleet.LegacyRecoveryEvidence
+	if state != "resolved" || len(raw) > 1<<20 || domain.DecodeJSONStrict(raw, &proof) != nil || strconv.FormatUint(proof.HostID, 10) != hostID || proof.HostUUID != uuid || proof.CommandUUID != command || proof.Outcome != "terminal" || len(proof.Response) == 0 || string(proof.Response) == "null" {
+		return errors.New("exact retained terminal resolution not proven")
 	}
 	return nil
 }

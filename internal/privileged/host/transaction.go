@@ -62,16 +62,17 @@ const radiusDirectory = radiusParent + "/3.0"
 // Packaged root-owned symlinks are retained in that tree, never followed/rewritten.
 // Private backups remain root-only; neither daemon nor native roles can read them.
 type Receipt struct {
-	WriterRetirement *writerRetirement `json:"writer_retirement,omitempty"`
-	PackageBarrier   bool              `json:"package_barrier"`
-	WasRunning       bool              `json:"was_running"`
-	ID               string            `json:"id"`
-	Phase            string            `json:"phase"`
-	HadRadius        bool              `json:"had_radius"`
-	TreeSaved        bool              `json:"tree_saved"`
-	TreeSwapped      bool              `json:"tree_swapped"`
-	Packages         *PackagePlan      `json:"packages,omitempty"`
-	Files            []SavedFile       `json:"files"`
+	RadiusManifestSHA256 string            `json:"radius_manifest_sha256,omitempty"`
+	WriterRetirement     *writerRetirement `json:"writer_retirement,omitempty"`
+	PackageBarrier       bool              `json:"package_barrier"`
+	WasRunning           bool              `json:"was_running"`
+	ID                   string            `json:"id"`
+	Phase                string            `json:"phase"`
+	HadRadius            bool              `json:"had_radius"`
+	TreeSaved            bool              `json:"tree_saved"`
+	TreeSwapped          bool              `json:"tree_swapped"`
+	Packages             *PackagePlan      `json:"packages,omitempty"`
+	Files                []SavedFile       `json:"files"`
 }
 type Transaction struct {
 	committed       bool
@@ -362,6 +363,13 @@ func (t *Transaction) Rollback(ctx context.Context, b Activation, restart bool) 
 		}
 	}
 	if t.receipt.TreeSwapped || t.receipt.Packages != nil {
+		if t.receipt.WriterRetirement != nil && !activationStarted {
+			if backend, ok := b.(*RadiusBackend); ok {
+				if e := backend.Quiesce(ctx); e != nil {
+					return e
+				}
+			}
+		}
 		if e := t.restoreRadius(ctx); e != nil {
 			return e
 		}
@@ -373,6 +381,11 @@ func (t *Transaction) Rollback(ctx context.Context, b Activation, restart bool) 
 	}
 	if e := t.restoreLegacyOwnership(); e != nil {
 		return e
+	}
+	if t.receipt.TreeSwapped || t.receipt.Packages != nil {
+		if e := t.recordRollbackLineage(); e != nil {
+			return e
+		}
 	}
 	if t.receipt.WasRunning && t.rollbackBackend != nil && (activationStarted || (t.receipt.Packages != nil && t.receipt.Packages.Changed)) {
 		if e := t.rollbackBackend.Validate(ctx); e != nil {

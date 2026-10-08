@@ -249,3 +249,24 @@ func CurrentAuthGeneration() (string, error) {
 	generation, _, e := nativeAuthGeneration()
 	return generation, e
 }
+
+// InspectAuthQuarantine uses the same pinned native directory as the daemon.
+// Applying recovery requires independently proven native exit; inspection alone
+// is read-only and does not control service lifetime.
+func InspectAuthQuarantine(ctx context.Context, b *RadiusBackend, a Accounts, hostname, name string, offset int64, digest string, store auth.Store, stopped bool) (auth.MalformedRange, error) {
+	if stopped {
+		active, e := b.Running(ctx)
+		if e != nil || active {
+			return auth.MalformedRange{}, errors.New("native must already be proven stopped for malformed range recovery")
+		}
+		if e = proveNativeProcessesGone(a.NativeUID); e != nil {
+			return auth.MalformedRange{}, e
+		}
+	}
+	r, e := auth.New(auth.Options{Directory: authDirectory, Host: hostname, ProducerUID: a.NativeUID, EventGID: a.EventsGID, Store: store})
+	if e != nil {
+		return auth.MalformedRange{}, e
+	}
+	defer func() { _ = r.Close() }()
+	return r.InspectMalformed(ctx, name, offset, digest)
+}

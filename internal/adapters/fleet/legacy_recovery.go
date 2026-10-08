@@ -22,6 +22,7 @@ type LegacyRecoveryEvidence struct {
 }
 
 // RecoverLegacyCommand only reads the original fixed Fleet host/result resources.
+// A result 404 can mean retention deletion; it never proves non-submission.
 // Terminal evidence releases a reservation, never publishes certificate identity
 // or replaces an original observation with the time of this poll.
 func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, h migration.LegacyCertificateHost, command migration.LegacyCommand, hint string) (LegacyRecoveryEvidence, error) {
@@ -53,11 +54,7 @@ func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, 
 		}
 		var row windowsResult
 		e := c.request(ctx, "GET", "/api/v1/fleet/scripts/results/"+url.PathEscape(execution), nil, &row)
-		if errors.Is(e, errNotFound) && command.ExecutionID != "" {
-			evidence.Outcome = "absent"
-			evidence.Response = json.RawMessage(`{"status":404}`)
-			return evidence, nil
-		}
+
 		if e != nil {
 			return evidence, e
 		}
@@ -93,11 +90,7 @@ func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, 
 		Results []appleResult `json:"results"`
 	}
 	e := c.request(ctx, "GET", "/api/v1/fleet/commands/results?"+url.Values{"command_uuid": {command.UUID}}.Encode(), nil, &response)
-	if errors.Is(e, errNotFound) {
-		evidence.Outcome = "absent"
-		evidence.Response = json.RawMessage(`{"status":404}`)
-		return evidence, nil
-	}
+
 	if e != nil {
 		return evidence, e
 	}
