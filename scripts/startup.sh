@@ -2500,11 +2500,10 @@ fi
 # ---------------------------------------------------------------------------
 # 10b. Meraki AP name + network (site) name lookup (optional)
 #      For offices whose APs are Meraki-managed (the counterpart to the UniFi
-#      lookup above). Caches a BSSID -> AP-name map from the org-wide wireless
-#      SSID statuses endpoint. The Meraki BSSID
-#      is the exact MAC the AP advertises per SSID/band, so it matches the
-#      Called-Station-Id BSSID directly — no base-MAC offset arithmetic (unlike
-#      UniFi). Independent of and additive to the UniFi lookup.
+#      lookup above). Joins hardware MACs from device inventory to wireless
+#      statuses by serial and network ID, alongside exact advertised BSSIDs.
+#      NAS devices may report either MAC in Called-Station-Id. No offsets are
+#      guessed. Independent of and additive to the UniFi lookup.
 # ---------------------------------------------------------------------------
 if [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     echo "=== Configuring Meraki AP name lookup ==="
@@ -2525,81 +2524,176 @@ if [ "$HAS_MERAKI_LOOKUP" = "true" ]; then
     # Deploy the cache refresh script
     cat > /usr/local/bin/meraki-ap-cache.sh << 'MERAKICACHEEOF'
 #!/bin/bash
-# Fetches Meraki org-wide wireless SSID statuses, builds a BSSID -> AP name +
-# network (site) name cache. Called on boot and every 5 minutes via cron.
-# The cache spans the whole Meraki org (every network), so no network filter is
-# needed; the org-wide BSSID map covers all Meraki-managed offices.
+# Cache exact hardware MACs and advertised BSSIDs across all Meraki networks.
+# Refresh atomically only after both fully paginated API reads succeed.
 set -uo pipefail
-
 CRED_FILE="/etc/freeradius/3.0/meraki-credentials.json"
 CACHE_FILE="/etc/freeradius/3.0/meraki-ap-cache.json"
-
 [ -f "$CRED_FILE" ] || exit 0
-# Parse the JSON cred file with jq — never `source` it, so a key value with
-# shell metacharacters can't be executed. jq -e fails if a field is missing.
-MERAKI_API_KEY=$(jq -re '.api_key' "$CRED_FILE" 2>/dev/null) || exit 0
-MERAKI_ORG_ID=$(jq -re '.org_id' "$CRED_FILE" 2>/dev/null) || exit 0
+python3 - "$CRED_FILE" "$CACHE_FILE" << 'PYEOF'
+import json
+import os
+import re
+import sys
+import tempfile
+from urllib.parse import quote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-[ -n "$MERAKI_API_KEY" ] || exit 0
-[ -n "$MERAKI_ORG_ID" ] || exit 0
+API = 'https://api.meraki.com/api/v1'
+MAX_PAGES = 50
 
-API="https://api.meraki.com/api/v1"
-URL="$API/organizations/$MERAKI_ORG_ID/wireless/ssids/statuses/byDevice?perPage=500"
 
-# Page through the result set, following the RFC 5988 Link header's "next"
-# relation. Accumulate each page body for parsing below. Meraki emits the rel
-# value UNQUOTED (rel=next), unlike RFC 5988's quoted form (rel="next"), and the
-# last page omits "next" entirely — match both quoted and unquoted, optional
-# whitespace, so the loop terminates correctly either way.
-PAGES_DIR=$(mktemp -d)
-trap 'rm -rf "$PAGES_DIR"' EXIT
-page=0
-while [ -n "$URL" ]; do
-    HDR="$PAGES_DIR/h$page"
-    BODY="$PAGES_DIR/b$page"
-    curl -sf --connect-timeout 5 --max-time 20 \
-        -H "Authorization: Bearer $MERAKI_API_KEY" \
-        -H "Accept: application/json" \
-        -D "$HDR" -o "$BODY" \
-        "$URL" 2>/dev/null || exit 0
-    # Extract the next link: find <...>; rel=next (or rel="next") in the Link
-    # header and keep only the URL inside the angle brackets.
-    URL=$(grep -i '^link:' "$HDR" | grep -oE '<[^>]*>; *rel="?next"?' | grep -oE '<[^>]*>' | tr -d '<>' | head -n1)
-    page=$((page + 1))
-    [ "$page" -ge 50 ] && break  # safety cap (50 * 500 = 25k devices)
-done
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('Meraki API redirect rejected')
 
-python3 << PYEOF
-import glob, json, os
 
-by_bssid = {}
-for body in sorted(glob.glob(os.path.join("$PAGES_DIR", "b*"))):
+def checked_url(url, path):
+    parsed = urlsplit(url)
+    if (parsed.scheme != 'https' or parsed.hostname != 'api.meraki.com'
+            or parsed.port not in (None, 443) or parsed.username is not None
+            or parsed.password is not None or parsed.fragment or parsed.path != path):
+        raise ValueError('Unsafe Meraki pagination URL')
+    return url
+
+
+def fetch_pages(opener, url, key, envelope=False):
+    path = urlsplit(url).path
+    seen = set()
+    records = []
+    while url:
+        checked_url(url, path)
+        if url in seen or len(seen) >= MAX_PAGES:
+            raise ValueError('Incomplete Meraki pagination')
+        seen.add(url)
+        request = Request(url, headers={'Authorization': 'Bearer ' + key,
+                                        'Accept': 'application/json'})
+        with opener.open(request, timeout=20) as response:
+            page = json.load(response)
+            if envelope:
+                if not isinstance(page, dict) or 'items' not in page:
+                    raise ValueError('Missing Meraki page items envelope')
+                page = page['items']
+            if not isinstance(page, list) or any(not isinstance(item, dict) for item in page):
+                raise ValueError('Invalid Meraki page')
+            records.extend(page)
+            next_links = []
+            for header in response.headers.get_all('Link', []):
+                for link in header.split(','):
+                    match = re.fullmatch(r'\s*<([^>]+)>\s*((?:;[^,]*)?)\s*', link)
+                    if not match:
+                        raise ValueError('Malformed Meraki pagination link')
+                    relations = re.findall(r';\s*rel\s*=\s*(?:"([^"]*)"|([^;\s]+))', match[2], re.I)
+                    if any('next' in (quoted or bare).split() for quoted, bare in relations):
+                        next_links.append(match[1])
+            if len(next_links) > 1:
+                raise ValueError('Ambiguous Meraki pagination link')
+            url = next_links[0] if next_links else None
+    return records
+
+
+def normalized_mac(value):
+    if not isinstance(value, str):
+        return None
+    if not re.fullmatch(r'(?:[0-9a-fA-F]{12}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}|(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}|(?:[0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4})', value):
+        return None
+    return re.sub(r'[:.-]', '', value).upper()
+
+
+def add_unique(mapping, key, value):
+    # Keep a tombstone on collisions so a third record cannot reintroduce it.
+    if key not in mapping:
+        mapping[key] = value
+    elif mapping[key] != value:
+        mapping[key] = None
+
+
+def build_cache(devices, statuses):
+    hardware = {}
+    for device in devices:
+        serial, network_id = device.get('serial'), device.get('networkId')
+        mac = normalized_mac(device.get('mac'))
+        if isinstance(serial, str) and serial and isinstance(network_id, str) and network_id and mac:
+            add_unique(hardware, (serial, network_id), mac)
+    by_bssid, by_mac, status_identity = {}, {}, {}
+    bssid_owners, hardware_owners = {}, {}
+    status_entries = []
+    for device in statuses:
+        network = device.get('network') or {}
+        bssids = device.get('basicServiceSets') or []
+        if not isinstance(network, dict) or not isinstance(bssids, list):
+            raise ValueError('Invalid Meraki wireless status')
+        name, site = device.get('name'), network.get('name')
+        if not isinstance(name, str) or not name or not isinstance(site, str) or not site:
+            continue
+        entry = {'ap_name': name, 'site_name': site}
+        serial, network_id = device.get('serial'), network.get('id')
+        identity = (serial, network_id) if (isinstance(serial, str) and serial
+                   and isinstance(network_id, str) and network_id) else None
+        if identity:
+            add_unique(status_identity, identity, entry)
+            status_entries.append((identity, entry))
+        for bss in bssids:
+            if not isinstance(bss, dict):
+                raise ValueError('Invalid Meraki BSSID record')
+            mac = normalized_mac(bss.get('bssid'))
+            if mac:
+                add_unique(by_bssid, mac, entry)
+                add_unique(bssid_owners, mac, identity or (name, site))
+    for identity, entry in status_entries:
+        mac = hardware.get(identity)
+        if mac and status_identity.get(identity) == entry:
+            add_unique(by_mac, mac, entry)
+            add_unique(hardware_owners, mac, identity)
+    for mapping, owners in ((by_bssid, bssid_owners), (by_mac, hardware_owners)):
+        for mac, identity in owners.items():
+            if identity is None:
+                mapping[mac] = None
+    # A MAC may appear in either source; conflicting labels must not win by order.
+    for mac in by_mac.keys() & by_bssid.keys():
+        if (by_mac[mac] != by_bssid[mac]
+                or hardware_owners.get(mac) != bssid_owners.get(mac)):
+            by_mac[mac] = by_bssid[mac] = None
+    return {'by_bssid': {mac: entry for mac, entry in by_bssid.items() if entry},
+            'by_mac': {mac: entry for mac, entry in by_mac.items() if entry}}
+
+
+def refresh(credential_file, cache_file):
+    with open(credential_file) as stream:
+        credentials = json.load(stream)
+    key, org = credentials['api_key'], credentials['org_id']
+    if not isinstance(key, str) or not key or not isinstance(org, str) or not org:
+        raise ValueError('Invalid Meraki credentials')
+    base = API + '/organizations/' + quote(org, safe='')
+    opener = build_opener(NoRedirect())
+    devices = fetch_pages(opener, base + '/devices?perPage=500', key)
+    statuses = fetch_pages(opener, base + '/wireless/ssids/statuses/byDevice?perPage=500', key, envelope=True)
+    cache = build_cache(devices, statuses)
+    temporary = None
     try:
-        with open(body) as f:
-            page = json.load(f)
-    except Exception:
-        continue
-    # byDevice returns {"items": [...], "meta": {...}}. Tolerate a bare list too.
-    if isinstance(page, dict):
-        items = page.get("items", [])
-    elif isinstance(page, list):
-        items = page
-    else:
-        continue
-    for dev in items:
-        ap_name = dev.get("name") or ""
-        net = dev.get("network") or {}
-        site_name = net.get("name") or ""
-        for bss in dev.get("basicServiceSets", []) or []:
-            bssid = (bss.get("bssid") or "").replace("-", "").replace(":", "").replace(".", "").upper()
-            if len(bssid) == 12 and ap_name:
-                by_bssid[bssid] = {"ap_name": ap_name, "site_name": site_name}
+        with tempfile.NamedTemporaryFile(mode='w', dir=os.path.dirname(cache_file),
+                                         prefix=os.path.basename(cache_file) + '.', delete=False) as stream:
+            temporary = stream.name
+            json.dump(cache, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # This root-run cron writes a cache read by the freerad service.
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, cache_file)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
-with open("$${CACHE_FILE}.tmp", "w") as f:
-    json.dump({"by_bssid": by_bssid}, f)
+
+if __name__ == '__main__':
+    try:
+        refresh(sys.argv[1], sys.argv[2])
+    except Exception:
+        # Do not echo API URLs, response bodies or credentials into cron logs.
+        print('Meraki AP cache refresh failed; preserving previous cache', file=sys.stderr)
+        sys.exit(1)
 PYEOF
 
-    mv "$${CACHE_FILE}.tmp" "$CACHE_FILE" 2>/dev/null
 MERAKICACHEEOF
     chmod 755 /usr/local/bin/meraki-ap-cache.sh
 
@@ -2647,6 +2741,7 @@ RLCFGEOF
 
     cat > "$RADDB/mods-config/python3/radius_lookups.py" << 'PYMODEOF'
 import radiusd
+import re
 import json
 import os
 import time
@@ -2865,30 +2960,27 @@ def _unifi_lookup(called_station_id):
 
 
 def _meraki_lookup(called_station_id):
-    """Look up AP name and network (site) from the Meraki cache by
-    Called-Station-Id BSSID.
+    """Resolve exact advertised BSSIDs or hardware MACs, without offset guesses.
 
-    Unlike UniFi, the Meraki cache is keyed on the exact per-SSID/band BSSID the
-    AP advertises (from basicServiceSets[].bssid), which is what shows up in the
-    Called-Station-Id — so this is an exact match only, no base-MAC offset
-    search. Self-gates on the cache file's presence so a deployment without the
-    Meraki key (or before its first cache build) just returns None.
-    Returns dict or None.
+    Older BSSID-only caches remain readable. Missing or conflicting entries
+    omit enrichment; they never affect authentication or VLAN policy.
     """
     if not called_station_id or not os.path.isfile(MERAKI_CACHE_FILE):
         return None
 
-    mac = _bssid_from_called_station(called_station_id)
-    if len(mac) != 12:
+    match = re.fullmatch(r"([0-9a-fA-F]{12}|(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}|(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}|(?:[0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4})(?::.*)?", called_station_id)
+    if not match:
         return None
-
+    mac = re.sub(r"[:.-]", "", match[1]).upper()
     with open(MERAKI_CACHE_FILE, "r") as f:
         cache = json.load(f)
-
-    entry = cache.get("by_bssid", {}).get(mac)
+    bssid_entry = cache.get("by_bssid", {}).get(mac)
+    hardware_entry = cache.get("by_mac", {}).get(mac)
+    if bssid_entry and hardware_entry and bssid_entry != hardware_entry:
+        return None
+    entry = bssid_entry or hardware_entry
     if entry:
         return {"ap_name": entry.get("ap_name", ""), "site_name": entry.get("site_name", "")}
-
     return None
 
 
