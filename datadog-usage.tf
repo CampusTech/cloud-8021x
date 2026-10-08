@@ -261,7 +261,7 @@ locals {
             type    = "log_stream"
             query   = "${local.accounting_filter} (@event:Acct-Update OR @event:Acct-Stop)"
             indexes = ["*"]
-            columns = ["@timestamp", "@event", "@site_name", "@ap_name", "@ssid", "@device_owner", "@device_name", "@calling_station", "@session_id", "@input_bytes", "@output_bytes", "@session_time", "@identity_verified"]
+            columns = ["timestamp", "@event", "@site_name", "@ap_name", "@ssid", "@device_owner", "@device_name", "@calling_station", "@session_id", "@input_bytes", "@output_bytes", "@session_time", "@identity_verified"]
             sort    = { column = "timestamp", order = "desc" }
           }
         }

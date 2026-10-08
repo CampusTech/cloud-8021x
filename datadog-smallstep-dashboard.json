@@ -462,7 +462,7 @@
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "host",
                 "@status",
                 "@method",
@@ -475,7 +475,7 @@
               "message_display": "inline",
               "query": "service:smallstep-ca $host",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "step-ca request log",
@@ -485,7 +485,7 @@
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "host",
                 "@level",
                 "@msg",
@@ -497,7 +497,7 @@
               "message_display": "expanded-md",
               "query": "service:smallstep-ca $host (status:error OR status:warn OR @level:error OR @level:warn)",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "Errors / warnings",

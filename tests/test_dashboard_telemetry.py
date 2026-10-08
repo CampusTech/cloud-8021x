@@ -32,6 +32,30 @@ class DashboardTelemetryTests(unittest.TestCase):
                             self.assertIn('host:radius-primary', query['query'])
                             self.assertIn('host:radius-secondary', query['query'])
 
+    def test_log_tables_use_one_builtin_date_column_without_duplicate_fields(self):
+        def streams(value):
+            if isinstance(value, dict):
+                if value.get('type') == 'log_stream':
+                    yield value
+                for child in value.values():
+                    yield from streams(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from streams(child)
+        checked = 0
+        for filename in ('datadog-dashboard.json', 'datadog-smallstep-dashboard.json'):
+            for widget in streams(json.loads((ROOT / filename).read_text())):
+                checked += 1
+                with self.subTest(dashboard=filename, widget=widget.get('title')):
+                    columns = widget['columns']
+                    # Datadog supplies Date itself; @timestamp selects a second
+                    # custom field containing the same event time.
+                    self.assertNotIn('@timestamp', columns)
+                    self.assertEqual(columns.count('timestamp'), 1)
+                    self.assertEqual(len(columns), len(set(columns)))
+                    self.assertEqual(widget['sort'], {'column':'timestamp', 'order':'desc'})
+        self.assertGreaterEqual(checked, 5)
+
     def test_queue_depth_does_not_turn_missing_telemetry_into_zero(self):
         widget=self.widgets['Queue Depths']
         for request in widget['requests']:

@@ -387,7 +387,7 @@
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "@event",
                 "@device_id",
                 "@serial",
@@ -406,7 +406,7 @@
               "message_display": "inline",
               "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "Recent Auth Events",
@@ -968,7 +968,7 @@
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "@event",
                 "@vlan_id",
                 "@vlan_name",
@@ -987,7 +987,7 @@
               "message_display": "inline",
               "query": "service:(radius-auth OR radius-acct) host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\"",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "Recent VLAN Authentication and Accounting",
@@ -2488,7 +2488,7 @@
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "@event",
                 "@site_name",
                 "@ap_name",

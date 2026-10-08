@@ -243,9 +243,9 @@ locals {
                   type    = "log_stream"
                   indexes = ["*"]
                   query   = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value"
-                  columns = ["@timestamp", "@event", "@device_id", "@serial", "@certificate_fingerprint", "@vlan_id", "@vlan_name", "@device_owner", "@device_name", "@ssid", "@site_name", "@ap_name"]
+                  columns = ["timestamp", "@event", "@device_id", "@serial", "@certificate_fingerprint", "@vlan_id", "@vlan_name", "@device_owner", "@device_name", "@ssid", "@site_name", "@ap_name"]
                   sort = {
-                    column = "@timestamp"
+                    column = "timestamp"
                     order  = "desc"
                   }
                   message_display = "inline"
@@ -474,7 +474,7 @@ locals {
                   ]
                   query = "service:(radius-auth OR radius-acct) ${local.radius_log_hosts_filter} @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                   columns = [
-                    "@timestamp",
+                    "timestamp",
                     "@event",
                     "@vlan_id",
                     "@vlan_name",
@@ -488,7 +488,7 @@ locals {
                     "@session_id",
                   ]
                   sort = {
-                    column = "@timestamp"
+                    column = "timestamp"
                     order  = "desc"
                   }
                   message_display = "inline"

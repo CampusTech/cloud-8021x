@@ -350,8 +350,8 @@ locals {
                 type            = "log_stream"
                 indexes         = ["*"]
                 query           = "service:smallstep-ca $host"
-                columns         = ["@timestamp", "host", "@status", "@method", "@path", "@request-id"]
-                sort            = { column = "@timestamp", order = "desc" }
+                columns         = ["timestamp", "host", "@status", "@method", "@path", "@request-id"]
+                sort            = { column = "timestamp", order = "desc" }
                 message_display = "inline"
               }
             },
@@ -361,8 +361,8 @@ locals {
                 type            = "log_stream"
                 indexes         = ["*"]
                 query           = "service:smallstep-ca $host (status:error OR status:warn OR @level:error OR @level:warn)"
-                columns         = ["@timestamp", "host", "@level", "@msg", "@error"]
-                sort            = { column = "@timestamp", order = "desc" }
+                columns         = ["timestamp", "host", "@level", "@msg", "@error"]
+                sort            = { column = "timestamp", order = "desc" }
                 message_display = "expanded-md"
               }
             }
