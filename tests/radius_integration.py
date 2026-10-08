@@ -24,7 +24,7 @@ def main():
                         help='Exercise source freshness guards for real auth and accounting packets')
     parser.add_argument('--container', help='Reuse a disposable test container with dependencies installed')
     parser.add_argument('--native', action='store_true', help='Use Go-rendered configuration and the coherent patched native package family')
-    parser.add_argument('--native-mode', default='test', choices=['test','sources','full','legacy','attested','zero','outage','replay','permissions','sqltls','ipv6'], help='Native fixture gate; see patches/freeradius/README.md for preparation')
+    parser.add_argument('--native-mode', default='test', choices=['test','sources','full','legacy','attested','zero','outage','replay','replay-duplicate','permissions','sqltls','ipv6','ports'], help='Native fixture gate; see patches/freeradius/README.md for preparation')
     args = parser.parse_args()
     if args.native:
         from native_radius_integration import run_native

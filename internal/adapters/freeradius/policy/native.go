@@ -25,7 +25,9 @@ func decodeNative(data []byte) (Request, error) {
 		if !ok {
 			return nil, nil
 		}
-		if a.Type != kind || len(a.Value) > 64 {
+		// Match the native packet's max_attributes bound. In particular, many
+		// duplicate port values must reach the conservative no-VLAN policy.
+		if a.Type != kind || len(a.Value) > 200 {
 			return nil, errors.New("invalid native attribute type or count")
 		}
 		out := make([]string, 0, len(a.Value))

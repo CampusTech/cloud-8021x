@@ -82,7 +82,17 @@ server default {
   }
  }
  post-auth {
-  update reply {
+  {{template "final-auth-context" .}}
+  auth_detail { fail = 1 }
+  ok
+  Post-Auth-Type REJECT {
+   {{template "final-auth-context" .}}
+   auth_detail { fail = 1 }
+   reject
+  }
+ }
+}
+{{define "final-auth-context"}}update reply {
    C8021X-Client := &control:C8021X-Client
    C8021X-Location := &control:C8021X-Location
    C8021X-Source := &control:C8021X-Source
@@ -92,23 +102,4 @@ server default {
    C8021X-Port-Type += &request:NAS-Port-Type[*]
    C8021X-Port-Count := "%{NAS-Port-Type[#]}"
    C8021X-Station-Count := "%{Calling-Station-Id[#]}"
-  }
-  auth_detail { fail = 1 }
-  ok
-  Post-Auth-Type REJECT {
-   update reply {
-    C8021X-Client := &control:C8021X-Client
-    C8021X-Location := &control:C8021X-Location
-    C8021X-Source := &control:C8021X-Source
-    C8021X-Receipt := &control:C8021X-Receipt
-    C8021X-Station += &request:Calling-Station-Id[*]
-    C8021X-Called += &request:Called-Station-Id[*]
-    C8021X-Port-Type += &request:NAS-Port-Type[*]
-    C8021X-Port-Count := "%{NAS-Port-Type[#]}"
-    C8021X-Station-Count := "%{Calling-Station-Id[#]}"
-   }
-   auth_detail { fail = 1 }
-   reject
-  }
- }
-}
+  }{{end}}

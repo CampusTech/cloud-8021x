@@ -24,6 +24,7 @@ AUTH = Path('/var/log/cloud8021x-auth')
 SPOOL = Path('/var/spool/cloud8021x-accounting')
 SECRET = b'fixture-secret-0123456789abcdef'
 IP = subprocess.check_output(['hostname', '-I'], text=True).split()[0]
+REPLAY_POLLS = 60
 
 def run(*args, **kw):
     result=subprocess.run(args, text=True, capture_output=True, **kw)
@@ -38,6 +39,123 @@ def write(path, text, mode=0o644, owner=None):
     path.chmod(mode)
     if owner:
         shutil.chown(path, user=owner)
+
+def postgres_json(query, **variables):
+    """Read the disposable fixture DB using quoted psql variables and verified TLS."""
+    cfg=json.loads(CFG.read_text())
+    dsn=Path(cfg['database']['migration_dsn']['file']).read_text().strip()
+    dsn+=f" sslmode=verify-full sslrootcert='{cfg['database']['ca_file']}' connect_timeout=1"
+    result=run('psql','-X','-A','-t','-v','ON_ERROR_STOP=1',
+               *[arg for key,value in variables.items() for arg in ['-v',key+'='+json.dumps(value)]],
+               '--dbname',dsn,input="SET statement_timeout='2s';\n"+query)
+    # SET's command tag is the only non-JSON output.
+    return json.loads(result.stdout.splitlines()[-1])
+
+def intake_rows(records):
+    sessions=sorted({record['session_id'] for record in records})
+    return postgres_json("""SELECT coalesce(json_agg(row_to_json(r)),'[]') FROM (
+        SELECT id,session_id,replay_id,extract(epoch FROM received_at)::bigint AS received_at,
+               source_ip,client_id,location_id,status,packet_id,request_authenticator,
+               processed_at IS NOT NULL AS processed,observation_id
+        FROM ledger.intake WHERE session_id IN (SELECT jsonb_array_elements_text(:'sessions'::jsonb))
+        ORDER BY id) r;""",sessions=sessions)
+
+def pending_replay_ids():
+    result=set()
+    for path in SPOOL.glob('detail*'):
+        assert path.is_file() and path.stat().st_size<=16*1024*1024,'unbounded native test spool'
+        result.update(re.findall(rb'C8021X-Replay = "([a-f0-9]{64})"',path.read_bytes()))
+    return {value.decode() for value in result}
+
+def assert_replayed(records,rows,copies=1):
+    assert records,'replay has no expected retained records'
+    for expected in records:
+        matching=[row for row in rows if row['replay_id']==expected['replay_id']]
+        assert len(matching)==copies,('replay row count',expected['session_id'],len(matching),copies)
+        for row in matching:
+            assert all(row.get(key)==value for key,value in expected.items()),('replay changed original context',expected,row)
+    assert not ({record['replay_id'] for record in records} & pending_replay_ids()),'replay pending work did not drain'
+
+def wait_replayed(records,copies=1):
+    for attempt in range(REPLAY_POLLS):
+        rows=intake_rows(records)  # DB failure is a failure, never an elapsed-time success.
+        try:assert_replayed(records,rows,copies)
+        except AssertionError:
+            if attempt==REPLAY_POLLS-1:raise
+            time.sleep(.25)
+        else:return rows
+
+def retain_replay_expectations(session):
+    """Inspect only test-owned native detail metadata; never installed in production."""
+    records=[];saved=[]
+    attributes={'session_id':'Acct-Session-Id','replay_id':'C8021X-Replay','received_at':'C8021X-Receipt',
+                'source_ip':'C8021X-Source','client_id':'C8021X-Client','location_id':'C8021X-Location',
+                'status':'Acct-Status-Type','packet_id':'C8021X-Packet-ID','request_authenticator':'C8021X-Authenticator'}
+    for path in SPOOL.glob('detail*'):
+        for chunk in path.read_text().split('\n\n'):
+            if f'\tAcct-Session-Id = "{session}"\n' not in chunk+'\n':continue
+            record={}
+            for key,attribute in attributes.items():
+                values=re.findall(r'^\t'+re.escape(attribute)+r' = (?:"([^"\\]*)"|([^\n"]+))$',chunk,re.M)
+                assert len(values)==1,('invalid retained fixture metadata',attribute)
+                record[key]=next(value for value in values[0] if value)
+            record['received_at']=int(record['received_at'])
+            assert re.fullmatch('[a-f0-9]{64}',record['replay_id'])
+            records.append(record);saved.append(chunk+'\n\n')
+    assert len(records)==3 and {r['status'] for r in records}=={'Start','Interim-Update','Stop'},'replay fixture did not retain all statuses'
+    filename='replay-retained-'+session+'.detail'
+    write(ROOT/filename,''.join(saved),0o600)
+    write(ROOT/'replay-expectations.json',json.dumps({'records':records,'files':[filename]}),0o600)
+    return records
+
+def replay_test(duplicate=False):
+    manifest=json.loads((ROOT/'replay-expectations.json').read_text())
+    records=manifest['records']
+    intake_rows(records)  # Fail immediately if the supposedly recovered DB is still down.
+    radius=start_radius()
+    try:
+        rows=wait_replayed(records)
+        if duplicate:
+            run('runuser','-u','cloud8021x','--','/task6-native-fixture','process',str(CFG))
+            before=intake_rows(records)
+            assert all(row['processed'] and row['observation_id'] for row in before),'original replay did not reach shared ledger'
+            for index,name in enumerate(manifest['files']):
+                assert Path(name).name==name,'unsafe fixture replay filename'
+                write(SPOOL/f'detail-repeat-{index}-{time.time_ns()}',(ROOT/name).read_text(),0o600,'freerad')
+            wait_replayed(records,2)
+            run('runuser','-u','cloud8021x','--','/task6-native-fixture','process',str(CFG))
+            rows=intake_rows(records)
+            for record in records:
+                copies=[row for row in rows if row['replay_id']==record['replay_id']]
+                assert len(copies)==2 and all(row['processed'] for row in copies)
+                assert len({row['observation_id'] for row in copies})==1 and copies[0]['observation_id'],'shared ledger did not deduplicate replay'
+            ids=sorted({row['observation_id'] for row in rows})
+            counts=postgres_json("""SELECT json_build_object(
+                'observations',(SELECT count(*) FROM ledger.observations WHERE event_id IN (SELECT jsonb_array_elements_text(:'ids'::jsonb))),
+                'outbox',(SELECT count(*) FROM ledger.work WHERE id IN (SELECT 'accounting:'||jsonb_array_elements_text(:'ids'::jsonb))));""",ids=ids)
+            assert counts=={'observations':len(ids),'outbox':len(ids)},('duplicate immutable event/outbox',counts)
+        print('PASS exact retained replay receipt/source/identity, pending drain'+(' and shared-ledger duplicate/outbox checks' if duplicate else ''),flush=True)
+    finally:radius.terminate();radius.wait(timeout=3)
+
+def assert_packets_delivered(packets):
+    """Every ACKed test packet needs an exact identifiable PostgreSQL intake row."""
+    for attempt in range(REPLAY_POLLS):
+        rows=intake_rows(packets)
+        try:
+            for packet in packets:
+                matches=[row for row in rows if row['session_id']==packet['session_id'] and row['request_authenticator']==packet['request_authenticator']]
+                assert len(matches)==1,('native intake missing ACKed packet',packet['session_id'])
+                row=matches[0]
+                assert all(row[key]==packet[key] for key in ['source_ip','client_id','location_id','status','packet_id'])
+                assert packet['received_min']<=row['received_at']<=packet['received_max'],'native receipt was not original packet receipt'
+                assert re.fullmatch('[a-f0-9]{64}',row['replay_id'])
+            assert not ({row['replay_id'] for row in rows} & pending_replay_ids()),'ACKed packet pending work did not drain'
+        except AssertionError:
+            if attempt==REPLAY_POLLS-1:raise
+            time.sleep(.25)
+        else:
+            print('PASS all ACKed test packets persisted with original context and drained work',flush=True)
+            return
 
 def prepare():
     ROOT.mkdir(exist_ok=True)
@@ -216,7 +334,8 @@ def sql_tls_test():
             print('PASS native PostgreSQL rejects wrong '+kind+' and retains replay',flush=True)
     finally:write(CFG,original);write(dsn,original_dsn,0o600);run('/task6-native-fixture','render',str(CFG))
 
-def authenticate(name, expected=200, certificate='personal', ports=(19,), remove_port=False, after_accept=None, legacy=False):
+def authenticate(name, expected=200, certificate='personal', ports=(19,), remove_port=False, after_accept=None, legacy=False, check_context=False):
+    received_min=int(time.time())
     offsets={p:p.stat().st_size for p in AUTH.glob('*.detail')}
     expected=list(expected) if isinstance(expected,tuple) else [expected]
     conf=f'network={{\n ssid="fixture"\n key_mgmt=WPA-EAP\n eap=TLS\n identity="spoofed"\n ca_cert="{CERT}/ca.pem"\n client_cert="{CERT}/{certificate}.pem"\n private_key="{CERT}/{certificate}.key"\n domain_suffix_match="localhost"\n eapol_flags=0\n}}\n'
@@ -269,14 +388,26 @@ def authenticate(name, expected=200, certificate='personal', ports=(19,), remove
             if not legacy:assert len(attrs.get(25,[]))==1 and attrs[25][0].startswith(b'c8021x.1.'),attrs
     if len(expected)>1:
         assert ('resumed=1' in result.stdout)==legacy,(name,'resumption contract',result.stdout[-2000:])
+    new_context=''
     for path in AUTH.glob('*.detail'):
         text=path.read_bytes()[offsets.get(path,0):].decode()
+        new_context+=text
         for forbidden in ['TLS-Client-Cert-', 'TLS-Session-', 'EAP-MSK', 'EAP-EMSK', 'EAP-Session-Id', 'MS-MPPE-Send-Key', 'MS-MPPE-Recv-Key', 'User-Password', 'CHAP-Password', 'Tunnel-Password', 'EAP-Message', 'C8021X-Handoff', 'REST-HTTP-Header']:
             assert forbidden not in text,('new final auth log exposed suppressed field',name,forbidden)
+    if check_context:
+        outcome='Access-Reject' if expected[0] is None else 'Access-Accept'
+        for field,value in [('Packet-Type',outcome),('C8021X-Client','"office"'),('C8021X-Location','"nyc"'),
+                            ('C8021X-Source',json.dumps(IP)),('C8021X-Port-Count',str(len(ports))),('C8021X-Station-Count','1')]:
+            assert f'\t{field} = {value}\n' in new_context,('missing shared final context',name,field)
+        receipts=re.findall(r'\tC8021X-Receipt = (\d+)\n',new_context)
+        assert len(receipts)==1 and received_min<=int(receipts[0])<=int(time.time()),('invalid shared receipt',name)
+        # Keep the exact occurrence count independent of native list expansion.
+        assert 0<new_context.count('\tC8021X-Port-Type = ')<=len(ports),('lost final port context',name)
     print('PASS EAP',name,flush=True)
     return {'classes':attrs.get(25,[]),'station':station}
 
 def accounting(name, binding=None, status=1, extra=(), expect_ack=True, omit=()):
+    received_min=int(time.time())
     binding=binding or {'classes':[],'station':b'aa-bb-cc-dd-ee-ff'}
     attrs=[(40,struct.pack('!I',status)),(44,name.encode()),(4,socket.inet_aton('192.0.2.1')),(31,binding['station']),
            (46,struct.pack('!I',60)),(42,struct.pack('!I',4294967295)),(43,struct.pack('!I',4294967295)),
@@ -292,6 +423,9 @@ def accounting(name, binding=None, status=1, extra=(), expect_ack=True, omit=())
     assert bool(reply)==expect_ack,(name,'ACK',bool(reply))
     if reply: assert reply[0]==5
     print('PASS accounting',name,'ACK' if reply else 'suppressed',flush=True)
+    return {'session_id':name,'status':None if 40 in omit else {1:'Start',2:'Stop',3:'Interim-Update'}.get(status,str(status)),
+            'request_authenticator':'0x'+packet[4:20].hex(),'packet_id':str(packet[1]),
+            'source_ip':IP,'client_id':'office','location_id':'nyc','received_min':received_min,'received_max':int(time.time())}
 
 def start_radius():
     result=subprocess.run(['freeradius','-XC'],capture_output=True,text=True)
@@ -323,11 +457,8 @@ def main():
     if sys.argv[1]=='permissions':permissions_test();return
     if sys.argv[1]=='prepare':prepare();return
     if sys.argv[1]=='attested':attested_test();return
-    if sys.argv[1]=='replay':
-        radius=start_radius()
-        try:time.sleep(12)
-        finally:radius.terminate();radius.wait(timeout=3)
-        return
+    if sys.argv[1] in ['replay','replay-duplicate']:
+        replay_test(duplicate=sys.argv[1]=='replay-duplicate');return
     if sys.argv[1]=='legacy':
         original=CFG.read_text();cfg=json.loads(original);cfg['policy']['identity_mode']='legacy-serial';cfg['paths']['downgrade_guard_file']='/var/lib/cloud-8021x/fixture-legacy-guard'
         write(CFG,json.dumps(cfg));run('/task6-native-fixture','render',str(CFG))
@@ -409,6 +540,12 @@ def main():
         return
     radius=start_radius()
     try:
+        if sys.argv[1]=='ports':
+            authenticate('65-duplicate-ports',expected=0,ports=(19,)*65,check_context=True)
+            # Leave room within the 200-attribute packet bound for fragmented EAP.
+            authenticate('128-duplicate-ports',expected=0,ports=(19,)*128,check_context=True)
+            authenticate('shared-reject-context',expected=None,certificate='unknown',check_context=True)
+            return
         if zero:
             accounting('zero-affected-rows')
             time.sleep(6)
@@ -421,12 +558,11 @@ def main():
             print('PASS patched /dev/full accounting ACK suppression; auth remains observational',flush=True)
             return
         if sys.argv[1]=='outage':
-            authenticate('database-outage')
-            accounting('database-outage')
+            binding=authenticate('database-outage')
+            session='outage-'+os.urandom(8).hex()
+            for status in [1,3,2]:accounting(session,binding,status=status)
             time.sleep(6)
-            paths=list(SPOOL.glob('*'))
-            assert paths and sum(p.stat().st_size for p in paths)>0
-            for p in paths:shutil.copy(p,ROOT/('retained-'+p.name))
+            retain_replay_expectations(session)
             print('PASS database outage retains native replay files after NAS ACK',flush=True)
             return
         byod=authenticate('wireless')
@@ -443,17 +579,18 @@ def main():
         authenticate('fingerprint-full-reauth-current-policy',expected=(200,None),after_accept=lambda:inventory(enrolled=False));inventory()
         inventory(enrolled=False);authenticate('unenrolled',expected=None);inventory()
         overloaded_policy()
-        for status in [1,3,2]:accounting('normal-session',byod,status=status)
-        accounting("quote'\\雪",byod,extra=[(44,b'duplicate-session'),(25,b'forged')])
-        accounting('unknown-status',status=77)
-        accounting('missing-status',omit=(40,))
-        accounting('missing-counters',status=3,omit=(42,43,46))
-        accounting('duplicate-counter',status=3,extra=[(42,struct.pack('!I',1))])
-        accounting('ipv6-nas',extra=[(95,socket.inet_pton(socket.AF_INET6,'2001:db8::9'))],omit=(4,))
+        suffix='-'+os.urandom(8).hex()
+        packets=[accounting('normal-session'+suffix,byod,status=status) for status in [1,3,2]]
+        packets.append(accounting("quote'\\雪"+suffix,byod,extra=[(44,b'duplicate-session'),(25,b'forged')]))
+        packets.append(accounting('unknown-status'+suffix,status=77))
+        packets.append(accounting('missing-status'+suffix,omit=(40,)))
+        packets.append(accounting('missing-counters'+suffix,status=3,omit=(42,43,46)))
+        packets.append(accounting('duplicate-counter'+suffix,status=3,extra=[(42,struct.pack('!I',1))]))
+        packets.append(accounting('ipv6-nas'+suffix,extra=[(95,socket.inet_pton(socket.AF_INET6,'2001:db8::9'))],omit=(4,)))
         app.terminate();app.wait(timeout=3)
         authenticate('policy-outage',expected=None)
-        accounting('policy-outage-accounting')
-        time.sleep(7)
+        packets.append(accounting('policy-outage-accounting'+suffix))
+        assert_packets_delivered(packets)
         for path in AUTH.glob('*.detail'):
             text=path.read_text()
             for forbidden in ['EAP-MSK', 'EAP-EMSK', 'EAP-Session-Id', 'MS-MPPE-Send-Key', 'MS-MPPE-Recv-Key', 'User-Password', 'CHAP-Password', 'Tunnel-Password', 'EAP-Message', 'C8021X-Handoff', 'REST-HTTP-Header']:

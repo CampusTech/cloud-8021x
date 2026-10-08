@@ -137,10 +137,22 @@ It requires a prepared container labeled `cloud8021x.test=task6` (the reserved
 PR39 fixture is also accepted), no published host ports, and all seven exact
 packages fully configured. It builds/copies Go binaries and uses fake/private
 fixture configuration only. Additional modes: sources, full, legacy, attested,
-zero, outage, replay, permissions, sqltls, ipv6. IPv6 listeners are generated only
+zero, outage, replay, replay-duplicate, ports, permissions, sqltls, ipv6. IPv6 listeners are generated only
 when static configured CIDRs require them; dynamic discovery stays IPv4-only.
 `outage` expects the disposable PG
-container stopped; `replay` expects it running again. Each test mutates only its
+container stopped and saves a manifest of the three uniquely identified retained
+records plus an untouched native-detail copy. `replay` expects it running again
+and requires those exact receipt/source/replay identities in PostgreSQL and their
+pending work drained. `replay-duplicate` additionally resubmits the retained
+native records and requires two intake rows per identity but one shared-ledger
+observation/outbox item. Run a fresh `outage` before each replay scenario; a
+previously duplicated manifest intentionally fails the single-copy check.
+These gates require `psql` in the development container and use only its synthetic
+verified-TLS database credentials. Database failure, absent rows, changed context
+or undrained matching work fail the gate. The main `test` mode likewise verifies
+every ACKed accounting test packet reaches intake. `ports` exercises 65/128
+duplicate types and the common final accept/reject context with redaction.
+Each test mutates only its
 explicit disposable fixture. The existing Terraform/Python legacy suite remains
 available separately until Task 10 replaces release/CI wiring.
 

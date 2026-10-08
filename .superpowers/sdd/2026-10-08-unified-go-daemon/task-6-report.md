@@ -301,3 +301,114 @@ gates. The uniquely labeled own PostgreSQL fixture is
 ports; it is retained stopped for controller review and can be restarted or
 removed after review. No unrelated fixture was touched. The temporary networkless
 loaded-module observer was removed automatically.
+
+## Review fix round 1 — base dbe4ba08743e378186a6b1bf2acb9a0fecc86b10
+
+Addressed all three Important findings in
+`/private/tmp/cloud8021x-task6-review/report.md`, plus the orphan `ParseCounter`
+comment. No native C/source/package change or rebuild was necessary. The same
+fully configured `3.2.10+dfsg-2~bookworm+campus3` fixture family was used.
+
+### Decoder and common final-auth context
+
+Native REST value arrays now allow 200 entries, matching the native packet
+attribute bound. The HTTP body limit and native `max_attributes = 200` are
+unchanged. Decoder/policy tests preserve all 65/190/200 duplicate numeric values,
+require verified authentication with signed Class and no VLAN, and reject 201.
+The identical final accept/reject metadata construction now lives in the single
+`final-auth-context` Go template definition. The separate final outcome and
+observational auth-detail failure behavior are unchanged.
+
+RED before the decoder change:
+
+```
+go test -overlay /private/tmp/cloud8021x-task6-review/overlay.json -run '^TestReviewNativeAmbiguousNASPortTypeCount$' ./internal/adapters/freeradius/policy
+go test ./internal/adapters/freeradius/policy -run '^TestNativeHighCountDuplicatePorts'
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py ports
+```
+
+Both Go checks failed with `invalid native attribute type or count`; the real
+65-port EAP exchange returned Access-Reject. After rebuilding/copying the Go
+fixture and rendering the actual templates, the exact overlay passes and `ports`
+passes 65 and 128 duplicate types with Access-Accept, signed Class and no tunnel
+attributes. The same mode verifies trusted client/location/source, original
+receipt, exact port/station counts and forbidden-field redaction on accepted
+requests and an unknown-certificate Access-Reject. An initial 190-value native
+packet attempt correctly failed at the unchanged packet bound: fragmented EAP
+raised the total to 204 attributes (native log: `received 204, max 200`). The
+committed packet test uses 128 to leave protocol headroom; unit coverage retains
+the 200/201 decoder boundary. Native textual list expansion need not have the
+same length as the source list; the independently logged exact occurrence count
+preserves ambiguity (observed 65/128 counts even when emitted lists were shorter).
+
+### Replay gate now asserts delivery
+
+The development harness adds a bounded SQL poll using the fixture's verified-TLS
+`psql` connection, plus exact checks for session/status, original receipt,
+transport source, configured client/location, packet ID/authenticator and replay
+ID. `outage` creates a unique session, requires all three retained statuses, and
+saves `/task6/replay-expectations.json` plus untouched native detail records.
+`replay` requires exactly one matching intake row per retained identity and no
+matching pending detail work. `replay-duplicate` additionally submits the same
+native records, requires two intake copies, runs the real Go ledger processor,
+and requires one shared observation and one outbox item per replay identity.
+Every ACKed accounting packet in the main mode now needs its actual matching
+intake row, original context/receipt and drained pending work. These are
+development-only probes, not a Go accounting parser or an installed Python hook.
+
+RED: `python3 -m unittest discover -s tests -p test_native_replay_gate.py`
+initially failed all four negative regressions against the old sleep-only mode:
+DB down, absent expected rows, changed receipt, and undrained matching work all
+incorrectly returned success. GREEN: all six committed tests now pass, including
+positive exact delivery and an ACK-without-intake failure regression.
+
+Actual disposable native checks, in order:
+
+```
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py outage
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py replay
+docker start cloud8021x-task6-pg-c7d492
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py replay-duplicate
+docker exec cloud8021x-daemon-fr-c7d492 python3 /task6-native.py test
+```
+
+With PG stopped, `outage` retained all three ACKed records for unique session
+`outage-0f60649b77d95559`. The subsequent `replay` exited 1 immediately with
+connection refused, as required. After PG recovery, `replay-duplicate` passed
+the exact retained metadata, pending drain and shared-ledger/outbox assertions.
+A separate negative native check temporarily replaced one expected replay ID
+with 64 zeroes, ran `replay`, required nonzero exit plus `replay row count`, and
+restored the original manifest in `finally`; it passed. Thus an available DB
+with missing expected rows cannot produce an elapsed-time success either.
+
+The revised main mode passed all ten accounting delivery assertions for suffix
+`-b1c37edd857066f0`: Start/Interim/Stop, quote/backslash/Unicode and duplicate
+session/Class fields, unknown/missing status, missing/duplicate counters, NAS
+IPv6, and accounting during policy outage. Its EAP rejection/resumption/outage
+and final-log redaction assertions also passed with the shared template.
+
+### Final checks and interface implications
+
+Go 1.27.1; `goimports` applied to changed Go files. These checks passed:
+
+```
+go test -race ./internal/adapters/freeradius/policy ./internal/adapters/freeradius/native ./internal/templates/freeradius
+go test -overlay /private/tmp/cloud8021x-task6-review/overlay.json -run '^TestReviewNativeAmbiguousNASPortTypeCount$' ./internal/adapters/freeradius/policy
+python3 -m unittest discover -s tests -p test_native_replay_gate.py
+PYTHONPYCACHEPREFIX=/private/tmp/task6-fix-python-cache python3 -m py_compile tests/native_radius_container.py tests/radius_integration.py tests/test_native_replay_gate.py
+golangci-lint run
+git diff --check
+```
+
+Lint reported `0 issues`. Initial sandbox-only lint/overlay/Python-cache attempts
+could not access caches; reruns with the required cache access or temporary Python
+cache passed. No dependency tidy or unrelated source change was made.
+
+No exported product API/schema change. The test CLI adds `ports` and
+`replay-duplicate`; replay now requires an `outage` manifest and `psql` in the
+development container. A fresh outage is required before each independent replay
+scenario because already duplicated records intentionally fail the one-copy
+precondition. README documents these prerequisites. All previous Task 8/9/10
+installation, lifecycle, release and buffer-durability boundaries remain in force.
+Native/policy processes are stopped between modes, and the task-owned PG fixture
+was returned to stopped state with `docker stop cloud8021x-task6-pg-c7d492`.

@@ -65,6 +65,3 @@ func Render(cfg config.Config, generation string) (map[string][]byte, error) {
 	}
 	return templates.Render(o)
 }
-
-// ParseCounter words are deliberately never parsed here. Native SQL stores
-// nullable text/counts; the shared ledger owns normalization and quarantine.
