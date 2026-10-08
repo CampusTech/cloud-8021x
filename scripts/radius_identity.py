@@ -14,6 +14,8 @@ import secrets
 import struct
 import time
 
+import vlan_names
+
 from device_policy import normalize_fingerprint, require_fresh, valid_vlan
 
 KEY_FILE = '/run/radius-accounting-key'
@@ -103,6 +105,9 @@ def _vlan_name(config, vlan, location):
     """Label the signed VLAN in its trusted office; never reselect membership."""
     if vlan is None:
         return ''
+    name = vlan_names.cached_name(location, vlan)
+    if name:
+        return name
     locations = config.get('locations') or {}
     if not isinstance(locations, dict):
         return ''

@@ -148,7 +148,7 @@ EOT
 #   locations = {
 #     nyc = {
 #       group_vlans = { "fleet:1" = 100, "fleet:2" = 200 }
-#       vlan_names  = { "100" = "Secure", "200" = "Guest" } # Optional log labels.
+#       vlan_names  = { "100" = "Secure", "200" = "Guest" } # Optional fallback log labels.
 #     }
 #     atl = {
 #       group_vlans = { "fleet:1" = 110, "fleet:2" = 220 }
@@ -160,3 +160,15 @@ EOT
 # Keys must match radius_clients. Location maps do not inherit global mappings.
 # Every client on these servers needs an exact trusted fingerprint binding;
 # existing ACME identities can be collected without reissuance.
+
+# Automatic display-only VLAN names from the existing controller API keys.
+# UniFi WAN-discovery host IDs are reused automatically; these explicit sources
+# also work for offices defined only by static CIDRs. Pin a local site UUID if
+# the console has multiple sites. The UniFi key must permit connector access.
+# radius_vlan_name_sources = {
+#   nyc = { unifi_host_id = "YOUR-NYC-CONSOLE-ID" }
+#   atl = { unifi_host_id = "YOUR-ATL-CONSOLE-ID", unifi_site_id = "YOUR-LOCAL-SITE-UUID" }
+#   # branch-office = { meraki_network_id = "N_YOUR-MERAKI-NETWORK-ID" }
+# }
+# Names refresh every five minutes, affect only logs, and do not enable VLANs
+# at opted-out sites. Missing API names use optional vlan_names fallbacks.

@@ -93,6 +93,40 @@ variable "ssh_allowed_cidrs" {
   default     = ["35.235.240.0/20"]
 }
 
+variable "radius_vlan_name_sources" {
+  description = "Display-only VLAN name API sources by RADIUS office. Choose a UniFi console (optionally pin its local site UUID) or a Meraki network ID. UniFi WAN-discovery console IDs are reused automatically unless overridden here. Requires the corresponding existing API key; no controller data changes VLAN authorization."
+  type = map(object({
+    unifi_host_id     = optional(string)
+    unifi_site_id     = optional(string)
+    meraki_network_id = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = length(setsubtract(toset(keys(var.radius_vlan_name_sources)), toset(keys(var.radius_clients)))) == 0
+    error_message = "VLAN name sources must match RADIUS office keys."
+  }
+
+  validation {
+    condition = alltrue([for source in values(var.radius_vlan_name_sources) :
+      (source.unifi_host_id != null) != (source.meraki_network_id != null) &&
+      (source.unifi_site_id == null || source.unifi_host_id != null) &&
+      alltrue([for id in [source.unifi_host_id, source.unifi_site_id, source.meraki_network_id] :
+        id == null ? true : length(id) > 0 && length(id) <= 255 && id == trimspace(id)
+      ])
+    ])
+    error_message = "Each VLAN name source requires exactly one provider, nonempty IDs with no surrounding whitespace, and a console ID when pinning a UniFi site."
+  }
+
+  validation {
+    condition = alltrue([for source in values(var.radius_vlan_name_sources) :
+      (source.unifi_host_id == null || var.unifi_api_key != "") &&
+      (source.meraki_network_id == null || var.meraki_api_key != "")
+    ])
+    error_message = "VLAN name sources require the corresponding unifi_api_key or meraki_api_key."
+  }
+}
+
 variable "armor_trusted_cidrs" {
   description = "Office egress CIDRs exempt from the CA's Cloud Armor rate limit. Every device at a site shares one NAT IP, so enrollment bursts otherwise trip the per-IP ban. Max 10 (Cloud Armor per-rule limit)."
   type        = list(string)

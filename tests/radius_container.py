@@ -452,12 +452,28 @@ def main():
             policy['locations'] = {'nyc': {'group_vlans': {'byod': 210}, 'vlan_names': {'210': 'NYC Guest'}},
                                    'atl': {'group_vlans': {'byod': 220}, 'vlan_names': {'220': 'ATL Guest'}}}
             policy_file.write_text(json.dumps(policy))
-            authenticate('nyc-location', source_ip='127.0.0.2', expected=(210,))
             if CERTIFICATE_MODE:
-                assert records(AUTH_LOG)[-1]['vlan_name'] == 'NYC Guest'
+                sources = {'nyc': {'unifi_host_id': 'nyc-console'}, 'atl': {'meraki_network_id': 'N_ATL'}}
+                (RADDB / 'vlan-name-sources.json').write_text(json.dumps(sources))
+                controller_names = {'locations': {
+                    'nyc': {'source': sources['nyc'], 'updated_at': time.time(), 'names': {'210': 'UniFi Guest "NYC"'}},
+                    'atl': {'source': sources['atl'], 'updated_at': time.time(), 'names': {'220': 'Meraki Guest ATL'}}}}
+                controller_cache = RADDB / 'vlan-name-cache.json'
+                controller_cache.write_text(json.dumps(controller_names))
+            nyc_session = authenticate('nyc-location', source_ip='127.0.0.2', expected=(210,))
+            if CERTIFICATE_MODE:
+                assert records(AUTH_LOG)[-1]['vlan_name'] == 'UniFi Guest "NYC"'
             authenticate('atl-location-spoofed-nas', source_ip='127.0.0.3', nas_identifier='nyc', expected=(220,))
             if CERTIFICATE_MODE:
-                assert records(AUTH_LOG)[-1]['vlan_name'] == 'ATL Guest'
+                assert records(AUTH_LOG)[-1]['vlan_name'] == 'Meraki Guest ATL'
+                controller_names['locations']['nyc']['names']['210'] = 'Renamed UniFi Guest'
+                controller_cache.write_text(json.dumps(controller_names))
+                accounting('nyc-controller-rename', nyc_session, source_ip='127.0.0.2', expected_vlan=210)
+                assert records(ACCT_LOG)[-1]['vlan_name'] == 'Renamed UniFi Guest'
+                controller_cache.write_text('invalid')
+                accounting('nyc-controller-unavailable', nyc_session, source_ip='127.0.0.2', expected_vlan=210)
+                assert records(ACCT_LOG)[-1]['vlan_name'] == 'NYC Guest'
+                controller_cache.write_text(json.dumps(controller_names))
             authenticate('atl-location-reauth', source_ip='127.0.0.3', expected=(220, 220))
             authenticate('unknown-location', source_ip='127.0.0.4', nas_identifier='nyc', expected=(None,))
 

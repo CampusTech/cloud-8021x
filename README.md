@@ -409,13 +409,16 @@ The VLAN filter applies only to this section, so the overview and reject widgets
 continue to show events without an assignment. Infrastructure metrics have no
 per-VLAN dimension.
 
-In certificate inventory mode, optional site-specific `vlan_names` labels add
-`vlan_name` alongside `vlan_id` in authentication/accounting logs and both event
-tables (for example, `5` and `Secure`). Configure names in
-[`radius_vlan_policy`](docs/dynamic-vlans.md#vlan-names-in-datadog); names are
-display metadata and do not change authorization. Accounting labels the original
-signed VLAN using the current name at that site. Missing labels stay blank;
-older logs are not backfilled.
+In certificate inventory mode, UniFi/Meraki network names add `vlan_name`
+alongside `vlan_id` in authentication/accounting logs and both event tables
+(for example, `5` and `Secure`). Configure
+[`radius_vlan_name_sources`](docs/dynamic-vlans.md#vlan-names-in-datadog) for each
+office; UniFi WAN-discovery consoles are reused automatically. Names refresh
+every five minutes without API calls during authentication. Optional
+`radius_vlan_policy.vlan_names` labels provide a fallback. Names are display
+metadata and do not change authorization. Accounting labels the original signed
+VLAN using its current name at that site. Missing names stay blank; older logs
+are not backfilled.
 
 VLAN IDs are local to each location. Use the site filter or source-IP breakdown
 to distinguish the same ID at different sites. Source IP remains available when

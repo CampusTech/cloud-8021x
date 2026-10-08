@@ -112,6 +112,7 @@ printf '%s' '${device_policy_module_b64}' | base64 -d > "$RADDB/mods-config/pyth
 printf '%s' '${inventory_policy_module_b64}' | base64 -d > "$RADDB/mods-config/python3/inventory_policy.py"
 printf '%s' '${radius_sources_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_sources.py"
 printf '%s' '${radius_identity_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_identity.py"
+printf '%s' '${vlan_names_module_b64}' | base64 -d > "$RADDB/mods-config/python3/vlan_names.py"
 printf '%s' '${radius_log_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_log.py"
 printf '%s' '${radius_vlan_module_b64}' | base64 -d > "$RADDB/mods-config/python3/radius_vlan.py"
 printf '%s' '${fleet_certificates_module_b64}' | base64 -d > "$RADDB/mods-config/python3/fleet_certificates.py"
@@ -123,7 +124,8 @@ chmod 644 "$RADDB/fleet-scep-profiles.json"
 chmod 644 "$RADDB/mods-config/python3/attested_acme.py" "$RADDB/attested-acme.json" "$RADDB/fleet-acme-profiles.json"
 printf '%s' '${windows_certificates_script_b64}' | base64 -d > "$RADDB/mods-config/python3/windows_certificates.ps1"
 printf '%s' '${vlan_policy_config_b64}' | base64 -d > "$RADDB/vlan-policy.json"
-chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log,radius_sources}.py "$RADDB/vlan-policy.json"
+printf '%s' '${vlan_name_sources_config_b64}' | base64 -d > "$RADDB/vlan-name-sources.json"
+chmod 644 "$RADDB/mods-config/python3/"{device_policy,inventory_policy,radius_vlan,radius_identity,radius_log,radius_sources,vlan_names}.py "$RADDB/vlan-policy.json" "$RADDB/vlan-name-sources.json"
 chmod 644 "$RADDB/mods-config/python3/fleet_certificates.py"
 chmod 644 "$RADDB/mods-config/python3/windows_certificates.ps1"
 
@@ -2609,6 +2611,16 @@ MERAKICACHEEOF
     chmod 644 /etc/cron.d/meraki-ap-cache
 
     echo "Meraki AP cache configured."
+fi
+
+# ---------------------------------------------------------------------------
+# Display-only controller VLAN inventory runs independently of AP discovery.
+# Packet processing never calls these APIs or changes authorization on failure.
+rm -f /etc/cron.d/radius-vlan-names
+if jq -e 'length > 0' "$RADDB/vlan-name-sources.json" >/dev/null; then
+    python3 "$RADDB/mods-config/python3/vlan_names.py" || true
+    echo '*/5 * * * * root /usr/bin/python3 /etc/freeradius/3.0/mods-config/python3/vlan_names.py' > /etc/cron.d/radius-vlan-names
+    chmod 644 /etc/cron.d/radius-vlan-names
 fi
 
 # ---------------------------------------------------------------------------

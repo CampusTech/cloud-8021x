@@ -9,6 +9,35 @@ import unittest
 
 @unittest.skipUnless(shutil.which('terraform'), 'Terraform is required for configuration validation')
 class TerraformPolicyTests(unittest.TestCase):
+    def test_vlan_name_api_sources_require_office_provider_and_credentials(self):
+        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        declaration = re.search(r'variable "radius_vlan_name_sources" \{.*?\n\}', source, re.S)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'main.tf').write_text('variable "radius_clients" { default = { nyc = {}, atl = {} } }\n'
+                'variable "unifi_api_key" { default = "test" }\n'
+                'variable "meraki_api_key" { default = "test" }\n' + declaration +
+                '\noutput "sources" { value = var.radius_vlan_name_sources }\n')
+            for sources, keys, valid in [
+                ({}, {}, True),
+                ({'nyc': {'unifi_host_id': 'console:123'}}, {}, True),
+                ({'nyc': {'unifi_host_id': 'console', 'unifi_site_id': 'site'}}, {}, True),
+                ({'atl': {'meraki_network_id': 'N_123'}}, {}, True),
+                ({'wrong': {'unifi_host_id': 'console'}}, {}, False),
+                ({'nyc': {}}, {}, False),
+                ({'nyc': {'unifi_host_id': 'console', 'meraki_network_id': 'N_123'}}, {}, False),
+                ({'nyc': {'unifi_site_id': 'site'}}, {}, False),
+                ({'nyc': {'unifi_host_id': ' console '}}, {}, False),
+                ({'nyc': {'unifi_host_id': ''}}, {}, False),
+                ({'nyc': {'unifi_host_id': 'console'}}, {'unifi_api_key': ''}, False),
+                ({'atl': {'meraki_network_id': 'N_123'}}, {'meraki_api_key': ''}, False),
+            ]:
+                with self.subTest(sources=sources, keys=keys):
+                    (root / 'terraform.tfvars.json').write_text(json.dumps({'radius_vlan_name_sources': sources, **keys}))
+                    result = subprocess.run(['terraform', '-chdir=' + directory, 'plan', '-input=false', '-no-color'],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+
     def test_vlan_names_are_preserved_and_validated_for_global_and_site_policy(self):
         source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
         declaration = 'variable "radius_vlan_policy"' + source.split('variable "radius_vlan_policy"', 1)[1]

@@ -120,6 +120,11 @@ resource "google_secret_manager_secret_iam_member" "cert_secrets_write" {
 # -----------------------------------------------------------------------------
 
 locals {
+  vlan_name_sources = merge({
+    for office, client in var.radius_clients : office => { unifi_host_id = client.unifi_host_id }
+    if client.unifi_host_id != null
+  }, var.radius_vlan_name_sources)
+
   startup_script = templatefile("${path.module}/scripts/startup.sh", {
     project_id                        = google_project.this.project_id
     server_cert_cn                    = var.server_cert_cn
@@ -140,6 +145,8 @@ locals {
     device_policy_module_b64          = filebase64("${path.module}/scripts/device_policy.py")
     inventory_policy_module_b64       = filebase64("${path.module}/scripts/inventory_policy.py")
     radius_identity_module_b64        = filebase64("${path.module}/scripts/radius_identity.py")
+    vlan_names_module_b64             = filebase64("${path.module}/scripts/vlan_names.py")
+    vlan_name_sources_config_b64      = base64encode(jsonencode(local.vlan_name_sources))
     radius_sources_module_b64         = filebase64("${path.module}/scripts/radius_sources.py")
     unifi_source_discovery_enabled    = local.unifi_source_discovery_enabled
     radius_sources_config_b64         = base64encode(jsonencode({ project = google_project.this.project_id, clients = var.radius_clients }))
