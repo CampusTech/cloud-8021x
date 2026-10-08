@@ -128,3 +128,25 @@ func TestExplicitSiteOptOutSurvivesDecode(t *testing.T) {
 		t.Fatal("explicit opt-out enabled")
 	}
 }
+
+func TestPinnedCloudSQLInstanceCAMode(t *testing.T) {
+	extra := "  tls_mode: cloudsql-instance-ca\n  cloud_sql_instance: campus-dev:us-central1:shared-postgres\n  instance_ca_pem_sha256: '" + strings.Repeat("a", 64) + "'\n"
+	good := strings.Replace(validYAML, "database:\n", "database:\n"+extra, 1)
+	if _, err := Decode(strings.NewReader(good)); err != nil {
+		t.Fatalf("explicit pinned per-instance CA mode rejected: %v", err)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, "  instance_ca_pem_sha256: '"+strings.Repeat("a", 64)+"'\n", "", 1),
+		strings.Replace(good, strings.Repeat("a", 64), strings.Repeat("g", 64), 1),
+		strings.Replace(good, strings.Repeat("a", 64), "abcd", 1),
+		strings.Replace(good, "campus-dev:us-central1:shared-postgres", "", 1),
+		strings.Replace(good, "campus-dev:us-central1:shared-postgres", "host.example", 1),
+		strings.Replace(good, "campus-dev:us-central1:shared-postgres", "campus-dev:us-central1:postgres; command", 1),
+		strings.Replace(good, "cloudsql-instance-ca", "require", 1),
+		strings.Replace(good, "ca_file: /etc/cloud-8021x/postgres-ca.pem", "ca_file: ''", 1),
+	} {
+		if _, err := Decode(strings.NewReader(bad)); err == nil {
+			t.Fatalf("insecure Cloud SQL mode accepted: %q", bad)
+		}
+	}
+}

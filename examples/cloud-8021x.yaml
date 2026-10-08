@@ -99,6 +99,11 @@ database:
   native_writer_dsn: {file: /etc/freeradius/3.0/postgres-native-dsn}
   ca_file: /etc/cloud-8021x/postgres-ca.pem
   tls_mode: verify-full
+  # Existing Cloud SQL internal per-instance CA/private-IP deployments may use
+  # tls_mode: cloudsql-instance-ca only with both fields below. Bootstrap verifies
+  # the instance's CA mode; runtime verifies the exact CA PEM pin and certificate chain.
+  # cloud_sql_instance: campus-dev:us-central1:shared-postgres
+  # instance_ca_pem_sha256: <exact 64-hex SHA-256 of the trusted CA PEM file>
   min_connections: 0
   max_connections: 8
   connect_timeout: 5s

@@ -3,6 +3,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +13,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+var cloudSQLInstancePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]:[a-z]+-[a-z]+[0-9]:[a-z][a-z0-9-]{0,97}$`)
 
 const SchemaVersion = 1
 const MaxConfigBytes = 1 << 20
@@ -161,15 +165,18 @@ type RadiusClient struct {
 	SignalingProfile string    `yaml:"signaling_profile"`
 }
 type Database struct {
-	RuntimeDSN      SecretRef     `yaml:"runtime_dsn"`
-	MigrationDSN    SecretRef     `yaml:"migration_dsn"`
-	NativeWriterDSN SecretRef     `yaml:"native_writer_dsn"`
-	CAFile          string        `yaml:"ca_file"`
-	TLSMode         string        `yaml:"tls_mode"`
-	MinConnections  int           `yaml:"min_connections"`
-	MaxConnections  int           `yaml:"max_connections"`
-	ConnectTimeout  time.Duration `yaml:"connect_timeout"`
-	QueryTimeout    time.Duration `yaml:"query_timeout"`
+	// cloudsql-instance-ca requires this explicit instance and exact trusted CA PEM pin.
+	CloudSQLInstance    string        `yaml:"cloud_sql_instance"`
+	InstanceCAPEMSHA256 string        `yaml:"instance_ca_pem_sha256"`
+	RuntimeDSN          SecretRef     `yaml:"runtime_dsn"`
+	MigrationDSN        SecretRef     `yaml:"migration_dsn"`
+	NativeWriterDSN     SecretRef     `yaml:"native_writer_dsn"`
+	CAFile              string        `yaml:"ca_file"`
+	TLSMode             string        `yaml:"tls_mode"`
+	MinConnections      int           `yaml:"min_connections"`
+	MaxConnections      int           `yaml:"max_connections"`
+	ConnectTimeout      time.Duration `yaml:"connect_timeout"`
+	QueryTimeout        time.Duration `yaml:"query_timeout"`
 }
 type Telemetry struct {
 	Enabled          bool          `yaml:"enabled"`
@@ -339,8 +346,18 @@ func (c Config) Validate() error {
 		return errors.New("runtime, migration and native-writer database credentials require separate files")
 	}
 
-	if c.Database.TLSMode != "verify-full" || !cleanPath(c.Database.CAFile) {
-		return errors.New("database requires verify-full TLS and an absolute ca_file")
+	if !cleanPath(c.Database.CAFile) {
+		return errors.New("database requires an absolute trusted ca_file")
+	}
+	switch c.Database.TLSMode {
+	case "verify-full":
+	case "cloudsql-instance-ca":
+		pin, err := hex.DecodeString(c.Database.InstanceCAPEMSHA256)
+		if err != nil || len(pin) != 32 || !cloudSQLInstancePattern.MatchString(c.Database.CloudSQLInstance) {
+			return errors.New("cloudsql-instance-ca TLS requires a 64-hex instance_ca_pem_sha256 pin and canonical project:region:instance cloud_sql_instance")
+		}
+	default:
+		return errors.New("database requires verify-full TLS or explicit pinned cloudsql-instance-ca TLS")
 	}
 	if c.Database.MinConnections < 0 || c.Database.MaxConnections < 1 || c.Database.MaxConnections > 64 || c.Database.MinConnections > c.Database.MaxConnections || !duration(c.Database.ConnectTimeout, time.Minute) || !duration(c.Database.QueryTimeout, time.Minute) {
 		return errors.New("database pool or timeout out of bounds")
