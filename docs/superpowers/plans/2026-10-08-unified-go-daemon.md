@@ -82,11 +82,11 @@ Files: internal/adapters/freeradius, internal/templates/freeradius, internal/eve
 
 Files: internal/telemetry, internal/adapters/otlp, internal/templates/ddot, telemetry Terraform/dashboard contracts.
 
-- [ ] Add in-memory OTel/fake OTLP tests for resources, logs/spans correlation, sampling independence, safe attributes/redaction, cancellation and bounded failure.
-- [ ] Implement single SDK initialization, logrus bridge, safe instrumented HTTP, runtime/job/backend metrics, independent business events and bounded shutdown. Ordinary signals async; accounting durable outbox uses synchronous OTLP transport.
-- [ ] Persist export attempts before I/O, disable daemon ambiguous retry, handle partial success through durable quarantine and retain payload/history for explicit recovery. Local shared ledger provides authoritative usage.
-- [ ] Embed DDOT config with dedicated persistent file_storage fsync queue and unlimited bounded-delay retry, no volatile prequeue batch, no duplicate remote log collection; preserve Agent host/FreeRADIUS checks.
-- [ ] Test receiver failure/partial/lost response and real Collector persistence/restart where available; commit.
+- [x] Add in-memory OTel/fake OTLP tests for resources, logs/spans correlation, sampling independence, safe attributes/redaction, cancellation and bounded failure.
+- [x] Implement single SDK initialization, logrus bridge, safe instrumented HTTP, runtime/job/backend metrics, independent business events and bounded shutdown. Ordinary signals async; accounting durable outbox uses synchronous OTLP transport.
+- [x] Persist export attempts before I/O, disable daemon ambiguous retry, handle partial success through durable quarantine and retain payload/history for explicit recovery. Local shared ledger provides authoritative usage.
+- [x] Embed DDOT config with dedicated persistent file_storage fsync queue and unlimited bounded-delay retry, no volatile prequeue batch, no duplicate remote log collection; preserve Agent host/FreeRADIUS checks.
+- [x] Test receiver failure/partial/lost response and real Collector persistence/restart where available; commit.
 
 ## Task 8: CA and protected bootstrap operations
 
