@@ -71,12 +71,12 @@ Files: internal/adapters/unifi, internal/adapters/meraki, internal/network, inte
 
 Files: internal/adapters/freeradius, internal/templates/freeradius, internal/events/auth, tests/radius_integration.py and disposable accounting harness.
 
-- [ ] Add actual FreeRADIUS config/packet tests before replacing runtime hooks. Policy failure/overload must precede EAP success/MPPE; fingerprint TLS resumption disabled; legacy current-policy checks retained.
-- [ ] Embed static EAP/REST/verified-leaf/source templates and native accounting detail writer/buffered reader/PostgreSQL SQL module. Replay uses plain append INSERT, catchall nullable raw fields, zero startup connections and bounded retries; only replay invokes SQL.
-- [ ] SQL intake preserves original native receipt/source context and replay identity. Failure prevents replay advancement. Native local buffer is not replicated/fsynced; acknowledge/document that boundary honestly.
-- [ ] Embed separate final post-auth logs recording final outcomes with sensitive attrs suppressed before disk. Go reader handles escaped/bounded grammar, incomplete tails, file generation IDs and PostgreSQL cursor/event/outbox atomicity; retain files through outages.
-- [ ] Add a bounded native detail writer ferror/fclose error-check patch under patches/freeradius; build against selected exact distribution/source ABI and prove /dev/full suppresses accounting ACK while ordinary buffering/replay and observational auth logging preserve behavior. No fsync/second spool/REST dependency.
-- [ ] Validate configs with real FreeRADIUS, run actual Start/Interim/Stop/duplicate/database-outage replay and secret-redaction tests; commit.
+- [x] Add actual FreeRADIUS config/packet tests before replacing runtime hooks. Policy failure/overload must precede EAP success/MPPE; fingerprint TLS resumption disabled; legacy current-policy checks retained.
+- [x] Embed static EAP/REST/verified-leaf/source templates and native accounting detail writer/buffered reader/PostgreSQL SQL module. Replay uses plain append INSERT, catchall nullable raw fields, zero startup connections and bounded retries; only replay invokes SQL.
+- [x] SQL intake preserves original native receipt/source context and replay identity. Failure prevents replay advancement. Native local buffer is not replicated/fsynced; acknowledge/document that boundary honestly.
+- [x] Embed separate final post-auth logs recording final outcomes with sensitive attrs suppressed before disk. Go reader handles escaped/bounded grammar, incomplete tails, file generation IDs and PostgreSQL cursor/event/outbox atomicity; retain files through outages.
+- [x] Add a bounded native detail writer ferror/fclose error-check patch under patches/freeradius; build against selected exact distribution/source ABI and prove /dev/full suppresses accounting ACK while ordinary buffering/replay and observational auth logging preserve behavior. No fsync/second spool/REST dependency.
+- [x] Validate configs with real FreeRADIUS, run actual Start/Interim/Stop/duplicate/database-outage replay and secret-redaction tests; commit.
 
 ## Task 7: OTel telemetry and durable OTLP export
 
