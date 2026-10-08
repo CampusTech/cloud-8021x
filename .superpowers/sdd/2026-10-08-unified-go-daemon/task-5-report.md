@@ -315,3 +315,63 @@ https://developer.ui.com/network/v10.6.106/getadopteddevicedetails ; official Me
 https://developer.cisco.com/meraki/api-v1/get-organization-wireless-ssids-statuses-by-device/
 and https://developer.cisco.com/meraki/api-v1/get-network-vlan-profiles/ . No public
 example tokens or tenant IDs from documentation were used in code or fixtures.
+
+## Review fix round 1 (base 35c7c1a)
+
+Both Important findings from `/private/tmp/cloud8021x-task5-review/report.md`
+are fixed. Only the protected source operation and its focused tests changed.
+
+1. Rollback now validates restored FreeRADIUS configuration separately and calls
+   Activate only after validation succeeds. Restoration or validation failure
+   skips activation; independent firewall cleanup still executes. An incomplete
+   rollback still returns reconciliation required through Applier, and original
+   applied state/freshness is not committed or replaced on that path.
+2. Existing enabled firewall snapshots with nil or empty SourceRanges now reject
+   before client installation, validation, activation or any firewall patch.
+   Existing explicit `/0` rejection remains. Disabled-plan convergence still uses
+   the supported `192.0.2.1/32` disabled sentinel, which remains snapshot-valid;
+   the semantics of already-disabled rules were not broadened or changed.
+
+Actual RED, before the implementation edits:
+
+```text
+go test ./internal/privileged/sources -run 'Test(RollbackValidationFailure|ApplyFailedRollbackValidation|EnabledEmptyFirewall|DisabledFirewallSentinel|FirewallRejectsBroad)' -count=1
+```
+
+Exit 1, with these reproduced failures:
+
+- `TestRollbackValidationFailureSkipsActivationAndRestoresFirewall`:
+  `rollback activated invalid restored configuration: validate=1 activate=1 health=1`.
+- `TestApplyFailedRollbackValidationRequiresReconciliation`:
+  `failed config restarted during rollback: validate:2 activate:1 health:1`.
+- Both `TestEnabledEmptyFirewallRejectedBeforeApplyMutation` subcases (nil and
+  non-nil empty slice) accepted the unrestricted snapshot, reached validation,
+  activation and one firewall patch, and changed client/state files.
+
+Actual GREEN after the fixes and goimports:
+
+```text
+go test -race ./internal/privileged/sources ./internal/app ./internal/jobs/network
+ok github.com/CampusTech/cloud-8021x/internal/privileged/sources 1.349s
+ok github.com/CampusTech/cloud-8021x/internal/app 1.251s
+ok github.com/CampusTech/cloud-8021x/internal/jobs/network (cached)
+
+golangci-lint run
+0 issues.
+
+git diff --check
+```
+
+The focused tests use actual temporary files and the existing typed operations
+fixtures. They prove zero activation/health calls after rollback validation fails,
+restoration of independently changed firewall ranges despite that failure,
+restoration of old client bytes, retained original state, and a live independent
+cleanup context even when the forward request is canceled. The end-to-end Applier
+case preserves the explicit `rollback incomplete and reconciliation required`
+result. Enabled-empty snapshots cannot reach any mutation, while explicit `/0`
+protection and disabled sentinel convergence both remain green.
+
+No full root, PostgreSQL, SCEP/Python, Linux-container or live API suite was
+repeated for these localized branches. No push, production operation, merge,
+release or subagent was used. Self-review found no remaining concern in these
+fixes; previously documented Task 6/8/9/10 integration obligations are unchanged.

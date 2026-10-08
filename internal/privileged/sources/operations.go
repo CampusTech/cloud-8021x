@@ -64,6 +64,9 @@ func NewFileOperations(r Radius, f Firewall, target FirewallTarget, secrets Secr
 	return &FileOperations{Radius: r, Firewall: f, Target: target, Secrets: secrets, clientsPath: ClientsFile, statePath: StateFile, poll: time.Second}, nil
 }
 func (o *FileOperations) check(r FirewallRule) error {
+	if !r.Disabled && len(r.SourceRanges) == 0 {
+		return errors.New("enabled firewall must have explicit bounded source ranges")
+	}
 	if len(r.SourceRanges) > 2048 {
 		return errors.New("firewall source ranges exceed bound")
 	}
@@ -230,7 +233,11 @@ func (o *FileOperations) Rollback(ctx context.Context, b Backup) error {
 	}
 	es = append(es, restore(o.clientsPath, b.Clients, b.ClientsExist))
 	if errors.Join(es...) == nil {
-		es = append(es, o.Validate(ctx), o.Activate(ctx))
+		if err := o.Validate(ctx); err != nil {
+			es = append(es, err)
+		} else {
+			es = append(es, o.Activate(ctx))
+		}
 	}
 	es = append(es, o.converge(ctx, b.Firewall))
 	if errors.Join(es...) != nil {
