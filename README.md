@@ -393,16 +393,24 @@ If you provide UniFi API credentials, FreeRADIUS will resolve the access point a
 
 If you provide a Datadog Application key, Terraform creates a dashboard with authentication metrics, device analytics, location breakdowns, accounting sessions, and infrastructure health.
 
-1. In Datadog, create an **Application Key** (Organization Settings → Application Keys) scoped to `dashboards_read` + `dashboards_write` only.
+1. In Datadog, create an **Application Key** (Organization Settings → Application Keys) scoped to `dashboards_read`, `dashboards_write`, `logs_read_pipelines`, and `logs_write_pipelines` for the dashboard and RADIUS owner-default pipeline. If you enable the collector health monitor, its Terraform application key also needs `monitors_read` and `monitors_write`. The collector uses a separate key scoped only to `logs_read_data`.
 
 2. Add to your `terraform.tfvars`:
    ```hcl
    datadog_app_key = "your-application-key"
    ```
 
-3. `terraform apply` — creates the dashboard, outputs the URL via `terraform output datadog_dashboard_url`.
+3. For an existing dashboard, import its ID before applying so Terraform updates it instead of creating a duplicate:
+   ```sh
+   terraform import 'datadog_dashboard_json.radius[0]' DASHBOARD_ID
+   ```
+   Then review `terraform plan` and apply it. The URL is available via `terraform output datadog_dashboard_url`. A new installation can skip the import.
 
 **Without Terraform**: Import `datadog-dashboard.json` (FreeRADIUS) and, if you run the Smallstep CA, `datadog-smallstep-dashboard.json` via Datadog UI → Dashboards → New Dashboard → Import Dashboard JSON.
+
+Missing reject reasons display as `Unknown / reason not recorded`, and missing session-stop causes display as `Unknown / cause not recorded`. These ingestion defaults preserve explicit reasons and causes, including the network-reported `Unknown` cause. Historical blank buckets mean no reason or cause was recorded; chart titles identify them until they age out.
+
+Missing owner names display as `N/A`. The RADIUS logger and usage collector emit the placeholder, and the RADIUS log pipeline also fills missing or empty owners during staged upgrades. Missing owner facets remain included in dashboard groupings. Historical empty-string values and raw log records are not rewritten; those blank labels age out with the selected window. The placeholder does not establish a verified identity. If the named pipeline already exists, import it into `datadog_logs_custom_pipeline.radius_owner[0]` before applying Terraform to avoid creating a duplicate.
 
 The **VLAN Assignments** section adds a `$vlan` filter, accepted authentications
 by VLAN, distinct verified devices seen during the selected time range, a
@@ -430,6 +438,104 @@ of currently connected sessions. A blank/missing `vlan_id` means no dynamic
 assignment was recorded (expected at opted-out sites), not VLAN 0 or a failure.
 It does not tell us the AP/switch's default VLAN.
 
+The **Network Data Usage** section uses `service:radius-usage` interval records
+from `scripts/radius_usage_collector.py` for Wi-Fi or Ethernet clients when
+the AP or switch sends RADIUS accounting. One collector reads accounting from
+both RADIUS nodes and persists a private checkpoint. It deduplicates retries,
+credits counter increases when reported, and includes ongoing sessions.
+`input_bytes` is device upload; `output_bytes` is device download. New sessions
+without a Start establish a baseline; missing baselines, resets and legacy
+32-bit wraps leave gaps. These are observed totals, not a billing meter.
+
+The collector supports `--dry-run`, `--debug`, cached JSONL seeding and bounded
+`--follow` runs. Supply a private JSON credentials file with `api_key` and
+`app_key`, and a durable `--state` path. A single-writer lock prevents overlapping
+CLI runs. Subsequent polls credit newly observed reports from the checkpoint
+overlap, including delayed reports and recovery after downtime. Offline window
+reports and initial collection still exclude usage outside their requested window.
+An older checkpoint without an initial collection boundary adopts its first
+15-minute recovery overlap as that boundary.
+An ambiguous intake response stops collection with a pending batch
+for operator reconciliation rather than risking duplicate ingestion. The
+collector runs only when explicitly enabled; dashboard deployment alone does not
+start it. Keep its checkpoint across invocations.
+
+Set `datadog_usage_sites` to a map of display labels to exact log `site_name`
+values to show large accounting-event and measured-usage counters per site.
+These tiles always count the last hour, independently of the dashboard time
+picker. With an empty map, they show totals across all sites. A zero means no
+matching events in that hour, rather than proof that a site is offline.
+
+For permanent collection, set `enable_radius_usage_collector = true` and
+`radius_usage_credentials_secret_id` to an existing secret in this GCP project.
+The secret contains JSON `api_key` plus an application key scoped only to
+`logs_read_data`; keep credential material out of Terraform variables/state.
+Bootstrap installs `radius-usage-collector.service` only on `radius-primary`.
+It queries both nodes every two minutes and stores its checkpoint at
+`/var/lib/radius-usage/checkpoint.json`. The VM account receives access to only
+that secret. Credentials are fetched into memory through the VM identity.
+
+If the secret-specific IAM grant already exists, import it before applying:
+
+```sh
+terraform import 'google_secret_manager_secret_iam_member.radius_usage_credentials[0]' \
+  'projects/PROJECT/secrets/SECRET roles/secretmanager.secretAccessor serviceAccount:RADIUS_VM_SERVICE_ACCOUNT'
+```
+
+Disabling `enable_radius_usage_collector` stops and disables the managed collector
+on the next bootstrap run, preserving its checkpoint and installed code. It does
+not change an unmanaged service with the same name.
+
+To deploy this monitor independently, stage `radius_usage.py`,
+`radius_usage_collector.py`, and `radius_usage_service.py`, then run the service
+installer on the primary with `--secret projects/PROJECT/secrets/SECRET/versions/latest`.
+Use `--dry-run` to inspect its unit. Use a dedicated state directory; the installer
+refuses directories containing unrelated files. This installs/restarts only the
+usage collector. Preserve/migrate an existing checkpoint before starting, and retain
+its tag with `radius_usage_preview_id` (or installer `--preview-id`) when moving
+an existing preview. Never blindly replay a checkpoint with an uncertain batch.
+
+Successful passes emit `Collection-Heartbeat` events even when zero accounting
+reports arrive. The optional Datadog monitor alerts after ten minutes without a
+heartbeat; quiet traffic does not trigger it. A fresh heartbeat confirms successful
+collection, not complete NAS reporting. If this monitor was first created
+through the API for a preview, import its ID into
+`datadog_monitor.radius_usage_stale[0]` before applying Terraform. Per-site event
+counters show received reports and measured intervals over the last hour; they
+are not a guarantee of reporting completeness. Usage intervals can lag accounting
+when a client has no counter increase or no safe baseline; a stopped heartbeat indicates
+that the collector itself is stale.
+
+The throughput table shows an interval-weighted mean for each client, using
+observed byte increases divided by the corresponding session-time increases.
+It is not instantaneous bandwidth. Derived records retain the cumulative age
+as `source_session_time`; their `session_time` measure is the interval duration.
+The cumulative session table uses maximum raw counters per source/NAS/client/
+session reported in the last 30 minutes; ended sessions may remain visible.
+Freshness and window boundaries depend on the NAS reporting interval (currently
+10–30 minutes in the offices); configure 120 seconds where supported. Verified
+owner/device breakdowns exclude accounting without a valid signed Class.
+
+The infrastructure section shows **FreeRADIUS process uptime by server**,
+collected by Datadog's process check with an exact `freeradius` executable-name
+match. It excludes the exporter and reports process lifetime independently
+of VM uptime. The process check is enabled even when Smallstep is disabled.
+
+The **Auth Diagnostics** section separates rejection attempts from distinct
+recorded client addresses per source/site. A station address is not a verified
+person/device, and private addresses can change. Open an affected-client row’s
+**View latest successful authentication** link for matching accepted events,
+newest first; increase the Logs window to investigate older success. Blank site
+labels remain visible, so per-site buckets are not additive unique-device totals.
+
+`datadog_hostname_suffix` prevents parallel deployments with identically named
+VMs from colliding in Datadog. Its default (`null`) uses the unique GCP project ID.
+When upgrading an existing production deployment, explicitly set `""` to preserve
+historical `radius-primary`/`radius-secondary` identities. Give a canary its own
+stable suffix (for example `"canary-bb45"`). Dashboard host filters and collector
+source identities follow this setting. VM uptime measures the operating system;
+FreeRADIUS process uptime measures the daemon independently.
+
 **Required: Create Log Facets**
 
 Create log facets for the dashboard's groupings, distinct-device counts, and `$site` / `$vlan` dropdown suggestions. Attribute searches work without facets. These are **not** auto-created — the Datadog Terraform provider [does not support facet creation](https://github.com/DataDog/terraform-provider-datadog/issues/1644).
@@ -454,9 +560,12 @@ After your first log data arrives, go to **Datadog → Logs → Facets → Add**
 | RADIUS Source IP | `@src_ip` | String | Assignments by RADIUS Source / VLAN |
 | `@identity_verified` | `@identity_verified` | Boolean | Verified attribution versus diagnostic claims |
 | `@terminate_cause` | `@terminate_cause` | String | Session Termination Causes |
+| `@session_id` | `@session_id` | String | Per-session usage grouping |
+| `@nas_ip` | `@nas_ip` | String | Per-session NAS identity |
+| `@calling_station` | `@calling_station` | String | Per-session client MAC |
 | `@session_time` | `@session_time` | Measure (seconds) | Avg Session Duration |
-| `@input_bytes` | `@input_bytes` | Measure (bytes) | Bandwidth widgets |
-| `@output_bytes` | `@output_bytes` | Measure (bytes) | Bandwidth widgets |
+| `@input_bytes` | `@input_bytes` | Measure (bytes) | Session usage widgets |
+| `@output_bytes` | `@output_bytes` | Measure (bytes) | Session usage widgets |
 
 **Tip**: String facets can be added from any log entry — click the field value and select "Create facet". Measure facets (`@session_time`, `@input_bytes`, `@output_bytes`) must be created as **Measures** (not facets) to support aggregations like `avg` and `sum`.
 
@@ -608,6 +717,7 @@ workflow is proven; a shorter duration also shortens the recovery window.
 ├── startup-transport.tf     # Private storage fallback for large startup scripts
 ├── outputs.tf               # IP, SSH command, RADIUS config
 ├── datadog.tf               # Optional Datadog dashboard (requires datadog_app_key)
+├── datadog-radius.tf        # Display defaults for missing RADIUS log metadata
 ├── datadog-smallstep.tf     # Smallstep CA dashboard + monitors + log pipeline
 ├── datadog-dashboard.json            # FreeRADIUS dashboard JSON export (importable via Datadog UI)
 ├── datadog-smallstep-dashboard.json  # Smallstep CA dashboard JSON export

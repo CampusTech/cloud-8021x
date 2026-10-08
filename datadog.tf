@@ -1,7 +1,8 @@
 # -----------------------------------------------------------------------------
 # Datadog — Optional dashboard
 # Set datadog_app_key to enable. Scope the Application Key to
-# dashboards_read + dashboards_write only.
+# dashboards_read + dashboards_write; the owner-default pipeline also requires
+# logs_read_pipelines + logs_write_pipelines.
 # -----------------------------------------------------------------------------
 
 provider "datadog" {
@@ -12,9 +13,10 @@ provider "datadog" {
 }
 
 locals {
-  datadog_enabled = var.datadog_app_key != ""
-
-  dashboard_json = {
+  datadog_enabled         = var.datadog_app_key != ""
+  radius_hosts_filter     = "$host AND (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
+  radius_log_hosts_filter = "host:$host.value (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
+  dashboard_content = {
     title       = "FreeRADIUS 802.1X"
     description = "RADIUS authentication, assigned VLANs, devices, accounting, and infrastructure. The VLAN filter applies to the VLAN Assignments section; other sections retain unassigned and rejected events."
     layout_type = "ordered"
@@ -38,8 +40,8 @@ locals {
         name   = "host"
         prefix = "host"
         available_values = [
-          "${google_compute_instance.radius.name}.${var.zone}.c.${google_project.this.project_id}.internal",
-          "${google_compute_instance.radius_secondary.name}.${var.secondary_zone}.c.${google_project.this.project_id}.internal"
+          local.datadog_radius_hosts[google_compute_instance.radius.name],
+          local.datadog_radius_hosts[google_compute_instance.radius_secondary.name]
         ]
         defaults = ["*"]
       }
@@ -56,29 +58,33 @@ locals {
             layout_type = "ordered"
             widgets = [
               {
+                layout = { x = 0, y = 0, width = 2, height = 1 }
                 definition = {
-                  title     = "Server Status"
+                  title     = "RADIUS servers online"
                   type      = "query_value"
                   autoscale = false
                   precision = 0
+                  time      = { live_span = "5m" }
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "min:freeradius.up{$host}", aggregator = "last" },
-                        { data_source = "metrics", name = "b", query = "min:freeradius.freeradius_up{$host}", aggregator = "last" }
+                        { data_source = "metrics", name = "online", query = "max:freeradius.up{${local.radius_hosts_filter}} by {host}.fill(last,60)", aggregator = "last" }
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "default_zero(a) + default_zero(b)" }
+                        { formula = "count_nonzero(online)" }
                       ]
                       conditional_formats = [
-                        { comparator = ">=", value = 1, palette = "white_on_green" }
+                        { comparator = "<", value = 1, palette = "white_on_red" },
+                        { comparator = "=", value = 1, palette = "white_on_yellow" },
+                        { comparator = ">=", value = 2, palette = "white_on_green" }
                       ]
                     }
                   ]
                 }
               },
               {
+                layout = { x = 2, y = 0, width = 3, height = 1 }
                 definition = {
                   title     = "Auth Requests / min"
                   type      = "query_value"
@@ -87,8 +93,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_requests.count{$host}.as_rate()", aggregator = "avg" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_requests.count{$host}.as_rate()", aggregator = "avg" }
+                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_requests.count{${local.radius_hosts_filter}}.as_rate()", aggregator = "avg" },
+                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_requests.count{${local.radius_hosts_filter}}.as_rate()", aggregator = "avg" }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -107,6 +113,7 @@ locals {
               # fixed divisor would be wrong whenever the window changes. The
               # title reflects "over the selected time range".
               {
+                layout = { x = 5, y = 0, width = 2, height = 1 }
                 definition = {
                   title     = "Accepts"
                   type      = "query_value"
@@ -115,7 +122,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -129,6 +136,7 @@ locals {
                 }
               },
               {
+                layout = { x = 7, y = 0, width = 2, height = 1 }
                 definition = {
                   title     = "Rejects"
                   type      = "query_value"
@@ -137,7 +145,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Reject ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -151,6 +159,7 @@ locals {
                 }
               },
               {
+                layout = { x = 9, y = 0, width = 3, height = 1 }
                 definition = {
                   title       = "Auth Success Rate"
                   type        = "query_value"
@@ -160,8 +169,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } },
-                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } },
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -199,7 +208,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "a", search = { query = "service:radius-auth @event:Access-Accept ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -208,7 +217,7 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value" }, compute = { aggregation = "count" } }
+                        { data_source = "logs", name = "c", search = { query = "service:radius-auth @event:Access-Reject ${local.radius_log_hosts_filter} @site_name:$site.value" }, compute = { aggregation = "count" } }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -217,8 +226,8 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_access_challenges.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_access_challenges.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_access_challenges.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_access_challenges.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -233,7 +242,7 @@ locals {
                   title   = "Recent Auth Events"
                   type    = "log_stream"
                   indexes = ["*"]
-                  query   = "service:radius-auth host:$host.value @site_name:$site.value"
+                  query   = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value"
                   columns = ["@timestamp", "@event", "@device_id", "@serial", "@certificate_fingerprint", "@vlan_id", "@vlan_name", "@device_owner", "@device_name", "@ssid", "@site_name", "@ap_name"]
                   sort = {
                     column = "@timestamp"
@@ -244,7 +253,7 @@ locals {
               },
               {
                 definition = {
-                  title = "Reject Reasons"
+                  title = "Reject Reasons (blank = reason not recorded)"
                   type  = "toplist"
                   requests = [
                     {
@@ -252,13 +261,14 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Reject" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Reject" }
                           indexes     = ["*"]
                           group_by = [
                             {
-                              facet = "@reject_reason"
-                              limit = 10
-                              sort  = { aggregation = "count", order = "desc" }
+                              facet                  = "@reject_reason"
+                              should_exclude_missing = false
+                              limit                  = 10
+                              sort                   = { aggregation = "count", order = "desc" }
                             }
                           ]
                           compute = { aggregation = "count" }
@@ -274,6 +284,8 @@ locals {
           }
         },
 
+        local.datadog_auth_group,
+
         # Assigned VLANs (filter scoped here to preserve unassigned/rejected events).
         {
           definition = {
@@ -284,7 +296,7 @@ locals {
               {
                 definition = {
                   type             = "note"
-                  content          = "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview."
+                  content          = "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview. VLAN labels use the name recorded on each event. Older unnamed events are retained; the same device can appear in named and unnamed buckets, so device counts across VLAN/name buckets are not additive."
                   background_color = "white"
                   font_size        = "14"
                   text_align       = "left"
@@ -302,7 +314,7 @@ locals {
                           data_source = "logs"
                           name        = "query1"
                           search = {
-                            query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                            query = "service:radius-auth @event:Access-Accept ${local.radius_log_hosts_filter} @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                           }
                           indexes = [
                             "*",
@@ -314,6 +326,15 @@ locals {
                             {
                               facet = "@vlan_id"
                               limit = 20
+                              sort = {
+                                aggregation = "count"
+                                order       = "desc"
+                              }
+                            },
+                            {
+                              facet                  = "@vlan_name"
+                              limit                  = 20
+                              should_exclude_missing = false
                               sort = {
                                 aggregation = "count"
                                 order       = "desc"
@@ -344,7 +365,7 @@ locals {
                           data_source = "logs"
                           name        = "query1"
                           search = {
-                            query = "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
+                            query = "service:(radius-auth OR radius-acct) ${local.radius_log_hosts_filter} @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
                           }
                           indexes = [
                             "*",
@@ -361,6 +382,16 @@ locals {
                                 aggregation = "cardinality"
                                 order       = "desc"
                                 metric      = "@device_id"
+                              }
+                            },
+                            {
+                              facet                  = "@vlan_name"
+                              limit                  = 20
+                              should_exclude_missing = false
+                              sort = {
+                                aggregation = "cardinality"
+                                metric      = "@device_id"
+                                order       = "desc"
                               }
                             },
                           ]
@@ -387,7 +418,7 @@ locals {
                           data_source = "logs"
                           name        = "query1"
                           search = {
-                            query = "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                            query = "service:radius-auth @event:Access-Accept ${local.radius_log_hosts_filter} @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                           }
                           indexes = [
                             "*",
@@ -407,6 +438,15 @@ locals {
                             {
                               facet = "@vlan_id"
                               limit = 20
+                              sort = {
+                                aggregation = "count"
+                                order       = "desc"
+                              }
+                            },
+                            {
+                              facet                  = "@vlan_name"
+                              limit                  = 20
+                              should_exclude_missing = false
                               sort = {
                                 aggregation = "count"
                                 order       = "desc"
@@ -432,7 +472,7 @@ locals {
                   indexes = [
                     "*",
                   ]
-                  query = "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                  query = "service:(radius-auth OR radius-acct) ${local.radius_log_hosts_filter} @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                   columns = [
                     "@timestamp",
                     "@event",
@@ -477,7 +517,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
@@ -505,7 +545,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
@@ -533,13 +573,14 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
-                              facet = "@device_owner"
-                              limit = 20
-                              sort  = { aggregation = "count", order = "desc" }
+                              facet                  = "@device_owner"
+                              should_exclude_missing = false
+                              limit                  = 20
+                              sort                   = { aggregation = "count", order = "desc" }
                             }
                           ]
                           compute = { aggregation = "count" }
@@ -575,7 +616,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
@@ -604,7 +645,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
@@ -637,7 +678,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept" }
+                          search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
                           indexes     = ["*"]
                           group_by = [
                             {
@@ -659,10 +700,40 @@ locals {
                     }
                   ]
                 }
+              },
+              {
+                layout = { x = 0, y = 2, width = 12, height = 3 }
+                definition = {
+                  title       = "Top authenticators — successful auth"
+                  description = "Successful authentications, not unique clients, grouped by site and AP name. Missing site or AP names are unresolved events; they remain visible in the chart."
+                  type        = "sunburst"
+                  hide_total  = false
+                  legend      = { type = "table" }
+                  requests = [{
+                    queries = [{
+                      data_source = "logs"
+                      name        = "authenticators"
+                      indexes     = ["*"]
+                      search      = { query = "service:radius-auth ${local.radius_log_hosts_filter} @site_name:$site.value @event:Access-Accept" }
+                      compute     = { aggregation = "count" }
+                      group_by = [
+                        { facet = "@site_name", limit = 10, should_exclude_missing = false, sort = { aggregation = "count", order = "desc" } },
+                        { facet = "@ap_name", limit = 20, should_exclude_missing = false, sort = { aggregation = "count", order = "desc" } }
+                      ]
+                    }]
+                    formulas = [{ formula = "authenticators" }]
+
+                    response_format = "scalar"
+
+                  }]
+                }
+
               }
             ]
           }
         },
+
+        local.datadog_usage_group,
 
         # ---------------------------------------------------------------------
         # Accounting
@@ -681,8 +752,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_acct_requests.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_acct_requests.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_acct_requests.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_acct_requests.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -691,8 +762,8 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_acct_responses.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_acct_responses.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_acct_responses.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_acct_responses.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -713,7 +784,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "starts"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Start" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Start" }
                           indexes     = ["*"]
                           compute     = { aggregation = "count" }
                         }
@@ -728,7 +799,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "stops"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Stop" }
                           indexes     = ["*"]
                           compute     = { aggregation = "count" }
                         }
@@ -751,13 +822,14 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Stop" }
                           indexes     = ["*"]
                           group_by = [
                             {
-                              facet = "@device_owner"
-                              limit = 20
-                              sort  = { aggregation = "avg", metric = "@session_time", order = "desc" }
+                              facet                  = "@device_owner"
+                              should_exclude_missing = false
+                              limit                  = 20
+                              sort                   = { aggregation = "avg", metric = "@session_time", order = "desc" }
                             }
                           ]
                           compute = { aggregation = "avg", metric = "@session_time" }
@@ -771,7 +843,7 @@ locals {
               },
               {
                 definition = {
-                  title = "Session Termination Causes"
+                  title = "Session Termination Causes (blank = cause not recorded)"
                   type  = "toplist"
                   requests = [
                     {
@@ -779,13 +851,14 @@ locals {
                         {
                           data_source = "logs"
                           name        = "query1"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Stop" }
                           indexes     = ["*"]
                           group_by = [
                             {
-                              facet = "@terminate_cause"
-                              limit = 10
-                              sort  = { aggregation = "count", order = "desc" }
+                              facet                  = "@terminate_cause"
+                              should_exclude_missing = false
+                              limit                  = 10
+                              sort                   = { aggregation = "count", order = "desc" }
                             }
                           ]
                           compute = { aggregation = "count" }
@@ -799,7 +872,7 @@ locals {
               },
               {
                 definition = {
-                  title       = "Bandwidth (Acct-Stop)"
+                  title       = "Completed session counters (bytes, at stop)"
                   type        = "timeseries"
                   show_legend = true
                   requests = [
@@ -808,7 +881,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "input"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Stop" }
                           indexes     = ["*"]
                           compute     = { aggregation = "sum", metric = "@input_bytes" }
                         }
@@ -823,7 +896,7 @@ locals {
                         {
                           data_source = "logs"
                           name        = "output"
-                          search      = { query = "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop" }
+                          search      = { query = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value @event:Acct-Stop" }
                           indexes     = ["*"]
                           compute     = { aggregation = "sum", metric = "@output_bytes" }
                         }
@@ -854,64 +927,25 @@ locals {
                   title       = "Queue Depths"
                   type        = "timeseries"
                   show_legend = true
-                  requests = [
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "a", query = "avg:freeradius.queue_len_auth{$host}" },
-                        { data_source = "metrics", name = "b", query = "avg:freeradius.freeradius_queue_len_auth{$host}" }
-                      ]
-                      response_format = "timeseries"
-                      display_type    = "line"
-                      formulas        = [{ formula = "default_zero(a) + default_zero(b)", alias = "Auth" }]
-                    },
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "c", query = "avg:freeradius.queue_len_acct{$host}" },
-                        { data_source = "metrics", name = "d", query = "avg:freeradius.freeradius_queue_len_acct{$host}" }
-                      ]
-                      response_format = "timeseries"
-                      display_type    = "line"
-                      formulas        = [{ formula = "default_zero(c) + default_zero(d)", alias = "Acct" }]
-                    },
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "e", query = "avg:freeradius.queue_len_internal{$host}" },
-                        { data_source = "metrics", name = "f", query = "avg:freeradius.freeradius_queue_len_internal{$host}" }
-                      ]
-                      response_format = "timeseries"
-                      display_type    = "line"
-                      formulas        = [{ formula = "default_zero(e) + default_zero(f)", alias = "Internal" }]
-                    }
-                  ]
+                  requests = [for queue, label in { auth = "Auth", acct = "Acct", internal = "Internal" } : {
+                    queries         = [{ data_source = "metrics", name = "depth", query = "max:freeradius.queue_len_${queue}{${local.radius_hosts_filter}} by {host}" }]
+                    response_format = "timeseries"
+                    display_type    = "line"
+                    formulas        = [{ formula = "depth", alias = label }]
+                  }]
                 }
               },
               {
                 definition = {
-                  title       = "Packets Per Second"
+                  title       = "Incoming RADIUS requests / sec"
                   type        = "timeseries"
                   show_legend = true
-                  requests = [
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "a", query = "avg:freeradius.queue_pps_in{$host}" },
-                        { data_source = "metrics", name = "b", query = "avg:freeradius.freeradius_queue_pps_in{$host}" }
-                      ]
-                      response_format = "timeseries"
-                      display_type    = "line"
-                      style           = { palette = "blue" }
-                      formulas        = [{ formula = "default_zero(a) + default_zero(b)", alias = "PPS In" }]
-                    },
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "c", query = "avg:freeradius.queue_pps_out{$host}" },
-                        { data_source = "metrics", name = "d", query = "avg:freeradius.freeradius_queue_pps_out{$host}" }
-                      ]
-                      response_format = "timeseries"
-                      display_type    = "line"
-                      style           = { palette = "green" }
-                      formulas        = [{ formula = "default_zero(c) + default_zero(d)", alias = "PPS Out" }]
-                    }
-                  ]
+                  requests = [for metric, label in { total_access_requests = "Access requests / sec", total_acct_requests = "Accounting requests / sec" } : {
+                    queries         = [{ data_source = "metrics", name = "requests", query = "sum:freeradius.${metric}.count{${local.radius_hosts_filter}} by {host}.as_rate()" }]
+                    response_format = "timeseries"
+                    display_type    = "line"
+                    formulas        = [{ formula = "requests", alias = label }]
+                  }]
                 }
               },
               {
@@ -922,8 +956,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_auth_malformed_requests.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_auth_malformed_requests.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_auth_malformed_requests.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_auth_malformed_requests.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -932,8 +966,8 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_auth_invalid_requests.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_auth_invalid_requests.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_auth_invalid_requests.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_auth_invalid_requests.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -942,8 +976,8 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_auth_dropped_requests.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_auth_dropped_requests.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_auth_dropped_requests.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_auth_dropped_requests.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
@@ -952,8 +986,8 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "g", query = "sum:freeradius.total_auth_duplicate_requests.count{$host}.as_rate()" },
-                        { data_source = "metrics", name = "h", query = "sum:freeradius.freeradius_total_auth_duplicate_requests.count{$host}.as_rate()" }
+                        { data_source = "metrics", name = "g", query = "sum:freeradius.total_auth_duplicate_requests.count{${local.radius_hosts_filter}}.as_rate()" },
+                        { data_source = "metrics", name = "h", query = "sum:freeradius.freeradius_total_auth_duplicate_requests.count{${local.radius_hosts_filter}}.as_rate()" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -971,7 +1005,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "cpu", query = "avg:system.cpu.user{$host} by {host}" }
+                        { data_source = "metrics", name = "cpu", query = "avg:system.cpu.user{${local.radius_hosts_filter}} by {host}" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -989,8 +1023,8 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "used", query = "avg:system.mem.used{$host} by {host}" },
-                        { data_source = "metrics", name = "total", query = "avg:system.mem.total{$host} by {host}" }
+                        { data_source = "metrics", name = "used", query = "avg:system.mem.used{${local.radius_hosts_filter}} by {host}" },
+                        { data_source = "metrics", name = "total", query = "avg:system.mem.total{${local.radius_hosts_filter}} by {host}" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -999,24 +1033,17 @@ locals {
                   ]
                 }
               },
+              local.freeradius_uptime_widget,
               {
                 definition = {
-                  title       = "System Uptime (days)"
-                  type        = "query_value"
-                  autoscale   = false
-                  precision   = 1
-                  custom_unit = "days"
-                  requests = [
-                    {
-                      queries = [
-                        { data_source = "metrics", name = "a", query = "min:system.uptime{$host}", aggregator = "last" }
-                      ]
-                      response_format = "scalar"
-                      formulas = [
-                        { formula = "a / 86400" }
-                      ]
-                    }
-                  ]
+                  title = "VM uptime by server (hours)"
+                  type  = "query_table"
+                  time  = { live_span = "5m" }
+                  requests = [{
+                    queries         = [{ data_source = "metrics", name = "uptime", query = "min:system.uptime{${local.radius_hosts_filter}} by {host}", aggregator = "last" }]
+                    response_format = "scalar"
+                    formulas        = [{ formula = "uptime / 3600", alias = "VM uptime (hours)", cell_display_mode = "number", number_format = { unit = { type = "custom_unit_label", label = "hours" } } }]
+                  }]
                 }
               },
               {
@@ -1027,7 +1054,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "rx", query = "avg:system.net.bytes_rcvd{$host} by {host}" }
+                        { data_source = "metrics", name = "rx", query = "avg:system.net.bytes_rcvd{${local.radius_hosts_filter}} by {host}" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -1038,7 +1065,7 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "tx", query = "avg:system.net.bytes_sent{$host} by {host}" }
+                        { data_source = "metrics", name = "tx", query = "avg:system.net.bytes_sent{${local.radius_hosts_filter}} by {host}" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -1059,7 +1086,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "disk", query = "max:system.disk.in_use{$host} by {host}" }
+                        { data_source = "metrics", name = "disk", query = "max:system.disk.in_use{${local.radius_hosts_filter}} by {host}" }
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
@@ -1074,6 +1101,34 @@ locals {
       ]
     )
   }
+
+  # Explicit grid dimensions keep Overview compact; other groups retain the
+  # preview's four-column arrangement. Include each group's header spacing.
+  dashboard_group_heights = [
+    for group in local.dashboard_content.widgets :
+    group.definition.title == "Overview" ? 1 : group.definition.title == "Auth Diagnostics" ? 7 : contains(["Network Data Usage", "Network / Location"], group.definition.title) ? max([for widget in group.definition.widgets : try(widget.layout.y + widget.layout.height, 2)]...) : ceil(length(group.definition.widgets) / 4) * 2
+  ]
+  dashboard_json = merge(local.dashboard_content, {
+    reflow_type = "fixed"
+    widgets = [for index, group in local.dashboard_content.widgets : merge(group, {
+      layout = {
+        x      = 0
+        y      = index + sum(concat([0], slice(local.dashboard_group_heights, 0, index)))
+        width  = 12
+        height = local.dashboard_group_heights[index]
+      }
+      definition = merge(group.definition, {
+        widgets = [for position, widget in group.definition.widgets : merge(widget, {
+          layout = try(widget.layout, {
+            x      = (position % 4) * 3
+            y      = floor(position / 4) * 2
+            width  = 3
+            height = 2
+          })
+        })]
+      })
+    })]
+  })
 }
 
 resource "datadog_dashboard_json" "radius" {

@@ -33,8 +33,8 @@ locals {
         name   = "host"
         prefix = "host"
         available_values = [
-          google_compute_instance.radius.name,
-          google_compute_instance.radius_secondary.name
+          local.datadog_radius_hosts[google_compute_instance.radius.name],
+          local.datadog_radius_hosts[google_compute_instance.radius_secondary.name]
         ]
         defaults = ["*"]
       },

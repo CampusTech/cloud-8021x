@@ -15,7 +15,7 @@ def render(enabled=True, smallstep=False, webhook=False, certificate_inventory=F
     for key in values:
         if key.startswith('has_') or key in ('smallstep_enabled', 'acme_webhook_enabled',
                 'rewrite_username', 'tls_session_cache', 'vlan_policy_enabled',
-                'fleet_certificate_inventory', 'scep_certificate_inventory', 'certificate_inventory_enabled', 'unifi_source_discovery_enabled'):
+                'fleet_certificate_inventory', 'scep_certificate_inventory', 'certificate_inventory_enabled', 'unifi_source_discovery_enabled', 'radius_usage_collector_enabled'):
             values[key] = key == 'tls_session_cache'
     values.update(unifi_source_discovery_enabled=source_discovery, certificate_inventory_enabled=certificate_inventory, vlan_policy_enabled=enabled, radius_trust_mode='okta', tls_max_version='1.2',
                   scep_certificate_inventory=certificate_inventory and webhook,
@@ -23,7 +23,7 @@ def render(enabled=True, smallstep=False, webhook=False, certificate_inventory=F
                   tls_session_cache_lifetime=24, radius_clients_json='{}',
                   rewrite_username_separator=' - ', acme_webhook_url='https://127.0.0.1:9444/authorize' if webhook else '',
                   smallstep_enabled=smallstep, acme_webhook_enabled=webhook)
-    for name in ('device_policy', 'inventory_policy', 'radius_vlan', 'fleet_certificates', 'radius_identity', 'radius_log', 'radius_sources', 'attested_acme', 'vlan_names'):
+    for name in ('device_policy', 'inventory_policy', 'radius_vlan', 'fleet_certificates', 'radius_identity', 'radius_log', 'radius_sources', 'attested_acme', 'vlan_names', 'datadog_hostname', 'radius_usage', 'radius_usage_collector', 'radius_usage_service'):
         values[name + '_module_b64'] = base64.b64encode((ROOT / 'scripts' / (name + '.py')).read_bytes()).decode()
     values['windows_certificates_script_b64'] = base64.b64encode((ROOT / 'scripts/windows_certificates.ps1').read_bytes()).decode()
     policy = {'group_vlans': {'staff': 100, 'byod': 200}, 'fallback_vlan': None,

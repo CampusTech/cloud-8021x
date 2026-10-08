@@ -163,6 +163,14 @@ locals {
     scep_certificate_inventory        = local.scep_inventory_enabled
     certificate_inventory_enabled     = try(var.radius_vlan_policy.certificate_inventory, false)
     datadog_site                      = var.datadog_site
+    datadog_hostname_suffix           = local.datadog_hostname_suffix
+    datadog_hostname_module_b64       = filebase64("${path.module}/scripts/datadog_hostname.py")
+    radius_usage_collector_enabled    = var.enable_radius_usage_collector
+    radius_usage_credentials_secret   = var.radius_usage_credentials_secret_id
+    radius_usage_preview_id           = var.radius_usage_preview_id
+    radius_usage_module_b64           = filebase64("${path.module}/scripts/radius_usage.py")
+    radius_usage_collector_module_b64 = filebase64("${path.module}/scripts/radius_usage_collector.py")
+    radius_usage_service_module_b64   = filebase64("${path.module}/scripts/radius_usage_service.py")
     radius_clients_json = jsonencode({
       for k, v in var.radius_clients : k => {
         cidrs       = v.cidrs
@@ -240,6 +248,7 @@ resource "google_compute_instance" "radius" {
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
+    google_secret_manager_secret_iam_member.radius_usage_credentials,
     # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false:
     # these count-gated resources resolve to an empty set). Unindexed refs depend
     # on all instances of each resource so the VM waits for the CA's secrets, KMS
@@ -329,6 +338,7 @@ resource "google_compute_instance" "radius_secondary" {
     google_secret_manager_secret_version.okta_ca_cert,
     google_secret_manager_secret_version.radius_secret,
     google_secret_manager_secret_version.datadog_api_key,
+    google_secret_manager_secret_iam_member.radius_usage_credentials,
     # Smallstep bootstrap prerequisites (no-op when enable_smallstep_ca=false).
     google_secret_manager_secret_version.smallstep_db_password,
     google_secret_manager_secret_version.scep_challenge_signing_key,
