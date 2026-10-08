@@ -51,9 +51,11 @@ radius_vlan_policy = {
   locations = {
     nyc = {
       group_vlans = { "fleet:1" = 100, "fleet:2" = 200 }
+      vlan_names  = { "100" = "Secure", "200" = "Guest" }
     }
     atl = {
       group_vlans = { "fleet:1" = 110, "fleet:2" = 220 }
+      vlan_names  = { "110" = "Secure", "220" = "Guest" }
     }
   }
 }
@@ -65,6 +67,74 @@ the matched, authenticated client's configured `shortname` as the location.
 `NAS-Identifier`, `NAS-IP-Address`, SSID, and device-supplied names cannot override
 it. Offices behind the same RADIUS proxy/egress need distinct trusted client
 paths before they can use separate location policies.
+
+### VLAN names in Datadog
+
+In certificate inventory mode, verified authentication and accounting logs
+include both `vlan_id` and `vlan_name`; Datadog's event tables display the two
+together. Names come from the site's UniFi or Meraki API inventory, refreshed
+every five minutes into a local cache. RADIUS never waits for a controller API
+while handling authentication or accounting.
+
+Configure the display-only sources by the same trusted office keys used in
+`radius_clients`:
+
+```hcl
+radius_vlan_name_sources = {
+  nyc = { unifi_host_id = "YOUR-NYC-CONSOLE-ID" }
+  atl = {
+    unifi_host_id = "YOUR-ATL-CONSOLE-ID"
+    unifi_site_id = "YOUR-ATL-LOCAL-SITE-UUID"
+  }
+  sacramento = { meraki_network_id = "N_YOUR-MERAKI-NETWORK-ID" }
+}
+```
+
+If an office already has `radius_clients.<office>.unifi_host_id` for WAN
+discovery, that console is reused unless overridden above. Static CIDR offices
+can set these sources independently, without enabling WAN discovery. UniFi
+consoles with exactly one local site need no `unifi_site_id`; consoles with
+multiple sites require its exact UUID, returned by the Network API's local-site
+inventory. Site Manager's console ID and the local Network site UUID are
+different identifiers. Never select a controller by a packet-provided AP name,
+SSID, or NAS identifier.
+
+The existing `unifi_api_key`/`meraki_api_key` secrets are reused. UniFi uses the
+[cloud connector](https://developer.ui.com/network/v10.1.84/connectorget) to read
+local sites and networks (`vlanId`/`name`). The key must have connector access to
+the selected console; Site Manager host/device access alone is insufficient.
+An HTTP 403 must be resolved before relying on automatic names. Meraki reads
+[appliance VLANs](https://developer.cisco.com/meraki/api-v1/get-network-appliance-vlans/)
+and [named VLAN profiles](https://developer.cisco.com/meraki/api-v1/get-network-vlan-profiles/)
+for the pinned network. MR-only networks can use VLAN profiles without an MX.
+SSID names are not used as VLAN names. Conflicting names for the same VLAN ID
+in one network are omitted. An optional feature's HTTP 404 is tolerated; access,
+rate-limit, malformed-response, or incomplete-pagination failures preserve the
+previous successful snapshot for that office.
+
+API names take precedence over optional manual `vlan_names` labels. Those maps
+remain useful as a fallback when an API name is missing or unavailable.
+
+With `locations` configured, each site's names are independent and do not
+inherit top-level `vlan_names`. Without locations, use top-level `vlan_names`.
+Keys must be VLAN IDs 1–4094 without leading zeros; names must be 1–128
+characters with no surrounding whitespace. Names affect only log display, not
+authorization or the RADIUS tunnel attributes.
+
+Accounting uses the **original signed VLAN ID**, not the device's current group
+mapping. Its name comes from the current cached controller name (or fallback
+label) for that ID at the trusted site; renaming a network changes the label on
+events after the next successful refresh. Last-known-good API names are used
+for up to 24 hours during outages; changing the configured controller/site ID
+immediately invalidates the previous source's names. A successful refresh
+removes deleted names. Missing names leave `vlan_name` empty while retaining the
+verified VLAN ID. API failures never change authorization or VLAN assignment.
+Opted-out sites and unverified bindings have no VLAN name. Previously ingested
+logs are not backfilled. Create the `@vlan_name` string facet in Datadog for
+name searches and grouping; ID-based widgets still include older unnamed logs.
+
+Adding a name source does not enable dynamic VLANs. Sacramento remains opted
+out when its location has `dynamic_vlans = false`; it has no assigned VLAN name.
 
 ### Source CIDRs and automatic UniFi WAN discovery
 

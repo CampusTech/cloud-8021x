@@ -71,6 +71,11 @@ It verifies full handshakes on reauthentication (resumption is disabled in this
 mode), current group/enrollment changes, and removal of private handoff files.
 Both modes also exercise the same device from NYC and ATL clients with different
 VLAN IDs, reauthentication, a spoofed NAS-Identifier, and an unknown location.
+Certificate mode also reads controller VLAN-name cache fixtures through real
+authentication/accounting packets, checks office isolation and renames, and
+preserves the assigned ID with manual-label fallback when the API cache is corrupt.
+Unit tests exercise UniFi pagination, Meraki appliance/named-VLAN inventory,
+per-office refresh failures, cache expiry and changed controller IDs.
 Both also verify opted-out locations return no VLAN attributes while keeping
 verified identity, and reauthentication follows changes between mapped and
 opted-out policy. Certificate mode checks signed Class accounting with no VLAN.

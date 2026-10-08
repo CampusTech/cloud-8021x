@@ -14,6 +14,8 @@ import secrets
 import struct
 import time
 
+import vlan_names
+
 from device_policy import normalize_fingerprint, require_fresh, valid_vlan
 
 KEY_FILE = '/run/radius-accounting-key'
@@ -99,6 +101,26 @@ def _verify(token, location, station, now):
     return payload[_HEADER.size:].decode('utf-8'), fingerprint.hex(), None if vlan == 0 else vlan
 
 
+def _vlan_name(config, vlan, location):
+    """Label the signed VLAN in its trusted office; never reselect membership."""
+    if vlan is None:
+        return ''
+    name = vlan_names.cached_name(location, vlan)
+    if name:
+        return name
+    locations = config.get('locations') or {}
+    if not isinstance(locations, dict):
+        return ''
+    policy = locations.get(location, {}) if locations else config
+    if not isinstance(policy, dict):
+        return ''
+    names = policy.get('vlan_names', {})
+    if not isinstance(names, dict):
+        return ''
+    name = names.get(str(vlan))
+    return name if isinstance(name, str) and 0 < len(name) <= 128 and name == name.strip() else ''
+
+
 def enrich(request, accounting=False):
     """Return log attributes from reply Class (auth) or request Class (accounting).
 
@@ -122,6 +144,10 @@ def enrich(request, accounting=False):
     try:
         with open(CONFIG_FILE) as stream:
             config = json.load(stream)
+        name = _vlan_name(config, vlan, location)
+        if name:
+            # Internal log enrichment only; no additional wire RADIUS attribute.
+            attributes.append(('Tmp-String-7', name))
         with open(config['cache_file']) as stream:
             inventory = json.load(stream)
         require_fresh(inventory['updated_at'], now, config['cache_max_age'])
