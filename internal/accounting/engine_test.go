@@ -1,0 +1,158 @@
+package accounting
+
+import (
+	"math"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/CampusTech/cloud-8021x/internal/accounting/binding"
+)
+
+func raw(status string, duration, up, down string) Raw {
+	return Raw{SourceIP: "192.0.2.1", NASIP: Attribute{"192.0.2.2", 1}, Station: Attribute{"aa:bb:cc:dd:ee:ff", 1}, Session: Attribute{"s", 1}, Status: Attribute{status, 1}, Duration: Attribute{duration, 1}, Input: Attribute{up, 1}, Output: Attribute{down, 1}, Location: "site", Client: "client", Host: "host", ReplayID: "replay", Received: time.Unix(1800000000, 0)}
+}
+func event(t *testing.T, r Raw) Event {
+	t.Helper()
+	e, err := Normalize(r, nil, binding.MaxAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+func TestExactNativeCounters(t *testing.T) {
+	r := raw("Interim-Update", "10", "4294967295", "1")
+	r.InputHigh = Attribute{"4294967295", 1}
+	e := event(t, r)
+	if e.Upload != math.MaxUint64 || e.Download != 1 || e.Bits != 64 {
+		t.Fatalf("not exact: %+v", e)
+	}
+	for _, a := range []Attribute{{"x", 1}, {"-1", 1}, {"4294967296", 1}, {"0", 2}, {"oops", 0}} {
+		r.InputHigh = a
+		if _, err := Normalize(r, nil, binding.MaxAge); err == nil {
+			t.Fatal("bad high word accepted", a)
+		}
+	}
+	r.InputHigh = Attribute{}
+	r.Input.Count = 0
+	if _, err := Normalize(r, nil, binding.MaxAge); err == nil {
+		t.Fatal("missing low accepted")
+	}
+	r.Status = Attribute{"Start", 1}
+	if e := event(t, r); e.Upload != 0 || e.Duration != 0 {
+		t.Fatal("Start not zero")
+	}
+}
+func TestBaselineResetReorderPrecisionAndStop(t *testing.T) {
+	s := State{}
+	e := event(t, raw("Interim-Update", "10", "100", "200"))
+	s, u, _ := Apply(s, e)
+	if u != nil {
+		t.Fatal("invented initial bytes")
+	}
+	e = event(t, raw("Interim-Update", "20", "150", "300"))
+	s, u, _ = Apply(s, e)
+	if u == nil || u.Upload != 50 || u.Download != 100 {
+		t.Fatal(u)
+	}
+	for _, r := range []Raw{raw("Start", "0", "0", "0"), raw("Interim-Update", "19", "1000", "1000"), raw("Interim-Update", "20", "149", "300")} {
+		next, u, _ := Apply(s, event(t, r))
+		if u != nil || next.Upload != 150 {
+			t.Fatal("late/reset same duration changed state")
+		}
+	}
+	s, u, reason := Apply(s, event(t, raw("Interim-Update", "30", "1", "2")))
+	if u != nil || reason != "counter_reset" {
+		t.Fatal(reason)
+	}
+	e = event(t, raw("Interim-Update", "40", "10", "20"))
+	e.Bits = 32
+	s, u, reason = Apply(s, e)
+	if u != nil || reason != "precision_change" {
+		t.Fatal(reason)
+	}
+	e = event(t, raw("Stop", "50", "20", "30"))
+	e.Bits = 32
+	s, u, _ = Apply(s, e)
+	if u == nil || !s.Stopped {
+		t.Fatal("stop not credited")
+	}
+	_, u, _ = Apply(s, e)
+	if u != nil {
+		t.Fatal("stop duplicated")
+	}
+}
+func TestLegacyUnmarkedLowWordNeverDowngradesNative(t *testing.T) {
+	s := State{Initialized: true, Bits: 64, Marked: true, Upload: 1 << 40, Duration: 10}
+	e := event(t, raw("Stop", "20", "1", "1"))
+	e.Bits = 32
+	e.Marked = false
+	next, u, _ := Apply(s, e)
+	if u != nil || next.Stopped || next.Upload != s.Upload {
+		t.Fatal("legacy low-word contaminated session")
+	}
+}
+func TestIdentityDedupeAndReceipt(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	r := raw("Interim-Update", "10", "100", "200")
+	r.CalledStation = "ap:ssid"
+	r.NASPort = "2"
+	v := 42
+	token, err := binding.Issue(key, binding.Attribution{DeviceID: "d", Fingerprint: strings.Repeat("ab", 32), VLAN: &v}, r.Location, r.Station.Value, r.Received.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Class = Attribute{token, 1}
+	e, err := Normalize(r, key, binding.MaxAge)
+	if err != nil || e.Identity == nil || *e.Identity.VLAN != 42 {
+		t.Fatal("attribution failed", err)
+	}
+	if e.CalledStation != r.CalledStation || e.NASPort != r.NASPort {
+		t.Fatal("display context lost")
+	}
+	r.Host = "other"
+	r.ReplayID = "retry"
+	r.Received = r.Received.Add(time.Minute)
+	retry, err := Normalize(r, key, binding.MaxAge)
+	if err != nil || e.ID != retry.ID {
+		t.Fatal("retry not semantic")
+	}
+	r.Class.Count = 2
+	e, err = Normalize(r, key, binding.MaxAge)
+	if err != nil || e.Identity != nil || e.AttributionIssue == "" {
+		t.Fatal("invalid binding not unattributed")
+	}
+	r.Session.Count = 2
+	if _, err := Normalize(r, key, binding.MaxAge); err == nil {
+		t.Fatal("ambiguous session accepted")
+	}
+}
+func TestUsageIDLegacyCoordinates(t *testing.T) {
+	s := State{}
+	s, _, _ = Apply(s, event(t, raw("Start", "0", "0", "0")))
+	e := event(t, raw("Interim-Update", "10", "100", "200"))
+	_, u, _ := Apply(s, e)
+	if u.ID != "43399daaa58e35ff9e98d95c5a6e0e3da8e986df75703405ae1a40722b679bcf" {
+		t.Fatal("legacy coordinate digest changed", u.ID)
+	}
+	e.Received = e.Received.Add(time.Hour)
+	_, v, _ := Apply(s, e)
+	if u.ID != v.ID {
+		t.Fatal("receipt changed usage identity")
+	}
+}
+
+func TestUnknownNetworkIdentityCannotCreateSharedSession(t *testing.T) {
+	for _, v := range []string{"unknown", "N/A", "192.0.2.1/24", "127.1", ""} {
+		r := raw("Start", "0", "0", "0")
+		r.SourceIP = v
+		if _, err := CanonicalKey(r); err == nil {
+			t.Fatal("invalid source accepted", v)
+		}
+		r = raw("Start", "0", "0", "0")
+		r.NASIP.Value = v
+		if _, err := CanonicalKey(r); err == nil {
+			t.Fatal("invalid NAS accepted", v)
+		}
+	}
+}
