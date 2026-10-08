@@ -1,0 +1,136 @@
+Index: freeradius-3.2.10+dfsg/src/modules/rlm_expr/rlm_expr.c
+===================================================================
+--- freeradius-3.2.10+dfsg.orig/src/modules/rlm_expr/rlm_expr.c
++++ freeradius-3.2.10+dfsg/src/modules/rlm_expr/rlm_expr.c
+@@ -43,6 +43,7 @@ USES_APPLE_DEPRECATED_API
+ #include <ctype.h>
+ 
+ #include "rlm_expr.h"
++#include "source_fresh.c"
+ 
+ /*
+  *	Define a structure for our module configuration.
+@@ -1870,6 +1871,7 @@ static int mod_bootstrap(CONF_SECTION *c
+ 
+ 	xlat_register("rand", rand_xlat, NULL, inst);
+ 	xlat_register("randstr", randstr_xlat, NULL, inst);
++	xlat_register("source_fresh", source_fresh_xlat, NULL, inst);
+ 	xlat_register("urlquote", urlquote_xlat, NULL, inst);
+ 	xlat_register("urlunquote", urlunquote_xlat, NULL, inst);
+ 	xlat_register("escape", escape_xlat, NULL, inst);
+Index: freeradius-3.2.10+dfsg/src/modules/rlm_expr/source_fresh.c
+===================================================================
+--- /dev/null
++++ freeradius-3.2.10+dfsg/src/modules/rlm_expr/source_fresh.c
+@@ -0,0 +1,111 @@
++/* Included by rlm_expr.c in the coherent Debian package build. GPL-2.0-or-later.
++ * A deliberately fixed, zero-argument trust proof lookup, never a file API.
++ */
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <arpa/inet.h>
++
++static bool source_hex(char const *s)
++{
++	size_t i;
++	if (!s || strlen(s) != 64) return false;
++	for (i = 0; i < 64; i++) {
++		if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return false;
++	}
++	return true;
++}
++
++static char const *source_property(REQUEST *request, char const *name)
++{
++	CONF_PAIR *pair;
++	if (!request->client || !request->client->cs) return NULL;
++	pair = cf_pair_find(request->client->cs, name);
++	if (!pair || cf_pair_find_next(request->client->cs, pair, name)) return NULL;
++	return cf_pair_value(pair);
++}
++
++static int source_directory(int parent, char const *name)
++{
++	struct stat st;
++	int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
++	if (fd < 0) return -1;
++	if (fstat(fd, &st) || !S_ISDIR(st.st_mode) || st.st_uid != 0 || (st.st_mode & 0022)) {
++		close(fd);
++		return -1;
++	}
++	return fd;
++}
++
++static int source_file(int parent, char const *name, off_t size)
++{
++	struct stat st;
++	int fd = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
++	if (fd < 0) return -1;
++	if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != 0 || st.st_nlink != 1 ||
++	    (st.st_mode & 0022) || st.st_size != size) {
++		close(fd);
++		return -1;
++	}
++	return fd;
++}
++
++static ssize_t source_fresh_xlat(UNUSED void *instance, REQUEST *request,
++			       char const *fmt, char *out, size_t outlen)
++{
++	char const *kind, *config, *client, *age, *p;
++	char generation[65], address[INET_ADDRSTRLEN];
++	char const *components[] = {"var", "lib", "cloud-8021x-source-proof"};
++	unsigned int max_age = 0;
++	struct stat marker;
++	int fd = -1, next = -1, file = -1;
++	size_t i;
++	bool fresh = false;
++	time_t receipt;
++	if (outlen < 2) return -1;
++	out[0] = '0'; out[1] = '\0';
++	if (!fmt || *fmt || !request || !request->packet) return 1;
++	kind = source_property(request, "c8021x_source_kind");
++	if (!kind) return 1;
++	if (!strcmp(kind, "static")) { out[0] = '1'; return 1; }
++	if (strcmp(kind, "dynamic") || request->packet->src_ipaddr.af != AF_INET) return 1;
++	config = source_property(request, "c8021x_config");
++	client = source_property(request, "c8021x_client_hash");
++	age = source_property(request, "c8021x_max_age");
++	if (!source_hex(config) || !source_hex(client) || !age || !*age || strlen(age) > 4) return 1;
++	for (p = age; *p; p++) {
++		if (*p < '0' || *p > '9') return 1;
++		max_age = max_age * 10 + (*p - '0');
++	}
++	if (!max_age || max_age > 3600) return 1;
++	if (!inet_ntop(AF_INET, &request->packet->src_ipaddr.ipaddr.ip4addr, address, sizeof(address))) return 1;
++	receipt = request->packet->timestamp.tv_sec;
++	fd = source_directory(AT_FDCWD, "/");
++	if (fd < 0) goto done;
++	for (i = 0; i < sizeof(components) / sizeof(components[0]); i++) {
++		next = source_directory(fd, components[i]); close(fd); fd = next;
++		if (fd < 0) goto done;
++	}
++	file = source_file(fd, "current", 64);
++	if (file < 0) goto done;
++	if (read(file, generation, 64) != 64) goto done;
++	generation[64] = '\0';
++	if (!source_hex(generation)) goto done;
++	close(file); file = -1;
++	next = source_directory(fd, generation); close(fd); fd = next;
++	if (fd < 0) goto done;
++	next = source_directory(fd, config); close(fd); fd = next;
++	if (fd < 0) goto done;
++	next = source_directory(fd, client); close(fd); fd = next;
++	if (fd < 0) goto done;
++	file = source_file(fd, address, 0);
++	if (file < 0 || fstat(file, &marker)) goto done;
++	/* Integer seconds deliberately expire up to one second early. */
++	fresh = marker.st_mtime > 0 && marker.st_mtime <= receipt &&
++		(receipt - marker.st_mtime) < (time_t) max_age;
++done:
++	if (file >= 0) close(file);
++	if (fd >= 0) close(fd);
++	if (fresh) out[0] = '1';
++	return 1;
++}

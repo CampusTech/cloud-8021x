@@ -89,25 +89,7 @@ func NetworkServiceFromConfig(cfg config.Config, store *network.Store, dry bool,
 	hash := sha256.Sum256(data)
 	return &networkjob.Service{Key: hex.EncodeToString(hash[:]), Registry: r, Store: store, Path: cfg.Paths.MetadataFile}, nil
 }
-func SourceConfig(cfg config.Config) (sources.Config, error) {
-	out := sources.Config{MaxAge: cfg.Network.Discovery.MaxAge}
-	for _, client := range cfg.RadiusClients {
-		b := sources.Binding{ClientID: client.ID, LocationID: client.LocationID, Medium: client.Medium, SignalingProfile: client.SignalingProfile, SecretFile: client.Secret.File, StaticCIDRs: append([]string(nil), client.CIDRs...)}
-		for _, binding := range cfg.Network.Discovery.Bindings {
-			if binding.ClientID == client.ID {
-				for _, p := range cfg.Network.Providers {
-					if p.ID == binding.ProviderID {
-						b.ProviderID = p.ID
-						b.ProviderOrigin = p.BaseURL
-						b.ConsoleID = p.ConsoleID
-					}
-				}
-			}
-		}
-		out.Bindings = append(out.Bindings, b)
-	}
-	return out, out.Validate()
-}
+func SourceConfig(cfg config.Config) (sources.Config, error) { return sources.FromConfig(cfg) }
 
 // RootVerifier constructs only configured UniFi clients and performs fresh HTTPS
 // hosts reads. It ignores inventory caches and all URLs/IDs supplied by candidates.

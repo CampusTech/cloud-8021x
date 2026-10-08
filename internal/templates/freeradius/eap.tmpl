@@ -1,0 +1,26 @@
+eap {
+ default_eap_type = tls
+ timer_expire = 30
+ ignore_unknown_eap_types = no
+ max_sessions = 4096
+ tls-config tls-common {
+  private_key_file = {{quote .KeyFile}}
+  certificate_file = {{quote .CertificateFile}}
+  ca_file = {{quote .CAFile}}
+  tls_min_version = "1.2"
+  tls_max_version = "1.2"
+  cache {
+   enable = {{if .Legacy}}yes{{else}}no{{end}}
+   name = "cloud8021x"
+   lifetime = 24
+  }
+  {{if not .Legacy}}verify {
+   tmpdir = {{quote .LeafDirectory}}
+   client = "/usr/bin/sudo -n /usr/local/bin/cloud-8021x --config /etc/cloud-8021x/config.yaml radius verify-leaf %{TLS-Client-Cert-Filename} %{session-state:C8021X-Handoff}"
+  }{{end}}
+ }
+ tls {
+  tls = tls-common
+  virtual_server = certificate-policy
+ }
+}

@@ -59,7 +59,7 @@ func setup(t *testing.T) (*LocalService, Request, identity.Handoff) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, Request{Server: ServerContext{ClientID: "ap", SourceIP: "192.0.2.19"}, HandoffTokens: []string{token}, CallingStations: []string{"AA-BB-CC-DD-EE-FF"}}, h
+	return service, Request{NASPortTypes: []string{"19"}, Server: ServerContext{ClientID: "ap", SourceIP: "192.0.2.19"}, HandoffTokens: []string{token}, CallingStations: []string{"AA-BB-CC-DD-EE-FF"}}, h
 }
 func request(t *testing.T, h http.Handler, body []byte, token, remote string) *httptest.ResponseRecorder {
 	t.Helper()

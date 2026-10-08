@@ -1,0 +1,29 @@
+server certificate-policy {
+ authorize {
+  update request {
+   C8021X-Client := &outer.control:C8021X-Client
+   C8021X-Source := &outer.control:C8021X-Source
+   {{if not .Legacy}}C8021X-Handoff := &outer.session-state:C8021X-Handoff{{end}}
+   Calling-Station-Id !* ANY
+   Calling-Station-Id += &outer.request:Calling-Station-Id[*]
+   NAS-Port-Type !* ANY
+   NAS-Port-Type += &outer.request:NAS-Port-Type[*]
+  }
+  update control {
+   REST-HTTP-Header := "Authorization: Bearer {{.Bearer}}"
+  }
+  policy_rest {
+   reject = 1
+   fail = 1
+   userlock = 1
+   notfound = 1
+   invalid = 1
+  }
+  if (ok || updated) {
+   update control { Auth-Type := Accept }
+  }
+  else {
+   reject
+  }
+ }
+}

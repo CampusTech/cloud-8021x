@@ -1,0 +1,26 @@
+Disposable fixture: cloud8021x-daemon-fr-c7d492
+Package: freeradius 3.2.10+dfsg-2~bookworm+campus3 arm64
+Process: 192599, actual freeradius -X, Ready to process requests
+Mapping capture: separate disposable observer in fixture PID namespace,
+network=none, cap-drop=ALL, cap-add=SYS_PTRACE; observer removed after capture.
+
+/usr/sbin/freeradius
+SHA256 9e3669dcc3684aa3633eca432698efd005395c551a62e6dbf3e793abab9ba6d7
+maps device 00:41 inode 16037739; stat device 0x41 inode 16037739
+
+/usr/lib/freeradius/rlm_detail.so
+SHA256 ab6fe8f1e697a424e5c7f69aae62ffd2c209a3bc8a8b489d91034597b46021ab
+maps device 00:41 inode 16037689; stat device 0x41 inode 16037689
+
+/usr/lib/freeradius/rlm_expr.so
+SHA256 e737b9eb9ab6cdf66bbcbc2061b2b97bf6d863330988c39eb443163b71ff4712
+maps device 00:41 inode 16037706; stat device 0x41 inode 16037706
+
+All three hashes independently matched files extracted from the final .deb.
+Both modules are owned by the exact installed freeradius package.
+No mapped path was marked deleted. Also mapped from /usr/lib/freeradius:
+rlm_eap_tls.so, rlm_rest.so, rlm_sql_postgresql.so, libfreeradius-eap.so,
+libfreeradius-radius.so, libfreeradius-server.so.
+Actual full maps retained at /private/tmp/task6-loaded-campus3-maps.txt.
+Native packet tests ran on this fully configured package family, including
+/dev/full accounting ACK suppression and same-PID protected proof refresh.

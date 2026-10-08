@@ -1,0 +1,23 @@
+sql native_sql {
+ dialect = postgresql
+ driver = rlm_sql_postgresql
+ auto_escape = yes
+ radius_db = {{quote .NativeConninfo}}
+ read_clients = no
+ read_groups = no
+ read_profiles = no
+ query_timeout = 2
+ pool {
+  start = 0
+  min = 0
+  max = 2
+  spare = 0
+  retry_delay = 5
+  lifetime = 0
+  idle_timeout = 60
+ }
+ accounting {
+  reference = ".query"
+  query = "INSERT INTO ledger.intake (received_at,source_ip,client_id,location_id,host,replay_id,status,status_count,session_id,session_count,nas_ip,nas_count,station,station_count,class,class_count,input_octets,input_octets_count,output_octets,output_octets_count,input_gigawords,input_gigawords_count,output_gigawords,output_gigawords_count,session_time,session_time_count,event_timestamp,delay_time,packet_id,request_authenticator,called_station,nas_port) VALUES (to_timestamp(%{integer:C8021X-Receipt}),'%{C8021X-Source}','%{C8021X-Client}','%{C8021X-Location}','%{C8021X-Host}','%{C8021X-Replay}',NULLIF('%{Acct-Status-Type}',''),%{Acct-Status-Type[#]},NULLIF('%{Acct-Session-Id}',''),%{Acct-Session-Id[#]},NULLIF('%{%{NAS-IP-Address}:-%{NAS-IPv6-Address}}',''),(%{NAS-IP-Address[#]}+%{NAS-IPv6-Address[#]}),NULLIF('%{Calling-Station-Id}',''),%{Calling-Station-Id[#]},NULLIF('%{Class}',''),%{Class[#]},NULLIF('%{Acct-Input-Octets}',''),%{Acct-Input-Octets[#]},NULLIF('%{Acct-Output-Octets}',''),%{Acct-Output-Octets[#]},NULLIF('%{Acct-Input-Gigawords}',''),%{Acct-Input-Gigawords[#]},NULLIF('%{Acct-Output-Gigawords}',''),%{Acct-Output-Gigawords[#]},NULLIF('%{Acct-Session-Time}',''),%{Acct-Session-Time[#]},NULLIF('%{Event-Timestamp}',''),NULLIF('%{C8021X-Delay}',''),NULLIF('%{C8021X-Packet-ID}',''),NULLIF('%{C8021X-Authenticator}',''),NULLIF('%{Called-Station-Id}',''),NULLIF('%{NAS-Port}',''))"
+ }
+}

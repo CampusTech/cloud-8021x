@@ -1,0 +1,20 @@
+rest policy_rest {
+ connect_timeout = 0.3
+ authorize {
+  uri = "http://{{.PolicyAddress}}/authorize/native"
+  method = post
+  body = json
+  raw_value = yes
+  force_to = json
+  timeout = 1.0
+ }
+ pool {
+  start = 0
+  min = 0
+  max = 8
+  spare = 0
+  retry_delay = 1
+  lifetime = 0
+  idle_timeout = 30
+ }
+}

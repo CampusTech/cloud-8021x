@@ -68,7 +68,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	deny := func(code int) { w.WriteHeader(code); _, _ = w.Write([]byte(`{}`)) }
-	if r.URL.Path != "/authorize" {
+	if r.URL.Path != "/authorize" && r.URL.Path != "/authorize/native" {
 		deny(http.StatusNotFound)
 		return
 	}
@@ -126,7 +126,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input Request
-	if domain.DecodeJSONStrict(data, &input) != nil {
+	if r.URL.Path == "/authorize/native" {
+		input, err = decodeNative(data)
+	} else {
+		err = domain.DecodeJSONStrict(data, &input)
+	}
+	if err != nil {
 		deny(http.StatusBadRequest)
 		return
 	}
@@ -177,9 +182,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // REST values preserve FreeRADIUS's native integer/string types and assignment operator.
 type RESTAttribute struct {
-	Type  string `json:"type"`
-	Value []any  `json:"value"`
-	Op    string `json:"op"`
+	DoXlat bool   `json:"do_xlat"`
+	Type   string `json:"type"`
+	Value  []any  `json:"value"`
+	Op     string `json:"op"`
 }
 type RESTReply map[string]RESTAttribute
 

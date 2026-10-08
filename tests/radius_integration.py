@@ -23,7 +23,13 @@ def main():
     parser.add_argument('--source-discovery', action='store_true',
                         help='Exercise source freshness guards for real auth and accounting packets')
     parser.add_argument('--container', help='Reuse a disposable test container with dependencies installed')
+    parser.add_argument('--native', action='store_true', help='Use Go-rendered configuration and the coherent patched native package family')
+    parser.add_argument('--native-mode', default='test', choices=['test','sources','full','legacy','attested','zero','outage','replay','permissions','sqltls','ipv6'], help='Native fixture gate; see patches/freeradius/README.md for preparation')
     args = parser.parse_args()
+    if args.native:
+        from native_radius_integration import run_native
+        run_native(args.container,args.native_mode)
+        return
     container = args.container or ('cloud8021x-vlan-' + uuid.uuid4().hex[:8])
 
     def docker(*command, **kwargs):

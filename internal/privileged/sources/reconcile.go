@@ -16,6 +16,7 @@ import (
 // cannot carry resolved RADIUS or vendor credentials. Task9 persists this using
 // postgres.ReconcileSuccess for the exact work ID and generation; no resend.
 type ReconciliationEvidence struct {
+	ProofGeneration                                                          string
 	Node, Network, ConfigSHA256, CandidateSHA256, ClientsSHA256, StateSHA256 string
 	ControllerObservedAt                                                     map[string]domain.Timestamp
 }
@@ -106,6 +107,12 @@ func (o *FileOperations) VerifyApplied(ctx context.Context, p Plan, s State) (Re
 	if e = o.Radius.Healthy(ctx); e != nil {
 		return ReconciliationEvidence{}, errors.New("source reconciliation service health failed")
 	}
+	if !snapshot.ProofExist {
+		return ReconciliationEvidence{}, errors.New("source proof pointer missing")
+	}
+	if e = o.verifyProof(p, string(snapshot.Proof)); e != nil {
+		return ReconciliationEvidence{}, e
+	}
 	ch, sh := sha256.Sum256(clients), sha256.Sum256(state)
-	return ReconciliationEvidence{Node: o.Target.Node, Network: o.Target.Network, ClientsSHA256: hex.EncodeToString(ch[:]), StateSHA256: hex.EncodeToString(sh[:])}, nil
+	return ReconciliationEvidence{Node: o.Target.Node, Network: o.Target.Network, ClientsSHA256: hex.EncodeToString(ch[:]), StateSHA256: hex.EncodeToString(sh[:]), ProofGeneration: string(snapshot.Proof)}, nil
 }

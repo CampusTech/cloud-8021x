@@ -80,6 +80,18 @@ func fixtureOps(t *testing.T) (*FileOperations, *radius, *firewall) {
 	}
 	o.clientsPath = filepath.Join(dir, "clients")
 	o.statePath = filepath.Join(dir, "state")
+	o.proofPath = filepath.Join(dir, "proof")
+	t.Cleanup(func() {
+		_ = filepath.Walk(o.proofPath, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				return os.Chmod(path, 0755)
+			}
+			return err
+		})
+	})
+	if e = os.Mkdir(o.proofPath, 0755); e != nil {
+		t.Fatal(e)
+	}
 	o.poll = time.Millisecond
 	if e = network.WritePrivate(o.clientsPath, []byte("previous-clients")); e != nil {
 		t.Fatal(e)

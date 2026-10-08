@@ -1,11 +1,13 @@
 package sources
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -17,6 +19,7 @@ import (
 
 const ClientsFile = "/etc/cloud-8021x/sources/clients.conf"
 const StateFile = "/var/lib/cloud-8021x-source-state/state.json"
+const ProofDirectory = "/var/lib/cloud-8021x-source-proof"
 
 // Radius.Activate must perform a fixed root-started restart, not a reload as
 // freerad: the private include is intentionally unreadable after privilege drop.
@@ -54,6 +57,9 @@ type FileOperations struct {
 	Target                 FirewallTarget
 	Secrets                SecretReader
 	clientsPath, statePath string
+	proofPath              string
+	stagedProof            string
+	clientsChanged         bool
 	poll                   time.Duration
 }
 
@@ -61,7 +67,7 @@ func NewFileOperations(r Radius, f Firewall, target FirewallTarget, secrets Secr
 	if r == nil || f == nil || secrets == nil || !regexp.MustCompile(`^[a-z][a-z0-9-]{4,62}$`).MatchString(target.Project) || (target.Node != "radius-primary" && target.Node != "radius-secondary") || target.Network == "" {
 		return nil, errors.New("invalid fixed source operation dependencies")
 	}
-	return &FileOperations{Radius: r, Firewall: f, Target: target, Secrets: secrets, clientsPath: ClientsFile, statePath: StateFile, poll: time.Second}, nil
+	return &FileOperations{Radius: r, Firewall: f, Target: target, Secrets: secrets, clientsPath: ClientsFile, statePath: StateFile, proofPath: ProofDirectory, poll: time.Second}, nil
 }
 func (o *FileOperations) check(r FirewallRule) error {
 	if !r.Disabled && len(r.SourceRanges) == 0 {
@@ -111,6 +117,13 @@ func (o *FileOperations) Snapshot(ctx context.Context) (Backup, error) {
 		return Backup{}, e
 	}
 	b.State, b.StateExist, e = readOptional(o.statePath, true)
+	if e != nil {
+		return Backup{}, e
+	}
+	b.Proof, b.ProofExist, e = readOptional(filepath.Join(o.proofPath, "current"), true)
+	if e == nil && b.ProofExist && !proofHash.Match(b.Proof) {
+		return Backup{}, errors.New("invalid existing source proof pointer")
+	}
 	return b, e
 }
 func (o *FileOperations) render(p Plan) ([]byte, error) {
@@ -129,18 +142,34 @@ func (o *FileOperations) render(p Plan) ([]byte, error) {
 			return nil, errors.New("source client secret is invalid")
 		}
 		for n, cidr := range c.CIDRs {
-			_, _ = fmt.Fprintf(&text, "client discovered-%s-%d {\n ipaddr = %s\n secret = %s\n shortname = %s\n nastype = other\n}\n", c.ClientID, n, cidr, value, c.ClientID)
+			if c.ObservedAt <= 0 || c.MaxAgeSeconds < 1 || c.MaxAgeSeconds > 3600 || !proofHash.MatchString(c.ConfigSHA256) {
+				return nil, errors.New("dynamic source has no authenticated observation/configuration")
+			}
+			_, _ = fmt.Fprintf(&text, "client discovered-%s-%d {\n ipaddr = %s\n secret = %s\n shortname = %s\n nastype = other\n c8021x_source_kind = dynamic\n c8021x_max_age = %d\n c8021x_config = %s\n c8021x_client_hash = %s\n}\n", c.ClientID, n, cidr, value, c.ClientID, c.MaxAgeSeconds, c.ConfigSHA256, clientHash(c.ClientID))
 		}
 	}
 	return []byte(text.String()), nil
 }
 func (o *FileOperations) Install(ctx context.Context, p Plan) error {
+	o.stagedProof = ""
 	content, e := o.render(p)
 	if e != nil {
 		return e
 	}
 	if e = ctx.Err(); e != nil {
 		return e
+	}
+	old, exists, e := readOptional(o.clientsPath, false)
+	if e != nil {
+		return e
+	}
+	o.clientsChanged = !exists || !bytes.Equal(old, content)
+	o.stagedProof, e = o.stageProof(p)
+	if e != nil {
+		return e
+	}
+	if !o.clientsChanged {
+		return nil
 	}
 	return network.WritePrivate(o.clientsPath, content)
 }
@@ -151,8 +180,10 @@ func (o *FileOperations) Validate(ctx context.Context) error {
 	return nil
 }
 func (o *FileOperations) Activate(ctx context.Context) error {
-	if e := o.Radius.Activate(ctx); e != nil {
-		return errors.New("FreeRADIUS activation failed")
+	if o.clientsChanged {
+		if e := o.Radius.Activate(ctx); e != nil {
+			return errors.New("FreeRADIUS activation failed")
+		}
 	}
 	if e := o.Radius.Healthy(ctx); e != nil {
 		return errors.New("FreeRADIUS did not converge")
@@ -221,7 +252,14 @@ func (o *FileOperations) Commit(ctx context.Context, s State) error {
 	if e != nil {
 		return e
 	}
-	return network.WritePublished(o.statePath, b)
+	if !proofHash.MatchString(o.stagedProof) {
+		return errors.New("source proof not staged")
+	}
+	if e = network.WritePublished(o.statePath, b); e != nil {
+		return e
+	}
+	// Publish trust last. Failed validation, activation or convergence cannot freshen it.
+	return network.WritePublished(filepath.Join(o.proofPath, "current"), []byte(o.stagedProof))
 }
 func (o *FileOperations) Rollback(ctx context.Context, b Backup) error {
 	var es []error
@@ -231,6 +269,11 @@ func (o *FileOperations) Rollback(ctx context.Context, b Backup) error {
 		}
 		return network.RemovePrivate(path)
 	}
+	current, exists, err := readOptional(o.clientsPath, false)
+	if err != nil {
+		es = append(es, err)
+	}
+	o.clientsChanged = exists != b.ClientsExist || !bytes.Equal(current, b.Clients)
 	es = append(es, restore(o.clientsPath, b.Clients, b.ClientsExist))
 	if errors.Join(es...) == nil {
 		if err := o.Validate(ctx); err != nil {
@@ -244,7 +287,15 @@ func (o *FileOperations) Rollback(ctx context.Context, b Backup) error {
 		return errors.New("source rollback did not converge")
 	}
 	if b.StateExist {
-		return network.WritePublished(o.statePath, b.State)
+		err = network.WritePublished(o.statePath, b.State)
+	} else {
+		err = network.RemovePublished(o.statePath)
 	}
-	return network.RemovePublished(o.statePath)
+	if err != nil {
+		return err
+	}
+	if b.ProofExist {
+		return network.WritePublished(filepath.Join(o.proofPath, "current"), b.Proof)
+	}
+	return network.RemovePublished(filepath.Join(o.proofPath, "current"))
 }

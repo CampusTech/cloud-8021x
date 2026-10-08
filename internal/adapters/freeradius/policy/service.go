@@ -13,6 +13,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/identity"
 	core "github.com/CampusTech/cloud-8021x/internal/policy"
+	"github.com/CampusTech/cloud-8021x/internal/privileged/sources"
 )
 
 // All server fields are expanded from authenticated FreeRADIUS control/client state.
@@ -26,6 +27,7 @@ type Request struct {
 	HandoffTokens          []string      `json:"handoff_tokens,omitempty"`
 	CertificateCommonNames []string      `json:"certificate_common_names,omitempty"`
 	CallingStations        []string      `json:"calling_stations,omitempty"`
+	NASPortTypes           []string      `json:"nas_port_types,omitempty"`
 }
 type Result struct {
 	Decision domain.Decision
@@ -38,7 +40,7 @@ type DecisionService interface {
 type ServiceOptions struct {
 	Engine    *core.Engine
 	Snapshots *domain.SnapshotStore
-	Trust     *core.TrustMap
+	Trust     ClientResolver
 	Handoff   identity.Handoff
 	Signaling *signaling.Registry
 	ClassKey  []byte
@@ -60,6 +62,14 @@ func NewLocalService(o ServiceOptions) (*LocalService, error) {
 	return &LocalService{options: o}, nil
 }
 func (s *LocalService) Snapshots() *domain.SnapshotStore { return s.options.Snapshots }
+
+// RefreshSources is a scheduled local state read, never part of Decide.
+func (s *LocalService) RefreshSources() error {
+	if source, ok := s.options.Trust.(*SourceTrust); ok {
+		return source.Refresh()
+	}
+	return nil
+}
 func (s *LocalService) Decide(ctx context.Context, r Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -67,6 +77,11 @@ func (s *LocalService) Decide(ctx context.Context, r Request) (Result, error) {
 	trusted, err := s.options.Trust.AuthenticatedClient(r.Server.ClientID, r.Server.SourceIP)
 	if err != nil {
 		return Result{}, err
+	}
+	// A configured wireless client is an upper bound, not proof of the medium.
+	// Packet input may only remove VLAN privilege, never select a site/profile.
+	if len(r.NASPortTypes) != 1 || r.NASPortTypes[0] != "19" {
+		trusted.Medium = domain.Wired
 	}
 	now := s.options.Clock()
 	snapshot := s.options.Snapshots.View()
@@ -138,14 +153,16 @@ func FromConfig(cfg config.Config, registry *signaling.Registry) (*LocalService,
 	if err != nil {
 		return nil, nil, err
 	}
-	clients := []core.Client{}
-	for _, r := range cfg.RadiusClients {
-		clients = append(clients, core.Client{ID: r.ID, LocationID: domain.LocationID(r.LocationID), CIDRs: append([]string(nil), r.CIDRs...), Medium: domain.NetworkMedium(r.Medium), SignalingProfile: r.SignalingProfile})
-	}
-	trust, err := core.NewTrustMap(clients)
+	sourceConfig, err := sources.FromConfig(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	trust, err := NewSourceTrust(sourceConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Missing/stale dynamic state never prevents static-client construction.
+	_ = trust.Refresh()
 	file, err := os.Open(cfg.Paths.InventoryFile)
 	if err != nil {
 		return nil, nil, errors.New("local inventory unavailable")

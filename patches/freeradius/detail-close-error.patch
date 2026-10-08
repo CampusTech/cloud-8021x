@@ -1,0 +1,26 @@
+Description: Return failure for buffered detail write/close errors
+ No fsync, replication or partial-record rollback is added.
+Author: CampusGroup
+Forwarded: no
+--- a/src/modules/rlm_detail/rlm_detail.c
++++ b/src/modules/rlm_detail/rlm_detail.c
+@@ -427,12 +427,17 @@
+ 		return RLM_MODULE_FAIL;
+ 	}
+ 
+-	if (detail_write(outfp, inst, request, packet, compat) < 0) goto fail;
++	if ((detail_write(outfp, inst, request, packet, compat) < 0) || ferror(outfp)) goto fail;
+ 
+ 	/*
+ 	 *	Flush everything
+ 	 */
+-	fclose(outfp);
++	/* fclose consumes the stream even on failure. Release the lock once. */
++	if (fclose(outfp) != 0) {
++		RERROR("Failed flushing detail file: %s", fr_syserror(errno));
++		exfile_close(inst->ef, outfd);
++		return RLM_MODULE_FAIL;
++	}
+ 	exfile_close(inst->ef, outfd);
+ 
+ 	/*

@@ -1,0 +1,12 @@
+freeradius	3.2.10+dfsg-2~bookworm+campus3
+freeradius-common	3.2.10+dfsg-2~bookworm+campus3
+freeradius-config	3.2.10+dfsg-2~bookworm+campus3
+freeradius-postgresql	3.2.10+dfsg-2~bookworm+campus3
+freeradius-rest	3.2.10+dfsg-2~bookworm+campus3
+freeradius-utils	3.2.10+dfsg-2~bookworm+campus3
+libc6	2.36-9+deb12u14
+libcurl4	7.88.1-10+deb12u15
+libfreeradius3	3.2.10+dfsg-2~bookworm+campus3
+libpq5	15.19-0+deb12u1
+libssl3	3.0.22-1~deb12u1
+systemd-standalone-sysusers	252.39-1~deb12u2

@@ -1,0 +1,20 @@
+server buffered-accounting {
+ listen {
+  type = detail
+  filename = "{{.SpoolDirectory}}/detail-*"
+  load_factor = 10
+  poll_interval = 1
+  retry_interval = 5
+  track = yes
+ }
+ accounting {
+  native_sql {
+   fail = 1
+   noop = 1
+   invalid = 1
+  }
+  if (!(ok || updated)) {
+   fail
+  }
+ }
+}

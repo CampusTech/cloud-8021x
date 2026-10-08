@@ -31,6 +31,8 @@ type Verifier interface {
 	Verify(context.Context, []Binding) ([]domain.SourceCandidate, error)
 }
 type ClientSources struct {
+	ObservedAt, MaxAgeSeconds                                  int64
+	ConfigSHA256                                               string
 	ClientID, LocationID, Medium, SignalingProfile, SecretFile string
 	CIDRs                                                      []string
 }
@@ -48,6 +50,8 @@ type FirewallState struct {
 	Disabled     bool
 }
 type Backup struct {
+	Proof                    []byte
+	ProofExist               bool
 	Clients, State           []byte
 	Firewall                 FirewallState
 	ClientsExist, StateExist bool
@@ -74,7 +78,7 @@ type Applier struct {
 
 func key(p, s string) string { return p + "\x00" + s }
 func (c Config) Validate() error {
-	if c.MaxAge <= 0 || c.MaxAge > time.Hour || len(c.Bindings) == 0 || len(c.Bindings) > 128 {
+	if c.MaxAge < time.Second || c.MaxAge > time.Hour || len(c.Bindings) == 0 || len(c.Bindings) > 128 {
 		return errors.New("invalid source configuration")
 	}
 	clients := map[string]bool{}
@@ -97,7 +101,7 @@ func (c Config) Validate() error {
 		}
 		for _, raw := range b.StaticCIDRs {
 			p, e := netip.ParsePrefix(raw)
-			if e != nil || !safePrefix(p) {
+			if e != nil || !safePrefix(p) || raw != p.String() {
 				return errors.New("invalid static source prefix")
 			}
 			for _, r := range ranges {
@@ -114,8 +118,13 @@ func (c Config) Validate() error {
 	return nil
 }
 func safePrefix(p netip.Prefix) bool {
-	if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() || p.Bits() == 0 {
+	if !p.IsValid() || p.Addr().Is4In6() || p.Addr().Zone() != "" || p != p.Masked() || p.Bits() == 0 {
 		return false
+	}
+	// Static IPv6 ranges have the same trust contract as the core TrustMap.
+	// Dynamic discovery and firewall candidates remain public IPv4 /32 only.
+	if p.Addr().Is6() {
+		return true
 	}
 	for _, s := range []string{"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4"} {
 		if p.Overlaps(netip.MustParsePrefix(s)) {
@@ -176,6 +185,9 @@ func makePlan(cfg Config, proposed map[string]domain.SourceCandidate) (Plan, err
 	for _, b := range cfg.Bindings {
 		c := proposed[key(b.ProviderID, b.ConsoleID)]
 		client := ClientSources{ClientID: b.ClientID, LocationID: b.LocationID, Medium: b.Medium, SignalingProfile: b.SignalingProfile, SecretFile: b.SecretFile}
+		client.ObservedAt = int64(c.ObservedAt)
+		client.MaxAgeSeconds = int64(cfg.MaxAge.Seconds())
+		client.ConfigSHA256 = cfg.Identity()
 		for _, raw := range c.CIDRs {
 			prefix := netip.MustParsePrefix(raw)
 			covered := false
@@ -296,7 +308,7 @@ func nowTime(now func() time.Time) time.Time {
 // already authenticated; metadata/NAS/certificate fields cannot select it.
 func Allowed(cfg Config, state State, clientID, source string, now time.Time) bool {
 	a, e := netip.ParseAddr(source)
-	if e != nil {
+	if e != nil || a.Is4In6() || a.Zone() != "" {
 		return false
 	}
 	for _, b := range cfg.Bindings {
