@@ -99,6 +99,7 @@ class BulkInventoryTests(unittest.TestCase):
 
             def respond(req, timeout):
                 if req.get_header('Authorization') == 'Bearer collector-token':
+                    self.assertNotIn('device_mapping', req.full_url)
                     return io.BytesIO(json.dumps({'hosts': hosts[:1] if scoped else hosts}).encode()) if 'page=0&' in req.full_url else io.BytesIO(b'{"hosts":[]}')
                 self.assertEqual(req.get_header('Authorization'), 'Bearer test-token')
                 if 'page=0&' in req.full_url:

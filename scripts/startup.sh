@@ -2268,8 +2268,7 @@ try:
         collection_ids = set()
         collection_page = 0
         while True:
-            path = (f"/api/v1/fleet/hosts?page={collection_page}&per_page={page_size}"
-                    "&device_mapping=true")
+            path = f"/api/v1/fleet/hosts?page={collection_page}&per_page={page_size}"
             scoped_hosts = collection_request("GET", path)["hosts"]
             if not isinstance(scoped_hosts, list):
                 raise ValueError("invalid collector host list")
