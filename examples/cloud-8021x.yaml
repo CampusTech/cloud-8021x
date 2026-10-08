@@ -36,6 +36,7 @@ inventory:
     observer_token: {file: /run/cloud-8021x/fleet-observer-token}
     maintainer_token: {file: /run/cloud-8021x/fleet-maintainer-token}
     managed_certificates: true
+    client_ca_file: /etc/cloud-8021x/client-ca-bundle.pem
     timeout: 5s
     poll_interval: 1h
     max_pending_age: 24h

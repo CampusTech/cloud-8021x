@@ -182,6 +182,7 @@ func TestListenerBindingCollisionSemantics(t *testing.T) {
 				c.Inventory.Fleet.ObserverToken = SecretRef{File: "/run/observer"}
 				c.Inventory.Fleet.MaintainerToken = SecretRef{File: "/run/maintainer"}
 				c.Inventory.Fleet.ManagedCertificates = true
+				c.Inventory.Fleet.ClientCAFile = "/run/client-ca.pem"
 				c.Listeners.Broker = BrokerListener{Enabled: true, Address: tc.second, CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, Username: "fleet", Token: SecretRef{File: "/run/broker-token"}, SigningKey: SecretRef{File: "/run/signing-key"}, SCEPURL: "https://ca.example/scep", Provisioner: "wifi-scep"}
 			} else {
 				c.Listeners.HealthAddress = tc.second
@@ -204,6 +205,7 @@ func TestBrokerWildcardCollidesWithCanonicalWebhookBinding(t *testing.T) {
 	c.Inventory.Fleet.ObserverToken = SecretRef{File: "/run/observer"}
 	c.Inventory.Fleet.MaintainerToken = SecretRef{File: "/run/maintainer"}
 	c.Inventory.Fleet.ManagedCertificates = true
+	c.Inventory.Fleet.ClientCAFile = "/run/client-ca.pem"
 	c.Listeners.Webhook = TLSListener{Enabled: true, Address: "[::ffff:127.0.0.1]:09444", CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, ClientCAFiles: []string{"/run/client-ca.crt"}, ClientDNSNames: []string{"step-ca.internal"}}
 	c.Listeners.Broker = BrokerListener{Enabled: true, Address: "[::]:9444", CertFile: "/run/server.crt", KeyFile: SecretRef{File: "/run/server.key"}, Username: "fleet", Token: SecretRef{File: "/run/broker-token"}, SigningKey: SecretRef{File: "/run/signing-key"}, SCEPURL: "https://ca.example/scep", Provisioner: "wifi-scep"}
 	if err := c.Validate(); err == nil {

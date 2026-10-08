@@ -91,6 +91,7 @@ type Inventory struct {
 	Fleet    Fleet  `yaml:"fleet"`
 }
 type Fleet struct {
+	ClientCAFile     string   `yaml:"client_ca_file"`
 	ACMEProfileUUIDs []string `yaml:"acme_profile_uuids"`
 	// Nil means all eligible non-exempt hosts; an explicit [] means queue none.
 	SCEPProfileUUIDs    []string      `yaml:"scep_profile_uuids"`
@@ -471,6 +472,9 @@ func (c Config) Validate() error {
 	if c.Inventory.Enabled && (!httpsURL(c.Inventory.Fleet.BaseURL) || !duration(c.Inventory.Fleet.Timeout, time.Minute)) {
 		return errors.New("Fleet inventory requires HTTPS base_url and bounded timeout")
 	}
+	if c.Inventory.Enabled && c.Inventory.Fleet.ManagedCertificates && !cleanPath(c.Inventory.Fleet.ClientCAFile) {
+		return errors.New("Fleet managed collection requires explicit client_ca_file trust bundle")
+	}
 	if !duration(c.Inventory.Fleet.PollInterval, 30*24*time.Hour) || c.Inventory.Fleet.PollInterval < time.Hour || !duration(c.Inventory.Fleet.MaxPendingAge, 30*24*time.Hour) {
 		return errors.New("Fleet collection requires at least hourly polling and bounded pending age")
 	}
@@ -600,7 +604,7 @@ func (c Config) Validate() error {
 			return errors.New("CA certificate paths must be absolute and clean")
 		}
 	}
-	for _, path := range []string{c.Telemetry.CAFile, c.CA.ConfigFile, c.CA.ServerCertFile, c.CA.ReadinessFile, c.Policy.AttestedACME.IssuerFile, c.Inventory.Fleet.CacheFile, c.Network.Discovery.CandidateFile} {
+	for _, path := range []string{c.Telemetry.CAFile, c.CA.ConfigFile, c.CA.ServerCertFile, c.CA.ReadinessFile, c.Policy.AttestedACME.IssuerFile, c.Inventory.Fleet.CacheFile, c.Inventory.Fleet.ClientCAFile, c.Network.Discovery.CandidateFile} {
 		if path != "" && !cleanPath(path) {
 			return errors.New("optional paths must be absolute and clean")
 		}

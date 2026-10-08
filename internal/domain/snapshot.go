@@ -313,10 +313,17 @@ func (s *SnapshotStore) Set(snapshot Snapshot) error {
 	if err != nil {
 		return errors.New("invalid inventory snapshot")
 	}
-	if _, err := DecodeSnapshot(bytes.NewReader(data)); err != nil {
+	validated, err := DecodeSnapshot(bytes.NewReader(data))
+	if err != nil {
 		return err
 	}
 	copy := snapshot.Clone()
+	copy.Devices = validated.Devices
+	for id, metadata := range snapshot.Devices {
+		if !metadataValid(metadata) {
+			copy.Devices[id] = nil
+		}
+	}
 	s.value.Store(&copy)
 	return nil
 }

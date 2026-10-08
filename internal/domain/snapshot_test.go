@@ -155,3 +155,34 @@ func TestImmutableSnapshotViewOnlyCopiesSelectedRecordsAndRetainsGeneration(t *t
 		t.Fatal("view generation is mutable")
 	}
 }
+
+func TestSetSanitizesDisplayMetadataAndPreservesAuthorization(t *testing.T) {
+	fp := strings.Repeat("a", 64)
+	at := Timestamp(90.125)
+	record := &DeviceRecord{DeviceID: "fleet:1", Groups: []GroupID{"fleet:2"}, Enrolled: true, ObservedAt: &at}
+	snapshot := Snapshot{Version: 2, UpdatedAt: 100.5, Identities: map[string]*DeviceRecord{"uuid": record, "ambiguous": nil}, Certificates: map[string]*DeviceRecord{fp: record}, HardwareSerials: map[string]*DeviceRecord{}, Devices: map[DeviceID]*DeviceMetadata{"fleet:1": {Name: strings.Repeat("x", 1025)}, "fleet:2": {Name: "valid"}}}
+	var store SnapshotStore
+	if err := store.Set(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if store.View().MetadataFor("fleet:1") != nil {
+		t.Fatal("Set published oversized display metadata")
+	}
+	if store.View().MetadataFor("fleet:2").Name != "valid" || !reflect.DeepEqual(store.Load().Certificates, snapshot.Certificates) || store.View().Updated() != 100.5 {
+		t.Fatal("sanitization changed authorization or valid metadata")
+	}
+	if v, ok := store.Load().Identities["ambiguous"]; !ok || v != nil {
+		t.Fatal("ambiguity lost")
+	}
+}
+
+func TestSetRejectsInvalidUTF8DisplayMetadataBeforeJSONReplacement(t *testing.T) {
+	s := Snapshot{Version: 1, UpdatedAt: 100, Identities: map[string]*DeviceRecord{"id": {DeviceID: "fake:1", Groups: []GroupID{}, Enrolled: true}}, Devices: map[DeviceID]*DeviceMetadata{"fake:1": {Name: string([]byte{0xff})}}}
+	var store SnapshotStore
+	if err := store.Set(s); err != nil {
+		t.Fatal(err)
+	}
+	if store.View().MetadataFor("fake:1") != nil {
+		t.Fatal("invalid UTF8 metadata became trusted display text via JSON replacement")
+	}
+}

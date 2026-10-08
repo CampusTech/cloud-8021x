@@ -64,17 +64,22 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 	if err = tx.QueryRow(ctx, "SELECT to_regclass('ledger.schema_version') IS NOT NULL").Scan(&exists); err != nil {
 		return safeError(err)
 	}
+	v := 1
 	if !exists {
 		if _, err = tx.Exec(ctx, migrations.Ledger); err != nil {
 			return safeError(err)
 		}
 	} else {
-		var v int
 		if err = tx.QueryRow(ctx, "SELECT max(version) FROM ledger.schema_version").Scan(&v); err != nil {
 			return safeError(err)
 		}
-		if v != migrations.Version {
+		if v < 1 || v > migrations.Version {
 			return errors.New("unsupported database schema version")
+		}
+	}
+	if v == 1 {
+		if _, err = tx.Exec(ctx, migrations.Collection); err != nil {
+			return safeError(err)
 		}
 	}
 	var db string

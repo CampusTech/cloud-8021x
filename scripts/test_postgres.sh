@@ -2,7 +2,9 @@
 # Development-only disposable PostgreSQL16 TLS fixture. Never uses production DSNs.
 set -euo pipefail
 fixture=$(mktemp -d /private/tmp/cloud8021x-pg.XXXXXX)
-container="cloud8021x-pg-task3-$(openssl rand -hex 5)"
+fixture_task=${C8021X_PG_FIXTURE_TASK:-task3}
+[[ "$fixture_task" =~ ^task[0-9]+$ ]] || exit 2
+container="cloud8021x-pg-$fixture_task-$(openssl rand -hex 5)"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf "$fixture"; }
 trap cleanup EXIT
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$fixture/ca.key" -out "$fixture/ca.pem" -days 2 -subj /CN=Disposable-Test-CA >/dev/null 2>&1
@@ -15,7 +17,7 @@ ALTER SYSTEM SET ssl = 'on';
 ALTER SYSTEM SET ssl_cert_file = '/tls/server.crt';
 ALTER SYSTEM SET ssl_key_file = '/tls/server.key';
 SQL
-docker run -d --name "$container" --label cloud8021x.test=task3 --label cloud8021x.disposable=true -e POSTGRES_PASSWORD=disposable-migration -e POSTGRES_DB=cloud8021x -p 127.0.0.1::5432 -v "$fixture:/certs:ro" -v "$fixture/ssl.sql:/docker-entrypoint-initdb.d/ssl.sql:ro" postgres:16 bash -c 'mkdir -p /tls; cp /certs/server.key /certs/server.crt /tls/; chown postgres:postgres /tls/*; chmod 600 /tls/server.key; exec docker-entrypoint.sh postgres' >/dev/null
+docker run -d --name "$container" --label "cloud8021x.test=$fixture_task" --label cloud8021x.disposable=true -e POSTGRES_PASSWORD=disposable-migration -e POSTGRES_DB=cloud8021x -p 127.0.0.1::5432 -v "$fixture:/certs:ro" -v "$fixture/ssl.sql:/docker-entrypoint-initdb.d/ssl.sql:ro" postgres:16 bash -c 'mkdir -p /tls; cp /certs/server.key /certs/server.crt /tls/; chown postgres:postgres /tls/*; chmod 600 /tls/server.key; exec docker-entrypoint.sh postgres' >/dev/null
 for _ in $(seq 1 60); do
  if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d cloud8021x >/dev/null 2>&1; then break; fi
  sleep 0.25

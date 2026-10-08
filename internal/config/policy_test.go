@@ -56,3 +56,26 @@ func TestOptOutRulesAndMappedIPv6AreRejected(t *testing.T) {
 		t.Fatal("mapped IP can select foreign source family")
 	}
 }
+
+func TestManagedCollectionRequiresExplicitClientTrust(t *testing.T) {
+	data, err := os.ReadFile("../../examples/cloud-8021x.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Decode(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Inventory.Fleet.ClientCAFile = ""
+	if cfg.Validate() == nil {
+		t.Fatal("managed collection accepted no explicit client trust")
+	}
+	cfg.Inventory.Fleet.ClientCAFile = "relative.pem"
+	if cfg.Validate() == nil {
+		t.Fatal("relative client trust path accepted")
+	}
+	cfg.Inventory.Fleet.ClientCAFile = "/etc/cloud-8021x/client-ca-bundle.pem"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

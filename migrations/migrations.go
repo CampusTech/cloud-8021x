@@ -6,4 +6,7 @@ import _ "embed"
 //go:embed 001_ledger.sql
 var Ledger string
 
-const Version = 1
+//go:embed 002_collection.sql
+var Collection string
+
+const Version = 2

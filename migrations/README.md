@@ -6,7 +6,7 @@ stock `radcheck`, `radreply`, `radacct`, or SQL authentication/client lookup tab
 
 Run `postgres.NewMigration(...).Migrate(ctx, Roles{Runtime: ..., Native: ...})`
 with the separate migration credential. Migrations use advisory transaction lock
-`(8021,1)`, reject other database names before DDL, and store schema version 1.
+`(8021,1)`, reject other database names before DDL, and store schema version 2 (v1 upgrades with the collection scope indexes).
 The runtime/native roles must already exist without elevated flags, membership,
 or object ownership. Migrations reset grants on application objects and grant:
 
@@ -127,3 +127,23 @@ container with generated TLS and synthetic roles, execute the real race-enabled
 suite, and remove only that fixture. The script needs local Docker permission;
 it never reads production credentials. Ordinary `go test` without the explicit
 fixture environment skips integration cases, so it is not equivalent evidence.
+
+## Managed certificate collection (Task 4)
+
+`ReserveCollection` atomically gates a source/host/enrollment/trust/script key
+under a transaction advisory lock, using the DB clock for cadence >= one hour
+and at most two pending/uncertain requests. A successful remote submission has
+`receipt.pending=true`; it continues consuming the budget until authenticated
+terminal evidence is persisted. Payloads include `collection_key`, exact host,
+UUID/enrollment times, locally generated command/nonce, public SYSTEM script and
+public trust digest. Credentials and private keys never enter the ledger.
+
+`ListCollection` returns at most two unresolved plus two latest terminal work
+records; history remains retained. `RecordCollectionResult` transactionally
+persists the adapter's exact authenticated result and reconciliation evidence,
+retaining original attempt/quarantine history. It never permits submission.
+The optional neutral repository contract lives in `internal/inventory`.
+
+Schema version 2 adds only partial indexes for recent and pending collection
+keys; reviewed v1 installations upgrade under the existing migration lock.
+Accounting/native contracts and privileges are unchanged.

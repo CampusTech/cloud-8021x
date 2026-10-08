@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/CampusTech/cloud-8021x/internal/config"
+	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/identity"
 	"golang.org/x/sys/unix"
 )
@@ -41,6 +42,21 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 // operations remain explicit errors; verify-leaf is already a real executable path.
 func (*RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if op == OperationInventorySync {
+		service, cleanup, err := InventoryServiceFromConfig(ctx, cfg, new(domain.SnapshotStore), o.DryRun, nil)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		service.Logger = o.Logger
+		if err = service.Sync(ctx, o.DryRun); err != nil {
+			return err
+		}
+		if o.Output != nil {
+			_, err = fmt.Fprintln(o.Output, "Inventory sync completed.")
+		}
 		return err
 	}
 	if op != OperationRadiusVerifyLeaf {
