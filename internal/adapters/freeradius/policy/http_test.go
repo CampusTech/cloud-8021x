@@ -296,3 +296,26 @@ func TestPolicyFromConfigUsesOnlyLocalSnapshotsAndProtectedTokens(t *testing.T) 
 		t.Fatal("public bearer token file accepted")
 	}
 }
+
+func TestAuthenticatedHealthProbeDoesNotConsumeHandoff(t *testing.T) {
+	service, input, _ := setup(t)
+	h := handler(t, service)
+	for _, token := range []string{strings.Repeat("k", 32), strings.Repeat("x", 32)} {
+		r := httptest.NewRequest("GET", "http://localhost/healthz", nil)
+		r.RemoteAddr = "127.0.0.1:1234"
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := http.StatusNoContent
+		if token[0] == 'x' {
+			want = http.StatusUnauthorized
+		}
+		if w.Code != want {
+			t.Fatalf("health: %d want %d", w.Code, want)
+		}
+	}
+	raw, _ := json.Marshal(input)
+	if w := request(t, h, raw, strings.Repeat("k", 32), "127.0.0.1:1234"); w.Code != 200 {
+		t.Fatal("health consumed authorization", w.Code)
+	}
+}

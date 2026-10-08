@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -89,4 +90,21 @@ func (x *Measurements) ObserveComponent(ctx context.Context, name, component str
 		return
 	}
 	x.gauges[name].Record(ctx, value, metric.WithAttributes(attribute.String("component", component)))
+}
+
+// ObserveCluster marks shared PostgreSQL observations explicitly. Dashboard
+// aliases use max by cluster (across node resources), never sum both reporters.
+// The protected transition is common to both nodes and contains no credentials.
+func (x *Measurements) ObserveCluster(ctx context.Context, name, cluster string, value float64) {
+	switch name {
+	case "ledger.sessions", "ledger.intake", "ledger.quarantine", "outbox.depth", "outbox.oldest_age", "usage.age":
+		if len(cluster) != 64 || strings.Trim(cluster, "0123456789abcdef") != "" || value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return
+		}
+		if g := x.gauges[name]; g != nil {
+			g.Record(ctx, value, metric.WithAttributes(attribute.String("scope", "shared"), attribute.String("cluster", cluster)))
+		}
+	default:
+		x.Observe(ctx, name, value)
+	}
 }

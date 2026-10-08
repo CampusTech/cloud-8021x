@@ -62,15 +62,16 @@ const radiusDirectory = radiusParent + "/3.0"
 // Packaged root-owned symlinks are retained in that tree, never followed/rewritten.
 // Private backups remain root-only; neither daemon nor native roles can read them.
 type Receipt struct {
-	PackageBarrier bool         `json:"package_barrier"`
-	WasRunning     bool         `json:"was_running"`
-	ID             string       `json:"id"`
-	Phase          string       `json:"phase"`
-	HadRadius      bool         `json:"had_radius"`
-	TreeSaved      bool         `json:"tree_saved"`
-	TreeSwapped    bool         `json:"tree_swapped"`
-	Packages       *PackagePlan `json:"packages,omitempty"`
-	Files          []SavedFile  `json:"files"`
+	WriterRetirement *writerRetirement `json:"writer_retirement,omitempty"`
+	PackageBarrier   bool              `json:"package_barrier"`
+	WasRunning       bool              `json:"was_running"`
+	ID               string            `json:"id"`
+	Phase            string            `json:"phase"`
+	HadRadius        bool              `json:"had_radius"`
+	TreeSaved        bool              `json:"tree_saved"`
+	TreeSwapped      bool              `json:"tree_swapped"`
+	Packages         *PackagePlan      `json:"packages,omitempty"`
+	Files            []SavedFile       `json:"files"`
 }
 type Transaction struct {
 	committed       bool
@@ -200,6 +201,12 @@ func (t *Transaction) Prepare(tree map[string][]byte, files []File) error {
 		return errors.New("installation cannot be staged")
 	}
 	t.tree, t.files = tree, files
+	if t.receipt.WriterRetirement != nil {
+		t.receipt.WriterRetirement.Native = map[string]string{}
+		for p, data := range tree {
+			t.receipt.WriterRetirement.Native[p] = digestBytes(data)
+		}
+	}
 	id := t.receipt.ID
 	accounts, e := ReadAccounts()
 	if e != nil {

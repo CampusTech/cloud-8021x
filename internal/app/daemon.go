@@ -108,6 +108,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 		s, e := postgres.New(ctx, strings.TrimSpace(string(dsn)), cfg.Database)
 		if e == nil {
 			cleanups = append(cleanups, s.Close)
+			s = s.ForTransition(cfg.StateTransition)
 		}
 		return s, e
 	}
@@ -262,13 +263,28 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	if err != nil {
 		return fail(err)
 	}
-	l.Ready = func(ctx context.Context) error { _, e := readiness(ctx); return e }
+
 	secret, err := readInventoryFile(cfg.Bootstrap.HealthSecret.File, true, 4096)
 	if err != nil {
 		return fail(err)
 	}
 	peers := []string{cfg.Bootstrap.LocalAddress, cfg.Bootstrap.PeerAddress, "127.0.0.1"}
 	l.Servers = append(l.Servers, boundedServer(net.JoinHostPort(cfg.Bootstrap.LocalAddress, "18122"), native.ReadinessHandler(bytes.TrimSpace(secret), peers, readiness)))
+	policyToken, err := readInventoryFile(cfg.Listeners.Policy.Token.File, true, 4096)
+	if err != nil {
+		return fail(err)
+	}
+	l.Ready = func(ctx context.Context) error {
+		expected, e := readiness(ctx)
+		if e != nil {
+			return e
+		}
+		if e = probePolicyHandler(ctx, cfg.Listeners.Policy.Address, bytes.TrimSpace(policyToken)); e != nil {
+			return e
+		}
+		return native.ProbeReadiness(ctx, "http://"+net.JoinHostPort(cfg.Bootstrap.LocalAddress, "18122"), bytes.TrimSpace(secret), expected)
+	}
+
 	if err = appendWebhookServers(&l, cfg, local.Snapshots(), sdk); err != nil {
 		return fail(err)
 	}
@@ -282,7 +298,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 			}
 		}
 		for name, value := range next.Measurements {
-			sdk.Metrics.Observe(ctx, name, value)
+			sdk.Metrics.ObserveCluster(ctx, name, cfg.StateTransition, value)
 		}
 		observationsMu.Lock()
 		observations = next
@@ -445,6 +461,26 @@ func appendWebhookServers(l *lifecycle, cfg config.Config, snapshots *domain.Sna
 		s := boundedServer(b.Address, sdk.Handler("broker", h))
 		s.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}
 		l.Servers = append(l.Servers, s)
+	}
+	return nil
+}
+
+// This bounded authenticated self-probe exercises the bound policy handler and
+// does not create or consume a TLS handoff or invoke an inventory/API lookup.
+func probePolicyHandler(ctx context.Context, address string, token []byte) error {
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/healthz", nil)
+	if e != nil {
+		return e
+	}
+	req.Header.Set("Authorization", "Bearer "+string(token))
+	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("policy health redirect refused") }}
+	response, e := client.Do(req)
+	if e != nil {
+		return errors.New("local policy handler unavailable")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusNoContent {
+		return errors.New("local policy handler authentication failed")
 	}
 	return nil
 }

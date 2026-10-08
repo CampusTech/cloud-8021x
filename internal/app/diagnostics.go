@@ -125,7 +125,7 @@ func diagnostics(ctx context.Context, op Operation, cfg config.Config, o RunOpti
 			}
 		}
 		for name, value := range observations.Measurements {
-			sdk.Metrics.Observe(ctx, name, value)
+			sdk.Metrics.ObserveCluster(ctx, name, cfg.StateTransition, value)
 		}
 		if err = sdk.Shutdown(context.WithoutCancel(ctx)); err != nil {
 			return err

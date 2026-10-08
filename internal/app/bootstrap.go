@@ -30,6 +30,9 @@ func bootstrapPlan(cfg config.Config, o RunOptions, renew bool) error {
 		return e
 	}
 	steps := []string{"validate-protected-artifact-manifest", "fetch-exact-secret-versions", "verify-cloud-sql-ca", "verify-schema-3-and-ca-role-isolation", "shared-maintenance", "adopt-or-recover-preserved-ca", "validate-server-certificate", "persist-last-known-good", "validate-native-config", "authenticate-peer-readiness", "activate-and-verify"}
+	if o.FenceOnly {
+		steps = []string{"validate-protected-incoming-artifact-and-config", "fetch-exact-secret-versions", "verify-schema-and-role-isolation", "shared-maintenance", "fence-only-local-legacy-writers", "persist-protected-node-receipt", "prepared-waiting-no-activation"}
+	}
 	if renew {
 		steps = []string{"fetch-exact-secret-versions", "shared-maintenance", "validate-preserved-ca-and-server-cache", "renew-due-fixed-server-and-loopback-webhook-identities", "persist-last-known-good", "validate-native-config", "authenticate-peer-readiness", "activate-and-verify"}
 	}
@@ -111,6 +114,9 @@ func credentialFiles(cfg config.Config, values map[string][]byte, a host.Account
 	return files, nil
 }
 func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, renew bool) error {
+	if o.FenceOnly && (!o.Incoming || renew) {
+		return errors.New("fence-only requires bootstrap --incoming")
+	}
 	cfg, e := protectedConfiguration(cfg, o)
 	if e != nil {
 		return e
@@ -135,9 +141,11 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		if e = host.VerifyArtifacts(ctx, manifest); e != nil {
 			return e
 		}
-		packagePlan, e = host.PreparePackages(ctx, manifest)
-		if e != nil {
-			return e
+		if !o.FenceOnly {
+			packagePlan, e = host.PreparePackages(ctx, manifest)
+			if e != nil {
+				return e
+			}
 		}
 		if o.Incoming {
 			incoming, e = host.IncomingFiles()
@@ -182,11 +190,47 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 		return e
 	}
 	gate := postgres.MaintenanceGate{Store: repository}
+	unlock, e := host.AcquireWriterOperation()
+	if e != nil {
+		return e
+	}
+	defer unlock()
+	if o.FenceOnly && o.MaintenanceAttempt > 0 {
+		node, hash, e := transitionBinding(cfg)
+		if e != nil {
+			return e
+		}
+		return repository.ResumeWriterFence(ctx, o.MaintenanceAttempt, postgres.WriterFenceIdentity{Transition: cfg.StateTransition, Node: node, ConfigSHA256: hash}, func(ctx context.Context) (string, error) {
+			return host.RecoverLegacyWriterFence(ctx, cfg.StateTransition, node, hash)
+		})
+	}
+	if e = bootstrapTransition(ctx, cfg, o, repository, gate.With, func(ctx context.Context, _, _, _ string) (string, error) {
+		return preparedWriterFence(ctx, cfg, credentials, repository)
+	}); e != nil {
+		return e
+	}
+	if o.FenceOnly {
+		return nil
+	}
+	if cfg.Paths.InventoryFile != "/var/lib/cloud-8021x/inventory.json" || cfg.Paths.DowngradeGuardFile != "/var/lib/cloud-8021x/fingerprint-enforced" {
+		return errors.New("protected adoption requires fixed policy and guard paths")
+	}
+	adoption, e := host.ReadLegacyPolicySnapshot(cfg.Policy.IdentityMode)
+	if e != nil {
+		return e
+	}
 	operation := "bootstrap"
 	if renew {
 		operation = "certificates renew"
 	}
 	return withBootstrapReport(ctx, gate.With, operation, o.Output, func(ctx context.Context, outcome *bootstrapOutcome) (result error) {
+		writerLayout, e := currentWriterLayout()
+		if e != nil {
+			return e
+		}
+		if _, e = host.RevalidateLegacyWriterFence(ctx, cfg.StateTransition, cfg.InstanceID, writerLayout); e != nil {
+			return e
+		}
 		ecSigner, e := cloud.Signer(ctx, cfg.Bootstrap.ECKMS)
 		if e != nil {
 			return e
@@ -300,6 +344,9 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			if previous != nil {
 				prior = previous
 			}
+			if err = transaction.BindWriterRetirement(cfg.StateTransition, writerLayout); err != nil {
+				return err
+			}
 			return transaction.CaptureInitialState(ctx, backend, prior)
 		}
 		if !renew {
@@ -342,6 +389,11 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return err
 		}
 		files = append(files, legacyClassFiles...)
+		adoptionFiles, err := host.AdoptionSnapshotFile(adoption, accounts)
+		if err != nil {
+			return err
+		}
+		files = append(files, adoptionFiles...)
 		collectorFiles, err := host.CollectorFiles(cfg, credentials["/run/cloud-8021x-collector/datadog-api-key"], accounts)
 		if err != nil {
 			return err

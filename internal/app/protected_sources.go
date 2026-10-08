@@ -88,7 +88,7 @@ func protectedSources(ctx context.Context, cfg config.Config, o RunOptions) erro
 	if e = checkSourceDigest(candidates, o.SourceCandidateSHA256); e != nil {
 		return e
 	}
-	return coordinateSources(ctx, repository, cfg.Network.Discovery.Firewall.Node, cfg.InstanceID+"-root", candidates, func(ctx context.Context, claimed []domain.SourceCandidate, digest string) error {
+	return coordinateSources(ctx, repository.ForTransition(cfg.StateTransition), cfg.Network.Discovery.Firewall.Node, cfg.InstanceID+"-root", candidates, func(ctx context.Context, claimed []domain.SourceCandidate, digest string) error {
 		o.SourceCandidateSHA256 = digest
 		gate := postgres.MaintenanceGate{Store: repository}
 		return gate.With(ctx, "sources-apply", func(ctx context.Context) error {

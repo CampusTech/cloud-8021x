@@ -17,12 +17,20 @@ func (s *Store) Renew(ctx context.Context, c jobs.Claim, lease time.Duration) er
 	}
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `UPDATE ledger.work SET lease_until=clock_timestamp()+$4::bigint*interval '1 millisecond',updated_at=clock_timestamp() WHERE id=$1 AND owner=$2 AND generation=$3 AND state IN ('leased','started') AND lease_until>clock_timestamp()`, c.ID, c.Owner, c.Generation, lease.Milliseconds())
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return safeError(err)
+	}
+	defer rollback(tx)
+	tag, err := tx.Exec(ctx, `UPDATE ledger.work SET lease_until=clock_timestamp()+$4::bigint*interval '1 millisecond',updated_at=clock_timestamp() WHERE id=$1 AND owner=$2 AND generation=$3 AND state IN ('leased','started') AND lease_until>clock_timestamp()`, c.ID, c.Owner, c.Generation, lease.Milliseconds())
 	if err != nil {
 		return safeError(err)
 	}
 	if tag.RowsAffected() != 1 {
 		return jobs.ErrFenced
+	}
+	if err = commit(ctx, tx); err != nil {
+		return ErrUncertain
 	}
 	return nil
 }

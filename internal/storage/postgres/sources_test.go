@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,5 +110,62 @@ func TestPostgresSourceExpiredUnstartedGeneration(t *testing.T) {
 	}
 	if e = s.StartAttempt(ctx, *old); !errors.Is(e, jobs.ErrFenced) {
 		t.Fatal("old generation started", e)
+	}
+}
+
+func TestPostgresHistoricalSourceRecoveryRequiresProtectedExactQuarantine(t *testing.T) {
+	s, c := integration(t)
+	reset(t, s)
+	ctx := context.Background()
+	runtime := runtimeStore(t, s, c)
+	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance,bootstrap_private.transitions CASCADE"); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _, _ = s.pool.Exec(context.Background(), "TRUNCATE bootstrap_private.maintenance") })
+	transition := strings.Repeat("c", 64)
+	if _, e := s.pool.Exec(ctx, `INSERT INTO bootstrap_private.transitions(id,enabled) VALUES($1,true)`, transition); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := s.pool.Exec(ctx, `INSERT INTO bootstrap_private.writer_fences(transition,node,config_sha256,receipt_sha256) VALUES($1,'radius-primary',$1,$1),($1,'radius-secondary',$1,$1)`, transition); e != nil {
+		t.Fatal(e)
+	}
+	payload := json.RawMessage(`{"node":"radius-primary","candidate":[]}`)
+	if e := runtime.Reserve(ctx, "sources:fixture", "sources:radius-primary", payload); e != nil {
+		t.Fatal(e)
+	}
+	claim, e := runtime.ClaimSource(ctx, "radius-primary", "fixture", time.Minute)
+	if e != nil || claim == nil {
+		t.Fatal(claim, e)
+	}
+	if e = runtime.StartAttempt(ctx, *claim); e != nil {
+		t.Fatal(e)
+	}
+	if e = runtime.FinishAttempt(ctx, *claim, jobs.Uncertain, json.RawMessage(`{}`)); e != nil {
+		t.Fatal(e)
+	}
+	calls := 0
+	verify := func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(`{"historical":true,"original_timestamp":1}`), nil
+	}
+	if e = runtime.ReconcileHistoricalSource(ctx, strings.Repeat("c", 64), "radius-primary", claim.ID, claim.Generation, verify); e == nil || calls != 0 {
+		t.Fatal("unprotected reconciliation", e, calls)
+	}
+	gate := MaintenanceGate{Store: s}
+	if e = gate.With(ctx, "source-historical", func(ctx context.Context) error {
+		return s.ReconcileHistoricalSource(ctx, strings.Repeat("c", 64), "radius-primary", claim.ID, claim.Generation, verify)
+	}); e != nil {
+		t.Fatal(e)
+	}
+	state, e := s.LookupWork(ctx, claim.ID)
+	if e != nil || state.State != "succeeded" || calls != 1 {
+		t.Fatal(state, e, calls)
+	}
+	// Tuple mismatch is read-only failure before the evidence verifier.
+	calls = 0
+	if e = gate.With(ctx, "source-historical-wrong", func(ctx context.Context) error {
+		return s.ReconcileHistoricalSource(ctx, strings.Repeat("c", 64), "radius-secondary", claim.ID, claim.Generation, verify)
+	}); e == nil || calls != 0 {
+		t.Fatal("wrong node accepted", e, calls)
 	}
 }

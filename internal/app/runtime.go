@@ -40,7 +40,7 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 
 // Runtime dispatch keeps privileged actions separate from unprivileged service ownership.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
-	if o.Incoming && op != OperationBootstrap {
+	if (o.Incoming || o.FenceOnly) && op != OperationBootstrap {
 		return errors.New("incoming release selector is bootstrap-only")
 	}
 	if err := ctx.Err(); err != nil {
@@ -51,6 +51,9 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	}
 	if op == OperationDoctor || op == OperationMetricsEmit {
 		return diagnostics(ctx, op, cfg, o)
+	}
+	if op == OperationStateFence {
+		return protectedStateFence(ctx, cfg, o)
 	}
 	if op == OperationBootstrap {
 		return protectedBootstrap(ctx, cfg, o, false)
@@ -66,6 +69,11 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 			return applySources(ctx, o, services.SourceDependencies)
 		}
 		return protectedSources(ctx, cfg, o)
+	}
+	if (op == OperationSitesSync || op == OperationInventorySync) && !o.DryRun {
+		if err := requireRuntimeTransition(ctx, cfg); err != nil {
+			return err
+		}
 	}
 	if op == OperationSitesSync {
 		service, err := NetworkServiceFromConfig(cfg, new(network.Store), o.DryRun, nil)

@@ -7,12 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -21,9 +19,9 @@ import (
 // Names come from the retained startup.sh and radius_usage_service.py. Never
 // accept caller-selected units, scripts, lockfiles or privileged output paths.
 var legacyWriterUnits = []string{"radius-source-refresh.timer", "radius-cert-renew.timer", "renew-webhook-tls.timer", "radius-source-refresh.service", "radius-source-secrets.service", "radius-cert-renew.service", "renew-webhook-tls.service", "radius-usage-collector.service"}
-var legacyWriterCrons = []string{"/etc/cron.d/fleet-device-cache", "/etc/cron.d/unifi-ap-cache", "/etc/cron.d/meraki-ap-cache", "/etc/cron.d/radius-vlan-names"}
-var legacyWriterHelpers = []string{"/usr/local/bin/fleet-device-cache.sh", "/usr/local/bin/unifi-ap-cache.sh", "/usr/local/bin/meraki-ap-cache.sh"}
-var legacyWriterLocks = []string{"/var/lib/cloud-8021x/fleet-cache.lock", "/run/radius-sources.lock", "/var/lib/radius-usage/checkpoint.json.lock", "/var/lib/radius-usage/checkpoint.json.runner.lock"}
+var legacyWriterCrons = []string{"/etc/cron.d/fleet-device-cache", "/etc/cron.d/jamf-device-cache", "/etc/cron.d/unifi-ap-cache", "/etc/cron.d/meraki-ap-cache", "/etc/cron.d/radius-vlan-names"}
+var legacyWriterHelpers = []string{"/usr/local/bin/fleet-device-cache.sh", "/usr/local/bin/fleet-device-fetch.sh", "/usr/local/bin/jamf-device-cache.sh", "/usr/local/bin/jamf-device-fetch.sh", "/usr/local/bin/unifi-ap-cache.sh", "/usr/local/bin/meraki-ap-cache.sh"}
+var legacyWriterLocks = []string{"/var/lib/cloud-8021x/fleet-cache.lock", "/etc/freeradius/3.0/vlan-name-cache.json.lock", "/run/radius-sources.lock", "/var/lib/radius-usage/checkpoint.json.lock", "/var/lib/radius-usage/checkpoint.json.runner.lock"}
 
 func writerUnitPaths(units []string) []string {
 	paths := make([]string, len(units))
@@ -33,7 +31,7 @@ func writerUnitPaths(units []string) []string {
 	return paths
 }
 func legacyWriterFile(path string) bool {
-	return slices.Contains(legacyWriterCrons, path) || slices.Contains(legacyWriterHelpers, path) || slices.Contains(writerUnitPaths(legacyWriterUnits), path)
+	return path == legacyVLANModule || slices.Contains(legacyWriterCrons, path) || slices.Contains(legacyWriterHelpers, path) || slices.Contains(writerUnitPaths(legacyWriterUnits), path)
 }
 
 type writerReceipt struct {
@@ -41,6 +39,10 @@ type writerReceipt struct {
 	Transition, Node, ConfigSHA256 string
 	Files                          []SavedFile
 	Masks                          []string
+	NativeUID                      int
+	Directories                    []writerDirectory
+	Processes                      []writerPID
+	Helper                         writerPID
 }
 
 func writerReceiptDirectory(id string) (string, error) {
@@ -57,7 +59,16 @@ func writerUnitsQuiescent(ctx context.Context, run commandRunner, units []string
 		}
 		values := map[string]string{}
 		for _, line := range strings.Split(string(data), "\n") {
-			k, v, _ := strings.Cut(line, "=")
+			if line == "" {
+				continue
+			}
+			k, v, ok := strings.Cut(line, "=")
+			if !ok || (k != "ActiveState" && k != "SubState" && k != "MainPID") {
+				return errors.New("unknown writer unit evidence")
+			}
+			if _, seen := values[k]; seen {
+				return errors.New("ambiguous writer unit evidence")
+			}
 			values[k] = v
 		}
 		if values["ActiveState"] != "inactive" || values["SubState"] != "dead" || values["MainPID"] != "0" {
@@ -83,8 +94,8 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 	receiptPath := filepath.Join(directory, "receipt.json")
 	data, err := readPrivateCache(receiptPath, 16<<20)
 	if err == nil {
-		var receipt writerReceipt
-		if json.Unmarshal(data, &receipt) != nil || receipt.Version != 1 || receipt.Transition != id || receipt.Node != node || receipt.ConfigSHA256 != configSHA {
+		receipt, decodeErr := decodeWriterReceipt(data, id)
+		if decodeErr != nil || receipt.Node != node || receipt.ConfigSHA256 != configSHA {
 			return "", errors.New("writer fence receipt mismatch")
 		}
 		sum := sha256.Sum256(data)
@@ -93,12 +104,17 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 		if e != nil || string(completed) != digest {
 			return "", errors.New("interrupted writer fence requires root evidence reconciliation")
 		}
-		if e = verifyWriterMasks(); e != nil {
+		if e = verifyWriterMasks(receipt); e != nil {
 			return "", e
 		}
 		if e = writerUnitsQuiescent(ctx, run, legacyWriterUnits); e != nil {
 			return "", e
 		}
+		unlock, e := lockLegacyWriters()
+		if e != nil {
+			return "", e
+		}
+		defer unlock()
 		if e = probe(); e != nil {
 			return "", e
 		}
@@ -108,8 +124,36 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 		return "", err
 	}
 	receipt := writerReceipt{Version: 1, Transition: id, Node: node, ConfigSHA256: configSHA}
-	paths := append(append(append([]string{}, legacyWriterCrons...), legacyWriterHelpers...), writerUnitPaths(legacyWriterUnits)...)
+	receipt.Directories, receipt.NativeUID, err = snapshotWriterLineage()
+	if err != nil {
+		return "", err
+	}
+	processes, err := scanWriterProcesses()
+	if err != nil {
+		return "", err
+	}
+	receipt.Processes = writerProcessEvidence(processes)
+	for _, p := range processes {
+		if p.PID == os.Getpid() {
+			receipt.Helper = writerPID{p.PID, p.Start}
+		}
+	}
+	if receipt.Helper.Start == 0 {
+		return "", errors.New("writer helper process identity unavailable")
+	}
+	paths := legacyWriterPaths()
 	for _, path := range paths {
+		if path == legacyVLANModule {
+			saved, e := snapshotVLAN(receipt.NativeUID)
+			if e != nil {
+				return "", e
+			}
+			receipt.Files = append(receipt.Files, saved)
+			continue
+		}
+		if e := PrepareFileDirectories([]File{{Path: path}}); e != nil {
+			return "", e
+		}
 		if target, e := os.Readlink(path); e == nil {
 			if target != "/dev/null" || !slices.Contains(writerUnitPaths(legacyWriterUnits), path) {
 				return "", errors.New("unrecognized legacy writer symlink")
@@ -130,6 +174,9 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 		receipt.Files = append(receipt.Files, saved)
 	}
 	data, err = json.Marshal(receipt)
+	if err == nil {
+		_, err = decodeWriterReceipt(data, id)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -139,15 +186,33 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 	if err = syncWriterDirectory(directory); err != nil {
 		return "", err
 	}
+	return finishWriterFence(ctx, directory, receipt, data, run, probe)
+}
+func finishWriterFence(ctx context.Context, directory string, receipt writerReceipt, data []byte, run commandRunner, probe func() error) (string, error) {
+	var err error
 	// Snapshots are now durable. A crash from here is uncertain and cannot silently
 	// overwrite these originals on the next run.
+	if err = protectWriterLineage(receipt, false); err != nil {
+		return "", err
+	}
+	for _, saved := range receipt.Files {
+		if saved.Path == legacyVLANModule && saved.Exists {
+			inert, e := inertVLANModule(saved.Data)
+			if e != nil {
+				return "", e
+			}
+			if e = Write(File{Path: saved.Path, Data: inert, Mode: 0644, adoptUID: saved.UID}); e != nil {
+				return "", e
+			}
+		}
+	}
 	for _, path := range legacyWriterHelpers {
-		if err = Write(File{Path: path, Data: []byte("#!/bin/sh\n# cloud-8021x legacy writer fenced\nexit 0\n"), Mode: 0755}); err != nil {
+		if err = Write(File{Path: path, Data: inertHelper, Mode: 0755}); err != nil {
 			return "", err
 		}
 	}
 	for _, path := range legacyWriterCrons {
-		if err = Write(File{Path: path, Data: []byte("# cloud-8021x legacy writer fenced\n"), Mode: 0644}); err != nil {
+		if err = Write(File{Path: path, Data: inertCron, Mode: 0644}); err != nil {
 			return "", err
 		}
 	}
@@ -172,13 +237,23 @@ func fenceLegacyWriters(ctx context.Context, id, node, configSHA string, run com
 		return "", err
 	}
 	defer unlock()
+	if err = verifyWriterMasks(receipt); err != nil {
+		return "", err
+	}
 	if err = probe(); err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	digest := hex.EncodeToString(sum[:])
-	if err = privateWrite(filepath.Join(directory, "complete"), []byte(digest), 0600); err != nil {
-		return "", err
+	digest := digestBytes(data)
+	if old, e := readPrivateCache(filepath.Join(directory, "complete"), 128); e == nil {
+		if string(old) != digest {
+			return "", errors.New("writer completion changed")
+		}
+	} else if errors.Is(e, os.ErrNotExist) {
+		if err = privateWrite(filepath.Join(directory, "complete"), []byte(digest), 0600); err != nil {
+			return "", err
+		}
+	} else {
+		return "", e
 	}
 	if err = syncWriterDirectory(directory); err != nil {
 		return "", err
@@ -219,7 +294,28 @@ func maskWriterUnit(path string) error {
 	}
 	return unix.Fsync(dir)
 }
-func verifyWriterMasks() error {
+func verifyWriterMasks(receipt writerReceipt) error {
+	if e := verifyWriterLineage(receipt); e != nil {
+		return e
+	}
+	if e := verifyWriterNonNativeMasks(receipt); e != nil {
+		return e
+	}
+	for _, saved := range receipt.Files {
+		if saved.Path == legacyVLANModule && saved.Exists {
+			expected, e := inertVLANModule(saved.Data)
+			if e != nil {
+				return e
+			}
+			current, e := Snapshot(File{Path: legacyVLANModule})
+			if e != nil || !current.Exists || !bytes.Equal(current.Data, expected) || current.UID != 0 {
+				return errors.New("VLAN writer fence changed")
+			}
+		}
+	}
+	return checkObservedWriterProcesses(receipt.Processes)
+}
+func verifyWriterNonNativeMasks(receipt writerReceipt) error {
 	for _, path := range writerUnitPaths(legacyWriterUnits) {
 		dir, e := parentDescriptor(path, 0, false)
 		if e != nil {
@@ -233,11 +329,15 @@ func verifyWriterMasks() error {
 	}
 	for _, path := range append(append([]string{}, legacyWriterCrons...), legacyWriterHelpers...) {
 		saved, e := Snapshot(File{Path: path})
-		if e != nil || !saved.Exists || !bytes.Contains(saved.Data, []byte("cloud-8021x legacy writer fenced")) {
+		expected := inertCron
+		if slices.Contains(legacyWriterHelpers, path) {
+			expected = inertHelper
+		}
+		if e != nil || !saved.Exists || !bytes.Equal(saved.Data, expected) {
 			return errors.New("legacy scheduled writer fence changed")
 		}
 	}
-	return nil
+	return checkObservedWriterProcesses(receipt.Processes)
 }
 func lockLegacyWriters() (func(), error) {
 	fds := []int{}
@@ -247,7 +347,16 @@ func lockLegacyWriters() (func(), error) {
 		}
 	}
 	for _, path := range legacyWriterLocks {
-		fd, e := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		parent, e := writerParent(path, 0)
+		if errors.Is(e, unix.ENOENT) {
+			continue
+		}
+		if e != nil {
+			release()
+			return nil, errors.New("legacy lock ancestor unsafe")
+		}
+		fd, e := unix.Openat(parent, filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		_ = unix.Close(parent)
 		if errors.Is(e, unix.ENOENT) {
 			continue
 		}
@@ -264,37 +373,13 @@ func lockLegacyWriters() (func(), error) {
 	}
 	return release, nil
 }
-func legacyProcessesQuiescent() error {
-	dir, e := os.Open("/proc")
+func legacyProcessesQuiescent() error { return checkObservedWriterProcesses(nil) }
+func checkObservedWriterProcesses(observed []writerPID) error {
+	processes, e := scanWriterProcesses()
 	if e != nil {
-		return errors.New("process quiescence unavailable")
+		return e
 	}
-	defer func() { _ = dir.Close() }()
-	names, e := dir.Readdirnames(100001)
-	if e != nil && !errors.Is(e, io.EOF) || len(names) > 100000 {
-		return errors.New("process inventory unavailable")
-	}
-	scripts := append(append([]string{}, legacyWriterHelpers...), "/etc/freeradius/3.0/mods-config/python3/radius_sources.py", "/etc/freeradius/3.0/mods-config/python3/vlan_names.py", "/usr/local/bin/radius-cert-renew.sh", "/usr/local/sbin/renew-webhook-tls", "radius_usage_service.py", "radius_usage_collector.py")
-	for _, name := range names {
-		if _, e = strconv.Atoi(name); e != nil {
-			continue
-		}
-		data, e := os.ReadFile(filepath.Join("/proc", name, "cmdline"))
-		if errors.Is(e, os.ErrNotExist) {
-			continue
-		}
-		if e != nil || len(data) > 64<<10 {
-			return errors.New("process evidence unavailable")
-		}
-		for _, arg := range strings.Split(string(data), "\x00") {
-			for _, script := range scripts {
-				if arg == script || filepath.Base(arg) == script {
-					return errors.New("legacy writer process still active")
-				}
-			}
-		}
-	}
-	return nil
+	return checkWriterProcesses(processes, observed)
 }
 
 // Restore restores bytes/modes/absence but never starts an old service. The root
@@ -313,13 +398,23 @@ func restoreLegacyWriterFiles(id string, run commandRunner) error {
 	if e != nil {
 		return e
 	}
-	var receipt writerReceipt
-	if json.Unmarshal(data, &receipt) != nil || receipt.Version != 1 || receipt.Transition != id {
+	receipt, decodeErr := decodeWriterReceipt(data, id)
+	if decodeErr != nil {
 		return errors.New("invalid writer rollback receipt")
 	}
-	if e = verifyWriterMasks(); e != nil {
+	sum := sha256.Sum256(data)
+	completed, err := readPrivateCache(filepath.Join(directory, "complete"), 128)
+	if err != nil || string(completed) != hex.EncodeToString(sum[:]) {
+		return errors.New("writer completion receipt mismatch")
+	}
+	if e = verifyWriterMasks(receipt); e != nil {
 		return e
 	}
+	unlock, e := lockLegacyWriters()
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	for _, saved := range receipt.Files {
 		if !legacyWriterFile(saved.Path) {
 			return errors.New("unrecognized writer rollback path")
@@ -338,9 +433,15 @@ func restoreLegacyWriterFiles(id string, run commandRunner) error {
 				return e
 			}
 		}
+		if saved.Path == legacyVLANModule && !saved.Exists {
+			continue
+		}
 		if e = Restore(saved); e != nil {
 			return e
 		}
+	}
+	if e = protectWriterLineage(receipt, true); e != nil {
+		return e
 	}
 	_, e = run(context.Background(), "/usr/bin/systemctl", "daemon-reload")
 	return e

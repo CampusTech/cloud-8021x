@@ -25,8 +25,10 @@ var ErrUncertain = errors.New("database commit outcome uncertain; resolve using 
 var instanceRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]:[a-z]+-[a-z]+[0-9]:[a-z][a-z0-9-]{0,97}$`)
 
 type Store struct {
-	pool    *pgxpool.Pool
-	timeout time.Duration
+	pool            *pgxpool.Pool
+	timeout         time.Duration
+	transition      string
+	transitionBound bool
 }
 
 func tlsConfig(c config.Database, host string) (*tls.Config, error) {
@@ -142,4 +144,13 @@ func safeError(err error) error {
 		return errors.New("shared database operation failed (SQLSTATE " + p.Code + ")")
 	}
 	return ErrUnavailable
+}
+
+// ForTransition returns an immutable view that fences every worker transaction.
+// The original privileged store remains available only to protected migration.
+// Both views share the pool; the construction owner closes it once.
+func (s *Store) ForTransition(id string) *Store {
+	bound := *s
+	bound.transition, bound.transitionBound = id, true
+	return &bound
 }

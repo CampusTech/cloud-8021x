@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -92,4 +93,55 @@ func (s *Store) UnresolvedSourcePayloads(ctx context.Context, node string) ([][]
 		payloads = append(payloads, payload)
 	}
 	return payloads, safeError(rows.Err())
+}
+
+// ReconcileHistoricalSource holds the fixed node claim lock and exact quarantine
+// row while the installed root verifier reads actual file/firewall/proof state.
+// Only a live protected maintenance scope can invoke it. It never creates work,
+// starts an attempt, changes payload/candidate time, or authorizes any resend.
+func (s *Store) ReconcileHistoricalSource(ctx context.Context, transition, node, id string, generation int64, verify func(context.Context, json.RawMessage) (json.RawMessage, error)) error {
+	scope, ok := ctx.Value(maintenanceScopeKey{}).(*maintenanceScope)
+	if !ok || scope.store != s || !scope.active.Load() || verify == nil || generation < 1 || (node != "radius-primary" && node != "radius-secondary") {
+		return errors.New("live protected source recovery required")
+	}
+	tx, e := s.begin(ctx)
+	if e != nil {
+		return safeError(e)
+	}
+	defer rollback(tx)
+	var allowed bool
+	if e = tx.QueryRow(ctx, "SELECT ledger.lock_worker_transition($1)", transition).Scan(&allowed); e != nil {
+		return safeError(e)
+	}
+	if !allowed {
+		return errors.New("historical source recovery transition fenced")
+	}
+	lock := 100
+	if node == "radius-secondary" {
+		lock = 101
+	}
+	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(8021,$1)", lock); e != nil {
+		return safeError(e)
+	}
+	var payload []byte
+	if e = tx.QueryRow(ctx, `SELECT payload FROM ledger.work WHERE id=$1 AND kind=$2 AND generation=$3 AND state='quarantine' FOR UPDATE`, id, "sources:"+node, generation).Scan(&payload); e != nil {
+		return errors.New("exact quarantined source attempt unavailable")
+	}
+	evidence, e := verify(ctx, payload)
+	if e != nil {
+		return e
+	}
+	if len(evidence) == 0 || len(evidence) > 1<<20 || !json.Valid(evidence) || string(evidence) == "null" {
+		return errors.New("invalid protected historical proof")
+	}
+	if _, e = tx.Exec(ctx, `INSERT INTO ledger.reconciliations(work_id,generation,evidence) VALUES($1,$2,$3)`, id, generation, []byte(evidence)); e != nil {
+		return safeError(e)
+	}
+	if _, e = tx.Exec(ctx, `UPDATE ledger.work SET state='succeeded',updated_at=clock_timestamp() WHERE id=$1`, id); e != nil {
+		return safeError(e)
+	}
+	if e = commit(ctx, tx); e != nil {
+		return ErrUncertain
+	}
+	return nil
 }

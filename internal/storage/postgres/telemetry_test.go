@@ -188,3 +188,20 @@ func TestPostgresTelemetryTerminationMigrationAndImmutableDedup(t *testing.T) {
 		t.Fatal(projected, err)
 	}
 }
+
+func TestPostgresOnlineSessionsExcludeStaleTerminalAndUnknown(t *testing.T) {
+	admin, c := integration(t)
+	reset(t, admin)
+	ctx := context.Background()
+	_, err := admin.pool.Exec(ctx, `INSERT INTO ledger.sessions(session_key,initialized,stopped,last_seen) VALUES ('fresh',true,false,clock_timestamp()-interval '1 minute'),('stale',true,false,clock_timestamp()-interval '16 minutes'),('stopped',true,true,clock_timestamp()),('unknown',true,false,NULL),('future',true,false,clock_timestamp()+interval '1 hour')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := runtimeStore(t, admin, c).ObserveDelivery(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Sessions != 1 {
+		t.Fatalf("online count=%d want 1", h.Sessions)
+	}
+}

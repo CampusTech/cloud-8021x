@@ -19,12 +19,20 @@ func (s *Store) Reserve(ctx context.Context, id, kind string, payload json.RawMe
 	}
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `INSERT INTO ledger.work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id WHERE ledger.work.kind=EXCLUDED.kind AND ledger.work.payload=EXCLUDED.payload`, id, kind, []byte(payload))
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return safeError(err)
+	}
+	defer rollback(tx)
+	tag, err := tx.Exec(ctx, `INSERT INTO ledger.work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id WHERE ledger.work.kind=EXCLUDED.kind AND ledger.work.payload=EXCLUDED.payload`, id, kind, []byte(payload))
 	if err != nil {
 		return safeError(err)
 	}
 	if tag.RowsAffected() != 1 {
 		return jobs.ErrConflict
+	}
+	if err = commit(ctx, tx); err != nil {
+		return ErrUncertain
 	}
 	return nil
 }

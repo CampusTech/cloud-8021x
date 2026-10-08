@@ -68,11 +68,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	deny := func(code int) { w.WriteHeader(code); _, _ = w.Write([]byte(`{}`)) }
-	if r.URL.Path != "/authorize" && r.URL.Path != "/authorize/native" {
+	health := r.URL.Path == "/healthz" && r.URL.RawQuery == ""
+	if r.URL.Path != "/authorize" && r.URL.Path != "/authorize/native" && !health {
 		deny(http.StatusNotFound)
 		return
 	}
-	if r.Method != http.MethodPost {
+	if (!health && r.Method != http.MethodPost) || (health && r.Method != http.MethodGet) {
 		deny(http.StatusMethodNotAllowed)
 		return
 	}
@@ -91,6 +92,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(sum[:], h.tokenHash[:]) != 1 {
 		deny(http.StatusUnauthorized)
+		return
+	}
+	if health {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	content, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

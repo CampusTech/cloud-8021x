@@ -16,6 +16,8 @@ import (
 // cannot carry resolved RADIUS or vendor credentials. Task9 persists this using
 // postgres.ReconcileSuccess for the exact work ID and generation; no resend.
 type ReconciliationEvidence struct {
+	Historical                                                               bool
+	OriginalObservedAt                                                       map[string]domain.Timestamp
 	ProofGeneration                                                          string
 	Node, Network, ConfigSHA256, CandidateSHA256, ClientsSHA256, StateSHA256 string
 	ControllerObservedAt                                                     map[string]domain.Timestamp
@@ -115,4 +117,50 @@ func (o *FileOperations) VerifyApplied(ctx context.Context, p Plan, s State) (Re
 	}
 	ch, sh := sha256.Sum256(clients), sha256.Sum256(state)
 	return ReconciliationEvidence{Node: o.Target.Node, Network: o.Target.Network, ClientsSHA256: hex.EncodeToString(ch[:]), StateSHA256: hex.EncodeToString(sh[:]), ProofGeneration: string(snapshot.Proof)}, nil
+}
+
+// ReconcileHistoricalApplied is an explicit protected operator recovery. It
+// proves only that the exact OLD attempted state is installed; a controller WAN
+// change or outage cannot rewrite that history. It does not authenticate a new
+// address, renew proof age, mutate files/firewall, restart services, or resend.
+// The root caller must bind this evidence to its quarantined PG node/generation.
+func (a *Applier) ReconcileHistoricalApplied(ctx context.Context, candidates []domain.SourceCandidate) (ReconciliationEvidence, error) {
+	if e := a.Config.Validate(); e != nil {
+		return ReconciliationEvidence{}, e
+	}
+	check, ok := a.Operations.(AppliedVerifier)
+	if !ok {
+		return ReconciliationEvidence{}, errors.New("historical source evidence unavailable")
+	}
+	proposed, e := checkedCandidates(candidates, a.Config, nowTime(a.Now), true)
+	if e != nil {
+		return ReconciliationEvidence{}, e
+	}
+	plan, e := makePlan(a.Config, proposed)
+	if e != nil {
+		return ReconciliationEvidence{}, e
+	}
+	state := State{ConfigSHA256: a.Config.Identity()}
+	original := map[string]domain.Timestamp{}
+	for _, b := range a.Config.Bindings {
+		if b.ConsoleID != "" {
+			v := proposed[key(b.ProviderID, b.ConsoleID)]
+			state.Candidates = append(state.Candidates, v)
+			original[v.ProviderID+"/"+v.SiteID] = v.ObservedAt
+		}
+	}
+	proof, e := check.VerifyApplied(ctx, plan, state)
+	if e != nil {
+		return ReconciliationEvidence{}, e
+	}
+	raw, e := json.Marshal(candidates)
+	if e != nil {
+		return ReconciliationEvidence{}, e
+	}
+	sum := sha256.Sum256(raw)
+	proof.CandidateSHA256 = hex.EncodeToString(sum[:])
+	proof.ConfigSHA256 = a.Config.Identity()
+	proof.Historical = true
+	proof.OriginalObservedAt = original
+	return proof, nil
 }

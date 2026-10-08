@@ -66,6 +66,9 @@ func (g MaintenanceGate) With(ctx context.Context, operation string, fn func(con
 	if e = commit(ctx, tx); e != nil {
 		return errors.New("maintenance start uncertain; no external action attempted")
 	}
+	return g.runAttempt(ctx, id, lease, fn)
+}
+func (g MaintenanceGate) runAttempt(ctx context.Context, id int64, lease time.Duration, fn func(context.Context) error) error {
 	scope := &maintenanceScope{store: g.Store, id: id}
 	scope.active.Store(true)
 	defer scope.active.Store(false)

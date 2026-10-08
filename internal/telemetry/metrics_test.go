@@ -3,8 +3,11 @@ package telemetry
 import (
 	"context"
 	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -99,5 +102,40 @@ func TestComponentMeasurementsAreDistinctAndBounded(t *testing.T) {
 	}
 	if found != 3 {
 		t.Fatalf("missing component measurements: %d", found)
+	}
+}
+
+func TestSharedGaugesCarryClusterScope(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	m := newMeasurements(provider.Meter("test"), &atomic.Uint64{})
+	cluster := strings.Repeat("a", 64)
+	m.ObserveCluster(context.Background(), "ledger.sessions", cluster, 3)
+	m.ObserveCluster(context.Background(), "outbox.depth", "unknown", 4)
+	var result metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &result); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, scope := range result.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name == "cloud8021x.outbox.depth" {
+				t.Fatal("unknown cluster emitted shared gauge")
+			}
+			if m.Name == "cloud8021x.ledger.sessions" {
+				for _, p := range m.Data.(metricdata.Gauge[float64]).DataPoints {
+					found = true
+					c, _ := p.Attributes.Value(attribute.Key("cluster"))
+					s, _ := p.Attributes.Value(attribute.Key("scope"))
+					if c.AsString() != cluster || s.AsString() != "shared" || p.Value != 3 {
+						t.Fatal("shared gauge lost identity", p)
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("shared gauge missing")
 	}
 }

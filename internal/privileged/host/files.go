@@ -17,6 +17,7 @@ import (
 )
 
 var fixedFiles = map[string]bool{
+	legacyPolicySnapshot: true, daemonPolicySnapshot: true,
 	"/etc/cloud-8021x/sources/clients.conf": true,
 	transactionRoot + "/current.json":       true,
 	legacyClassKey:                          true, "/etc/systemd/system/freeradius.service.d/accounting-key.conf": true,
@@ -285,7 +286,7 @@ func (f File) acceptsOwner(uid int) bool {
 	if uid == 0 || uid == f.UID || (f.restoring && uid == f.replacementUID) {
 		return true
 	}
-	return f.adoptUID > 0 && uid == f.adoptUID && (f.Path == "/etc/datadog-agent/datadog.yaml" || f.Path == "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml" || f.Path == legacyClassKey)
+	return f.adoptUID > 0 && uid == f.adoptUID && (f.Path == "/etc/datadog-agent/datadog.yaml" || f.Path == "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml" || f.Path == legacyClassKey || f.Path == legacyVLANModule)
 }
 
 // BootstrapDiscoveryFiles initializes only the fixed missing discovery include.

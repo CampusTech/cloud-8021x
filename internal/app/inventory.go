@@ -84,7 +84,7 @@ func InventoryServiceFromConfig(ctx context.Context, cfg config.Config, store *d
 			return nil, err
 		}
 		return fleet.NewTrust(publicBundle)
-	}, Maintainer: maintainerClient, Repository: repository, Trust: trust, Owner: cfg.InstanceID, Options: fleet.CollectionOptions{Cadence: cfg.Inventory.Fleet.PollInterval, MaxAge: cfg.Policy.CertificateMaxAge, SCEPProfiles: cfg.Inventory.Fleet.SCEPProfileUUIDs, ACMEProfiles: cfg.Inventory.Fleet.ACMEProfileUUIDs}}
+	}, Maintainer: maintainerClient, Repository: repository.ForTransition(cfg.StateTransition), Trust: trust, Owner: cfg.InstanceID, Options: fleet.CollectionOptions{Cadence: cfg.Inventory.Fleet.PollInterval, MaxAge: cfg.Policy.CertificateMaxAge, SCEPProfiles: cfg.Inventory.Fleet.SCEPProfileUUIDs, ACMEProfiles: cfg.Inventory.Fleet.ACMEProfileUUIDs}}
 	return service, repository.Close, nil
 }
 func readInventoryFile(path string, secret bool, limit int64) ([]byte, error) {

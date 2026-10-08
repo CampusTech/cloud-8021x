@@ -326,3 +326,50 @@ func TestDisabledFirewallSentinelRemainsSupported(t *testing.T) {
 		t.Fatalf("supported disabled sentinel rejected: %v", err)
 	}
 }
+
+func TestHistoricalReconciliationAfterWANChangeOrControllerOutage(t *testing.T) {
+	for _, mode := range []string{"changed", "unavailable", "mismatch"} {
+		t.Run(mode, func(t *testing.T) {
+			o, r, f := fixtureOps(t)
+			now := time.Now()
+			c := domain.SourceCandidate{ProviderID: "u", SiteID: "console", CIDRs: []string{"8.8.8.8/32"}, ObservedAt: domain.Unix(now)}
+			cfg := Config{MaxAge: time.Minute, Bindings: []Binding{{ProviderID: "u", ConsoleID: "console", ClientID: "nyc", LocationID: "nyc", Medium: "wifi", SecretFile: "fixed"}}}
+			a := Applier{Config: cfg, Verifier: verifier{got: []domain.SourceCandidate{c}}, Operations: o, Now: func() time.Time { return now }}
+			if _, e := a.Apply(context.Background(), []domain.SourceCandidate{c}, false); e != nil {
+				t.Fatal(e)
+			}
+			before, _ := os.ReadFile(o.statePath)
+			patches, activations := len(f.patches), r.activate
+			now = now.Add(time.Hour)
+			changed := c
+			changed.CIDRs = []string{"1.1.1.1/32"}
+			changed.ObservedAt = domain.Unix(now)
+			a.Verifier = verifier{got: []domain.SourceCandidate{changed}}
+			if mode == "unavailable" {
+				a.Verifier = verifier{err: errors.New("offline")}
+			}
+			if mode == "mismatch" {
+				f.rule.SourceRanges = []string{"1.1.1.1/32"}
+			}
+			proof, e := a.ReconcileHistoricalApplied(context.Background(), []domain.SourceCandidate{c})
+			if mode == "mismatch" {
+				if e == nil {
+					t.Fatal("unknown actual outcome released")
+				}
+				return
+			}
+			if e != nil || !proof.Historical || proof.OriginalObservedAt["u/console"] != c.ObservedAt || len(proof.ControllerObservedAt) != 0 {
+				t.Fatal("historical proof failed", proof, e)
+			}
+			after, _ := os.ReadFile(o.statePath)
+			if !bytes.Equal(before, after) || len(f.patches) != patches || r.activate != activations {
+				t.Fatal("historical reconciliation mutated/freshened")
+			}
+			var state State
+			_ = json.Unmarshal(after, &state)
+			if Allowed(cfg, state, "nyc", "8.8.8.8", now) {
+				t.Fatal("expired proof authorized")
+			}
+		})
+	}
+}
