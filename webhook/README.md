@@ -61,7 +61,7 @@ why the deployed service uses certificate authentication.
 
 ## Build & run
 
-Requires Go 1.27.1 or newer. The release workflow reads this minimum from
+Requires Go 1.27.2 or newer. The release workflow reads this minimum from
 `go.mod` and scans the compiled Linux binary with `govulncheck` before publishing.
 PR and merge-queue checks scan imported packages in both Go modules, including
 test dependencies. Updating source does not patch an already deployed binary;

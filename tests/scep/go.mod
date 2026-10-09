@@ -1,6 +1,6 @@
 module github.com/CampusTech/cloud-8021x/integration/scep
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/CampusTech/cloud-8021x v0.0.0

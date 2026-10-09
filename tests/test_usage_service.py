@@ -94,7 +94,7 @@ class UsageServiceTests(unittest.TestCase):
             with patch('radius_usage_service.socket.gethostname', return_value='radius-primary'), \
                     patch('radius_usage_service.os.geteuid', return_value=0), \
                     patch('radius_usage_service.load_credentials', return_value={'api_key':'api', 'app_key':'app'}), \
-                    patch('radius_usage_service.time.time', side_effect=[1791374420,1791374420,1791374540,1791374540]), \
+                    patch('radius_usage_service.time.time', side_effect=lambda: 1791374420 + 120 * len(posted)), \
                     patch('radius_usage_service.time.sleep', side_effect=[None, KeyboardInterrupt]), \
                     patch('radius_usage_service.radius_usage_collector.request_json', side_effect=http):
                 with self.assertRaises(KeyboardInterrupt):
@@ -102,6 +102,10 @@ class UsageServiceTests(unittest.TestCase):
             self.assertEqual(len(posted), 2)
             self.assertTrue(all(item['event'] == 'Collection-Heartbeat' for item in posted))
             self.assertTrue(all(item['source_records'] == 0 for item in posted))
+            self.assertEqual([item['timestamp'] for item in posted],
+                             ['2026-10-07T12:00:20Z', '2026-10-07T12:02:20Z'])
+            self.assertEqual([item['through'] for item in posted],
+                             ['2026-10-07T11:58:20Z', '2026-10-07T12:00:20Z'])
             self.assertEqual(json.loads(state.read_text())['pending'], [])
 
     def test_install_preserves_checkpoint_and_restarts_only_its_own_service(self):

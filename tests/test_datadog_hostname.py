@@ -7,12 +7,55 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/datadog_hostname.py'
+sys.path.insert(0, str(ROOT / 'scripts'))
+import datadog_hostname
 
 
 class DatadogHostnameTests(unittest.TestCase):
+    def test_replacement_persists_directory_after_file_and_closes_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'datadog.yaml'
+            config.write_text('hostname: stale\n')
+            config.chmod(0o640)
+            original = config.stat()
+            actions = []
+            real_fsync, real_replace = os.fsync, os.replace
+            def fsync(fd):
+                actions.append('directory' if os.fstat(fd).st_mode & 0o170000 == 0o040000 else 'file')
+                real_fsync(fd)
+            def replace(source, target):
+                actions.append('rename')
+                real_replace(source, target)
+            with patch('datadog_hostname.os.fsync', side_effect=fsync), \
+                    patch('datadog_hostname.os.replace', side_effect=replace):
+                datadog_hostname.configure(config, 'radius-primary', 'test-project', 'test')
+            self.assertEqual(actions, ['file', 'rename', 'directory'])
+            self.assertEqual(config.stat().st_mode, original.st_mode)
+            self.assertEqual((config.stat().st_uid, config.stat().st_gid), (original.st_uid, original.st_gid))
+
+    def test_directory_sync_failure_closes_descriptor_and_cleans_temporary_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'datadog.yaml'
+            config.write_text('hostname: stale\n')
+            directory_fds = []
+            real_fsync = os.fsync
+            def fsync(fd):
+                if os.fstat(fd).st_mode & 0o170000 == 0o040000:
+                    directory_fds.append(fd)
+                    raise OSError('directory sync failed')
+                real_fsync(fd)
+            with patch('datadog_hostname.os.fsync', side_effect=fsync):
+                with self.assertRaisesRegex(OSError, 'directory sync failed'):
+                    datadog_hostname.configure(config, 'radius-primary', 'test-project', 'test')
+            self.assertEqual(len(directory_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(directory_fds[0])
+            self.assertEqual(list(Path(directory).iterdir()), [config])
+
     def configure(self, config, *, project='canary-project-bb45', suffix='canary-bb45', dry_run=False):
         args = [sys.executable, str(SCRIPT), '--config', str(config), '--instance',
                 'radius-primary', '--project', project, '--suffix', suffix]
