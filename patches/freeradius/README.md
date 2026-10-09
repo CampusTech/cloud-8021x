@@ -162,3 +162,8 @@ runs on internal port 55432 sharing the RADIUS fixture's network namespace, with
 synthetic `app_native`, `app_runtime` and migration roles and verified localhost
 TLS. The Go `migrate` action applies the actual ledger migrations. The task report
 records the exact already-executed artifact, packet, cursor and replay evidence.
+
+The historical Task6 implementation and packet-validation record is retained in
+[the durable Bookworm validation record](../../docs/native/bookworm-validation.md).
+It proves only the explicitly recorded Bookworm/campus3 artifacts and test
+boundaries; it is not provenance or acceptance evidence for a Debian13 rebuild.
