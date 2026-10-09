@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"time"
+
+	networkjob "github.com/CampusTech/cloud-8021x/internal/jobs/network"
 
 	"github.com/CampusTech/cloud-8021x/internal/adoption"
 	"github.com/CampusTech/cloud-8021x/internal/config"
@@ -27,7 +30,7 @@ func observeSQL(ctx context.Context, project bool) (out sqlObservation, err erro
 	if err != nil {
 		return out, err
 	}
-	if cfg.Deployment.ID != "task11-green" || cfg.Database.Name != "cloud8021x_task11_green" || len(cfg.Network.Providers) != 0 {
+	if cfg.Deployment.ID != "task11-green" || cfg.Database.Name != "cloud8021x_task11_green" || !neutralNetworkScope(cfg) {
 		return out, errors.New("fixed synthetic database and no changing network enrichment required")
 	}
 	installed, err := readPrivate("/etc/cloud-8021x/config.yaml", config.MaxConfigBytes, 0)
@@ -147,7 +150,21 @@ func observeSQL(ctx context.Context, project bool) (out sqlObservation, err erro
 	if err != nil {
 		return out, err
 	}
-	out.DisplaySHA256, err = semanticDisplay(cfg, snapshot)
+	// Absence is the pre-refresh state. Existing bytes must be independently
+	// neutral; stale or changed meaningful metadata is never reconstructed.
+	var batches []domain.NetworkSnapshot
+	metadata, metadataErr := readPrivate(cfg.Paths.MetadataFile, 16<<20, accounts.RuntimeUID)
+	if metadataErr == nil {
+		defer clear(metadata)
+		var doc networkjob.Document
+		if decodeExactJSON(metadata, &doc) != nil || !validSHA(doc.Key) || len(doc.Providers) != 1 {
+			return out, errors.New("actual published metadata is not the closed neutral projection")
+		}
+		batches = doc.Providers
+	} else if !errors.Is(metadataErr, os.ErrNotExist) {
+		return out, metadataErr
+	}
+	out.DisplaySHA256, err = semanticDisplay(cfg, snapshot, batches...)
 	if err != nil {
 		return out, err
 	}
