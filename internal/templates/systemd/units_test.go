@@ -44,3 +44,21 @@ func TestProtectedSourceTimerRetainsOneMinuteCadence(t *testing.T) {
 		t.Fatal("timer bypasses protected command")
 	}
 }
+
+// Vendor Trixie packages default to /etc/freeradius, while the protected Go
+// renderer owns /etc/freeradius/3.0. Never start an unreviewed vendor-default tree.
+func TestNativeServiceUsesProtectedConfigurationExplicitly(t *testing.T) {
+	files, err := Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := string(files["/etc/systemd/system/freeradius.service.d/cloud-8021x.conf"])
+	for _, command := range []string{
+		"ExecStartPre=/usr/sbin/freeradius -d /etc/freeradius/3.0 -XC\n",
+		"ExecStart=/usr/sbin/freeradius -d /etc/freeradius/3.0 -f\n",
+	} {
+		if !strings.Contains(native, command) {
+			t.Fatalf("native service may load vendor default instead of protected configuration: missing %s", command)
+		}
+	}
+}

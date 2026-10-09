@@ -97,9 +97,9 @@ Group=root
 Environment=
 Environment=HOME=/nonexistent
 ExecStartPre=
-ExecStartPre=/usr/sbin/freeradius -XC
+ExecStartPre=/usr/sbin/freeradius -d /etc/freeradius/3.0 -XC
 ExecStart=
-ExecStart=/usr/sbin/freeradius -f
+ExecStart=/usr/sbin/freeradius -d /etc/freeradius/3.0 -f
 ExecReload=
 NoNewPrivileges=false
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
