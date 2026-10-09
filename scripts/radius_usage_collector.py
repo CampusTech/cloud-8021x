@@ -7,6 +7,8 @@ The collector does not configure or restart RADIUS or the APs.
 Checkpoints retain the initial credit_start so late indexing cannot backfill
 traffic before the requested initial window. Legacy version-1 checkpoints have
 no recoverable origin; their first resumed 15-minute overlap becomes this floor.
+Interrupted baseline-only searches use a typed version-2 checkpoint until the
+original credit floor is reached; ordinary checkpoints retain version 1.
 """
 import argparse
 from contextlib import contextmanager
@@ -20,7 +22,7 @@ import re
 from pathlib import Path
 import tempfile
 import time
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import radius_usage
@@ -30,6 +32,8 @@ LOG = logging.getLogger("radius_usage_collector")
 MAX_EVENTS = 100000
 MAX_RESPONSE = 32 * 1024 * 1024
 PAGE_SIZE = 1000
+MAX_SEARCH_SECONDS = 48 * 3600
+MIN_SEARCH_SECONDS = 1
 HOSTS = {"radius-primary", "radius-secondary"}
 SEARCH_QUERY = ("service:radius-acct (host:radius-primary OR host:radius-secondary) "
                 "(@event:Acct-Start OR @event:Acct-Update OR @event:Acct-Stop)")
@@ -43,6 +47,10 @@ class NoRedirect(HTTPRedirectHandler):
     """Never forward either Datadog credential to a redirect destination."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class SearchEventLimit(ValueError):
+    """Only a complete search that exceeds the bound can be safely subdivided."""
 
 
 def request_json(url, headers, payload):
@@ -123,17 +131,24 @@ class Collector:
         self.pending = []
         self.uncertain = False
         self.seeded = False
+        self.baseline = False
         if not self.state_path.exists():
             return
         if self.state_path.is_symlink():
             raise ValueError("Checkpoint must not be a symlink")
         saved = json.loads(self.state_path.read_text(encoding="utf-8"))
         if (not isinstance(saved, dict) or type(saved.get("version")) is not int
-                or saved["version"] != self.VERSION):
+                or saved["version"] not in {self.VERSION, 2}):
             raise ValueError("Unsupported or malformed collector checkpoint")
         required = {"version", "tracker", "through", "pending", "uncertain", "seeded", "preview_id"}
-        if set(saved) not in (required, required | {"credit_start"}):
+        self.baseline = saved["version"] == 2
+        valid_fields = (required | {"credit_start", "phase"},) if self.baseline else (
+            required, required | {"credit_start"})
+        if set(saved) not in valid_fields:
             raise ValueError("Malformed collector checkpoint fields")
+        if self.baseline and (saved["phase"] != "baseline" or saved["pending"] != []
+                              or saved["uncertain"] is not False or saved["seeded"] is not False):
+            raise ValueError("Malformed collector baseline phase")
         if type(saved["uncertain"]) is not bool or type(saved["seeded"]) is not bool:
             raise ValueError("Malformed collector checkpoint delivery state")
         if not isinstance(saved["pending"], list) or len(saved["pending"]) > MAX_EVENTS:
@@ -157,7 +172,11 @@ class Collector:
         self.checkpoint = radius_usage.timestamp(saved["through"]) if saved["through"] is not None else None
         if "credit_start" in saved:
             self.credit_start = radius_usage.timestamp(saved["credit_start"]) if saved["credit_start"] is not None else None
-            if ((self.credit_start is None) != (self.checkpoint is None)
+            if self.baseline:
+                if (self.credit_start is None or self.checkpoint is None
+                        or self.credit_start <= self.checkpoint):
+                    raise ValueError("Malformed collector baseline credit boundary")
+            elif ((self.credit_start is None) != (self.checkpoint is None)
                     or (self.credit_start is not None and self.credit_start > self.checkpoint)):
                 raise ValueError("Malformed collector initial credit boundary")
         elif self.checkpoint is not None:
@@ -200,6 +219,8 @@ class Collector:
                  "through": self.checkpoint, "pending": self.pending,
                  "uncertain": self.uncertain, "seeded": self.seeded, "preview_id": self.preview_id,
                  "credit_start": self.credit_start}
+        if self.baseline:
+            saved.update(version=2, phase="baseline")
         if self.state_path.is_symlink():
             raise ValueError("Checkpoint must not be a symlink")
         fd, name = tempfile.mkstemp(prefix=".usage-checkpoint-", dir=self.state_path.parent)
@@ -271,8 +292,10 @@ class Collector:
             if not isinstance(meta, dict) or meta.get("warnings") or meta.get("status") not in {None, "done"}:
                 raise ValueError("Incomplete accounting search; checkpoint unchanged")
             page = response["data"]
-            if len(page) > PAGE_SIZE or len(events) + len(page) > MAX_EVENTS:
-                raise ValueError("Accounting search exceeds event limit; checkpoint unchanged")
+            if len(page) > PAGE_SIZE:
+                raise ValueError("Accounting page exceeds page limit; checkpoint unchanged")
+            if len(events) + len(page) > MAX_EVENTS:
+                raise SearchEventLimit("Accounting search exceeds event limit; checkpoint unchanged")
             events.extend(flatten(event, self.hosts) for event in page)
             page_meta = meta.get("page", {})
             if not isinstance(page_meta, dict):
@@ -285,7 +308,7 @@ class Collector:
             cursors.add(cursor)
             # Copy payload so test/transport histories retain the prior request.
             payload = {**payload, "page": {"limit": PAGE_SIZE, "cursor": cursor}}
-        raise ValueError("Accounting pagination exceeds page limit; checkpoint unchanged")
+        raise SearchEventLimit("Accounting pagination exceeds event limit; checkpoint unchanged")
 
     def _deliver(self):
         if self.uncertain:
@@ -306,8 +329,10 @@ class Collector:
             self.uncertain = False
             self._save()
 
-    def _process(self, events, start, end, seeded=False):
+    def _process(self, events, start, end, seeded=False, baseline=False):
         events = [dict(item) for item in events]
+        if baseline:
+            events = [item for item in events if radius_usage.timestamp(item["timestamp"]) < end]
         for item in events:
             if not item.get("ssid"):
                 called = item.get("called_station", "")
@@ -315,7 +340,10 @@ class Collector:
                                  called, re.IGNORECASE) if isinstance(called, str) else None
                 if match:
                     item["ssid"] = match.group(1)
-        report = self.tracker.process(events, start, end)
+        # Baseline-only chunks contain receipts strictly before the original
+        # floor. A valid empty credit window lets the tracker learn counters
+        # without assigning historical increases to the requested window.
+        report = self.tracker.process(events, start, start + 1 if baseline else end)
         records = []
         for record in report["records"]:
             quality = record.get("counter_quality", "legacy_32bit")
@@ -337,7 +365,10 @@ class Collector:
         self.pending = records
         if self.credit_start is None:
             self.credit_start = radius_usage.timestamp(start)
-        self.checkpoint = radius_usage.timestamp(end)
+        # Adaptive splitting may put the first recovery chunk wholly inside
+        # the overlap. Replaying it must not move committed progress backward.
+        self.checkpoint = max(self.checkpoint, end) if self.checkpoint is not None else end
+        self.baseline = baseline and self.checkpoint < self.credit_start
         self.seeded = self.seeded or seeded
         self.tracker.prune_before(self.checkpoint - 7 * 86400)
         self._save()  # Durable highwater and outbox precede the first intake call.
@@ -347,7 +378,7 @@ class Collector:
             "source_records": len(events), "dry_run": self.dry_run,
             "through": iso(end), "data_available": bool(events),
             "source_completeness": "observed_only"}
-        if self.heartbeat and not self.dry_run:
+        if self.heartbeat and not self.dry_run and not baseline:
             heartbeat = {"service": "radius-usage-collector", "event": "Collection-Heartbeat",
                          "timestamp": iso(time.time()), "ddsource": "radius",
                          "hostname": self.collector_id, "collector_id": self.collector_id,
@@ -376,13 +407,34 @@ class Collector:
             if self.pending and not self.dry_run:
                 self._deliver()
             search_start = self.checkpoint - 900 if self.checkpoint is not None else start - 36 * 3600
-            events = self._search(search_start, end)
             # The initial window excludes older traffic used only as a baseline.
             # After checkpointing, credit every unseen increase in the search
             # overlap: downtime and delayed indexing must not consume traffic
             # silently. Persistent session counters suppress reports already seen.
-            credit_start = max(search_start, self.credit_start) if self.checkpoint is not None else start
-            return self._process(events, credit_start, end)
+            if self.credit_start is None:
+                self.credit_start = start
+            chunk_start = search_start
+            result = None
+            while chunk_start < end:
+                chunk_end = min(end, chunk_start + MAX_SEARCH_SECONDS)
+                while True:
+                    try:
+                        events = self._search(chunk_start, chunk_end)
+                        break
+                    except SearchEventLimit:
+                        # Nothing from a truncated search has been processed.
+                        # Split time only; a dense minimum-size window fails
+                        # closed, retaining every earlier committed chunk.
+                        if chunk_end - chunk_start <= MIN_SEARCH_SECONDS:
+                            raise
+                        chunk_end = chunk_start + max(MIN_SEARCH_SECONDS,
+                                                       (chunk_end - chunk_start) / 2)
+                credit_start = max(chunk_start, self.credit_start)
+                result = self._process(events, credit_start, chunk_end,
+                                       baseline=chunk_end <= self.credit_start)
+                # The recovery overlap applies once, never between chunks.
+                chunk_start = chunk_end
+            return result
 
     def seed_once(self, events, start, end):
         """Bootstrap cached flat source records once; never silently reseed state."""
