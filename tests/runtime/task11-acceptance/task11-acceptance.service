@@ -1,0 +1,19 @@
+# Development-only outer controller. Install only in the reviewed isolated guest.
+[Unit]
+Description=Task11 acceptance controller
+After=systemd-machined.service
+Requires=systemd-machined.service
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/usr/local/libexec/task11-acceptance stage
+Delegate=yes
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStopSec=15s
+TasksMax=64
+MemoryMax=512M
+CPUQuota=100%
+Restart=no
