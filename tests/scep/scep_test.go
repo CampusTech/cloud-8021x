@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,6 +195,20 @@ func testActualStepCASCEP(t *testing.T, binary, fixturePath string, certificateI
 	delete(config, "metricsAddress")
 	config["dnsNames"] = []string{"localhost", "127.0.0.1"}
 	config["db"] = map[string]any{"type": "badgerv2", "dataSource": filepath.Join(dir, "db")}
+	// The owned TLS PostgreSQL runner supplies separate empty test databases for
+	// each mode; the ordinary local runner retains its temporary Badger database.
+	pgEnv := "SCEP_PG_LEGACY_DSN"
+	if certificateInventory {
+		pgEnv = "SCEP_PG_INVENTORY_DSN"
+	}
+	if dsn := os.Getenv(pgEnv); dsn != "" {
+		u, err := url.Parse(dsn)
+		if err != nil || u.Hostname() != "localhost" || u.Query().Get("sslmode") != "verify-full" || u.Query().Get("sslrootcert") == "" {
+			t.Fatal("SCEP PostgreSQL fixture requires pinned local verified TLS")
+		}
+		config["db"] = map[string]any{"type": "postgresql", "dataSource": dsn}
+	}
+
 	provisioner["decrypterCertificate"] = base64.StdEncoding.EncodeToString(certPEM(decrypter))
 	provisioner["decrypterKeyPEM"] = base64.StdEncoding.EncodeToString(keyPEM(decrypterKey))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
