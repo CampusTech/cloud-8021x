@@ -155,7 +155,7 @@ func generateSeed(s seedSpec) (map[string][]byte, error) {
 		}
 	}
 	keyPrefix := "cloudkms:projects/" + s.Project + "/locations/us-central1/keyRings/task11/cryptoKeys/"
-	rendered, err := stepca.Render(stepca.RenderOptions{ECDNS: s.ECDNS, RSADNS: s.RSADNS, ECKey: keyPrefix + "ec/cryptoKeyVersions/1", RSAKey: keyPrefix + "rsa/cryptoKeyVersions/1", ECDB: s.ECDB, RSADB: s.RSADB, ACME: "wifi-acme", SCEP: "wifi-scep", WebhookPort: 9080, Inventory: true, RSAMaterial: rsaCA.material})
+	rendered, err := stepca.Render(stepca.RenderOptions{ECDNS: s.ECDNS, RSADNS: s.RSADNS, ECKey: keyPrefix + "ec/cryptoKeyVersions/1", RSAKey: keyPrefix + "rsa/cryptoKeyVersions/1", ECDB: s.ECDB, RSADB: s.RSADB, ACME: "wifi-acme", SCEP: "wifi-scep", WebhookPort: 9444, Inventory: true, RSAMaterial: rsaCA.material})
 	if err != nil {
 		return nil, err
 	}

@@ -20,6 +20,38 @@ func TestSeedIsGenuineOriginalStateWithoutAccountingOrReceiptKeys(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The initial original CA configs must already target the independently fixed
+	// source compatibility and adopted green webhook listener (9444). Adoption
+	// preserves these bytes; it must never repair a pinned original callback.
+	for _, ca := range []struct{ name, path, endpoint, kind string }{
+		{"ec", "source/etc/step-ca/config/ca.json", "/authorize", "AUTHORIZING"},
+		{"rsa", "source/etc/step-ca-rsa/config/ca.json", "/scep-challenge", "SCEPCHALLENGE"},
+	} {
+		t.Run(ca.name+"-webhook-callback", func(t *testing.T) {
+			var rendered struct {
+				Authority struct {
+					Provisioners []struct {
+						Options struct {
+							Webhooks []struct {
+								URL  string `json:"url"`
+								Kind string `json:"kind"`
+							} `json:"webhooks"`
+						} `json:"options"`
+					} `json:"provisioners"`
+				} `json:"authority"`
+			}
+			if err := json.Unmarshal(files[ca.path], &rendered); err != nil {
+				t.Fatal(err)
+			}
+			if len(rendered.Authority.Provisioners) != 1 || len(rendered.Authority.Provisioners[0].Options.Webhooks) != 1 {
+				t.Fatal("actual generated CA callback missing or ambiguous")
+			}
+			callback := rendered.Authority.Provisioners[0].Options.Webhooks[0]
+			if callback.URL != "https://127.0.0.1:9444"+ca.endpoint || callback.Kind != ca.kind {
+				t.Fatalf("original %s callback differs from fixed source/green listener: %s (%s)", ca.name, callback.URL, callback.Kind)
+			}
+		})
+	}
 	for name := range files {
 		if strings.Contains(name, "parallel-source.key") || strings.Contains(name, "rollback-") || strings.Contains(name, "activation") || strings.Contains(name, "radacct") || strings.Contains(name, "checkpoint") {
 			t.Fatalf("forbidden fabricated product state: %s", name)
