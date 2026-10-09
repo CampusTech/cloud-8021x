@@ -102,11 +102,11 @@ Files: internal/adapters/stepca, internal/adapters/gcp, internal/privileged, int
 
 Files: internal/app, internal/jobs, internal/migration, CLI operational/profile commands and fixtures.
 
-- [ ] Add lifecycle tests for atomic listener binding, cancellation, separate worker resources, DB outage preserving fresh local auth, scheduling, healthy readiness versus unavailable dependency.
-- [ ] Wire all real providers, policy/webhook/broker listeners, native auth reader, shared accounting workers/export, network/inventory jobs and health/metrics into serve. No placeholder operations remain.
-- [ ] Import existing inventory/pending commands/discovery/metadata/Class key/downgrade guard and PR38 usage checkpoint precision/terminal/uncertain batches with idempotent markers under DB migration lock. Fence old writers; never confuse DD cursor with native spool progress.
-- [ ] Implement state migrate/export rollback paths preserving original observations and usage counters; require workers fenced before either transition. Port retained profile/challenge operator workflows into Go.
-- [ ] Full unit/race/migration and old/new parity tests; commit.
+- [x] Add lifecycle tests for atomic listener binding, cancellation, separate worker resources, DB outage preserving fresh local auth, scheduling, healthy readiness versus unavailable dependency.
+- [x] Wire all real providers, policy/webhook/broker listeners, native auth reader, shared accounting workers/export, network/inventory jobs and health/metrics into serve. No placeholder operations remain.
+- [x] Import existing inventory/pending commands/discovery/metadata/Class key/downgrade guard and PR38 usage checkpoint precision/terminal/uncertain batches with idempotent markers under DB migration lock. Fence old writers; never confuse DD cursor with native spool progress.
+- [x] Implement state migrate/export rollback paths preserving original observations and usage counters; require workers fenced before either transition. Port retained profile/challenge operator workflows into Go.
+- [x] Full unit/race/migration and old/new parity tests; commit.
 
 ## Task 10: Terraform, release and legacy removal
 
