@@ -4,6 +4,11 @@ set -euo pipefail
 fixture=$(mktemp -d /private/tmp/cloud8021x-pg.XXXXXX)
 fixture_task=${C8021X_PG_FIXTURE_TASK:-task3}
 [[ "$fixture_task" =~ ^task[0-9]+$ ]] || exit 2
+fixture_package=${C8021X_PG_FIXTURE_PACKAGE:-./internal/storage/postgres}
+case "$fixture_package" in
+  ./internal/storage/postgres|./internal/provisioning) ;;
+  *) exit 2 ;;
+esac
 container="cloud8021x-pg-$fixture_task-$(openssl rand -hex 5)"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf "$fixture"; }
 trap cleanup EXIT
@@ -39,4 +44,4 @@ export C8021X_PG_TEST_WRONG_CA="$fixture/wrong.pem"
 export C8021X_PG_TEST_CONTAINER="$container"
 export C8021X_PG_TEST_TLS_CERT="$fixture/server.crt"
 export C8021X_PG_TEST_TLS_KEY="$fixture/server.key"
-go test -race -count=1 -v ./internal/storage/postgres "$@"
+go test -race -count=1 -v "$fixture_package" "$@"

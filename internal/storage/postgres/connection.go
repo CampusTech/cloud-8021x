@@ -77,6 +77,12 @@ func tlsConfig(c config.Database, host string) (*tls.Config, error) {
 		}}, nil
 }
 
+// VerifiedTLSConfig shares the exact database chain/pin validation with the
+// private provisioning runner. It does not open a connection or grant privileges.
+func VerifiedTLSConfig(c config.Database, hostname string) (*tls.Config, error) {
+	return tlsConfig(c, hostname)
+}
+
 // New is lazy: configuration is checked but an unreachable database does not
 // prevent constructing offline authorization services. DSNs never escape errors.
 func New(ctx context.Context, dsn string, c config.Database) (*Store, error) {
