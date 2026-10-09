@@ -12,12 +12,50 @@ import (
 	"testing"
 )
 
+// Every actual mocked fixture starts without repository or user provider caches.
+// Keeping this isolation in the regression prevents a developer's warm checkout
+// from hiding the missing-init failure seen on CI.
+func isolatedTerraformFixture(t *testing.T, module string, args ...string) *exec.Cmd {
+	t.Helper()
+	dir := t.TempDir()
+	cliConfig := filepath.Join(dir, "terraform.rc")
+	if err := os.WriteFile(cliConfig, []byte("provider_installation { direct {} }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "TF_") {
+			env = append(env, entry)
+		}
+	}
+	env = append(env, "TF_DATA_DIR="+filepath.Join(dir, "data"), "TF_CLI_CONFIG_FILE="+cliConfig, "TF_IN_AUTOMATION=1", "CHECKPOINT_DISABLE=1")
+	lockPath := filepath.Join(module, ".terraform.lock.hcl")
+	lock, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		current, err := os.ReadFile(lockPath)
+		if err != nil || string(current) != string(lock) {
+			t.Error("mocked fixture modified the reviewed provider lock")
+		}
+	})
+	init := exec.Command("terraform", "-chdir="+module, "init", "-backend=false", "-input=false", "-lockfile=readonly", "-no-color")
+	init.Env = env
+	if output, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("initialize isolated mocked fixture: %v: %s", err, output)
+	}
+	cmd := exec.Command("terraform", append([]string{"-chdir=" + module}, args...)...)
+	cmd.Env = env
+	return cmd
+}
+
 func TestGreenPhysicalHostsReachActualDashboardDefaultSelection(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("terraform", "-chdir="+filepath.Join(root, "terraform/green"), "test", "-var-file=tests/fixtures/fixture.tfvars.json", "-json", "-verbose")
+	cmd := isolatedTerraformFixture(t, filepath.Join(root, "terraform/green"), "test", "-var-file=tests/fixtures/fixture.tfvars.json", "-json", "-verbose")
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("synthetic green configs: %v: %s", err, raw)
@@ -239,7 +277,7 @@ func TestObservabilityPlanPreservesExactOwnership(t *testing.T) {
 }
 
 func TestObservabilityActualMockedOwnerPlan(t *testing.T) {
-	cmd := exec.Command("terraform", "-chdir=../../terraform/observability", "test", "-json", "-verbose")
+	cmd := isolatedTerraformFixture(t, "../../terraform/observability", "test", "-json", "-verbose")
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("mocked owner fixture: %v: %s", err, raw)

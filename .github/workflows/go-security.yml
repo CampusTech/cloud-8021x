@@ -31,6 +31,12 @@ jobs:
             go.sum
             tests/scep/go.sum
             tools/dashboard/go.sum
+      - name: Install Terraform for actual mocked dashboard fixtures
+        if: matrix.module == 'tools/dashboard'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
       - name: Verify dependencies
         run: go mod download && go mod verify
       - name: Test
