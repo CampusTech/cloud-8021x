@@ -463,14 +463,7 @@ func requestedStage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var request struct {
-		Stage string `json:"stage"`
-	}
-	if domain.DecodeJSONStrict(raw, &request) != nil {
-		return errors.New("invalid fixed stage request")
-	}
-	if _, err = stagePlan(request.Stage); err != nil {
-		return err
-	}
-	return executeStage(ctx, request.Stage, logrus.New())
+	return dispatchRequestedStage(ctx, raw, func(ctx context.Context, stage string) error {
+		return executeStage(ctx, stage, logrus.New())
+	}, executeScenarioStage)
 }

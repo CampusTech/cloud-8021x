@@ -44,6 +44,12 @@ func command() *cobra.Command {
 		}
 		return nodeCommand(cmd.Context(), args, cmd.InOrStdin(), cmd.OutOrStdout())
 	}})
+	root.AddCommand(&cobra.Command{Use: "nas-descriptor ACTION SCENARIO_SHA256", Hidden: true, Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		if dryRun {
+			return errors.New("private descriptor entry cannot run outside an owned operation")
+		}
+		return nasDescriptorEntry(cmd.Context(), args)
+	}})
 	root.AddCommand(&cobra.Command{Use: "source-writer", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if dryRun {
 			return nil
