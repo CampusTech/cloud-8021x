@@ -192,12 +192,21 @@ from the shared PostgreSQL ledger, never a Datadog aggregate sum/readback.
 ```
 go test -race ./...
 scripts/test_telemetry_postgres.sh
-# Prepared, labeled disposable native fixture with matched campus3 packages and synthetic TLS PG:
-python3 tests/radius_integration.py --native --container "$TASK7_NATIVE_FIXTURE" --native-mode termination
+# Prepared, owned Debian 13 fixture with the matching current bundle and synthetic TLS PG:
+C8021X_NATIVE_BUNDLE="$VERIFIED_BUNDLE_DIRECTORY" python3 tests/radius_integration.py --native --container "$NATIVE_FIXTURE" --native-mode termination
 python3 tests/ddot_queue.py --packages "$VERIFIED_MONITORING_OUTPUT" --architecture arm64 --evidence /private/tmp/task7-ddot-proof --full-config
 python3 tests/ddot_queue.py --packages "$VERIFIED_MONITORING_OUTPUT" --architecture arm64 --evidence /private/tmp/task7-ddot-full-proof --storage-full
 golangci-lint run
 ```
+
+For the native termination command, `VERIFIED_BUNDLE_DIRECTORY` must contain the
+complete verified current package bundle. `NATIVE_FIXTURE` must be an explicitly
+prepared Debian 13 container with matching architecture and installed native
+family, no published host ports, and labels `cloud8021x.test=task10` (or `task11`),
+`cloud8021x.disposable=true`, and `cloud8021x.bundle.sha256` equal to the SHA256 of
+that bundle's `package-manifest.json`. The runner refuses missing/mismatched
+inputs; it does not provision or borrow a historical fixture. See the
+[current native fixture prerequisites](../../patches/freeradius/README.md).
 
 The PG runner generates TLS/synthetic roles in its own network-none PostgreSQL 16
 container, runs a Linux test binary, and exposes no host port. Its integration

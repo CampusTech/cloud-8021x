@@ -360,13 +360,25 @@ record every archive and installed collector SHA, and run affected shipping-bina
 config/projection/queue tests. The existing [Task 7 full-container evidence](../telemetry/README.md)
 does not certify these Debian archives. There is no vulnerable/default fallback.
 
-Task 8 targeted local proofs are reproducible with
-`scripts/test_bootstrap_isolation.sh`, `scripts/test_bootstrap_native.sh`,
-`scripts/test_bootstrap_storage.sh`, and selected tests through
-`C8021X_PG_FIXTURE_TASK=task8 scripts/test_postgres.sh`. Each creates/removes only
-its own labeled disposable Linux/PostgreSQL fixture. The native fixture consumes
-seven SHA-verified retained campus3 arm64 archives and uses actual native Status
-and signed local policy; its peer condition is injected, not a two-node EAP proof.
+Targeted local proofs are reproducible from the repository root:
+
+```sh
+scripts/test_bootstrap_isolation.sh
+scripts/test_bootstrap_native.sh "$ARCH" "$VERIFIED_BUNDLE_DIRECTORY"
+scripts/test_bootstrap_storage.sh
+C8021X_PG_FIXTURE_TASK=task8 scripts/test_postgres.sh
+```
+
+Set `ARCH` to `amd64` or `arm64` and `VERIFIED_BUNDLE_DIRECTORY` to the complete
+verified current bundle for that architecture. The native harness requires both
+arguments and verifies the manifest/archive hashes before accessing Docker. It
+creates an owned networkless Debian 13 fixture labeled `cloud8021x.test=task10`,
+`cloud8021x.disposable=true`, and `cloud8021x.bundle.sha256` matching the bundle's
+`package-manifest.json`; it does not use retained campus3 binaries. See the
+[current native fixture prerequisites](../../patches/freeradius/README.md).
+Each runner creates/removes only its own labeled disposable Linux/PostgreSQL
+fixture. The native fixture uses actual native Status and signed local policy;
+its peer condition is injected, not a two-node EAP proof.
 Its failed collector activation restores actual prior native/policy readiness.
 Package rollback uses actual dpkg with synthetic fixed allowlisted package payloads
 and tests maintainer suppression; it is not shipping Agent/Smallstep packaging
