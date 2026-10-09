@@ -29,20 +29,23 @@ jobs:
         run: test "$RELEASE_TAG" = "v$(cat VERSION)"
       - name: Test actual executable aliases
         run: go test ./cmd/cloud-8021x -count=1
+      - name: Select external application output
+        # Keep generated artifacts outside the checkout for honest VCS metadata.
+        run: echo "RELEASE_OUTPUT=$RUNNER_TEMP/cloud-8021x-application-release" >> "$GITHUB_ENV"
       - name: Build pinned application and byte-identical aliases
-        run: mkdir dist && scripts/build-release.sh dist
+        run: mkdir "$RELEASE_OUTPUT" && scripts/build-release.sh "$RELEASE_OUTPUT"
       - name: Scan both actual release binaries
         run: |
           for arch in amd64 arm64; do
-            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary "dist/cloud-8021x-linux-$arch"
+            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary "$RELEASE_OUTPUT/cloud-8021x-linux-$arch"
           done
       - name: Verify all mandatory checksums
-        working-directory: dist
+        working-directory: ${{ env.RELEASE_OUTPUT }}
         run: sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: application-release
-          path: dist/*
+          path: ${{ env.RELEASE_OUTPUT }}/*
           if-no-files-found: error
           retention-days: 14
   components:
