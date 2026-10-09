@@ -16,7 +16,14 @@ import (
 type Operation string
 
 const (
+	OperationParallelActivate       Operation = "bootstrap activate"
+	OperationParallelDeactivate     Operation = "bootstrap deactivate"
+	OperationParallelRollbackProof  Operation = "bootstrap rollback-proof"
+	OperationParallelResumeSource   Operation = "bootstrap resume-source"
 	OperationServe                  Operation = "serve"
+	OperationParallelPrepare        Operation = "bootstrap prepare"
+	OperationParallelSourceKey      Operation = "bootstrap source-key"
+	OperationParallelCapture        Operation = "bootstrap capture"
 	OperationBootstrap              Operation = "bootstrap"
 	OperationRefreshCredentials     Operation = "bootstrap credentials"
 	OperationInventorySync          Operation = "inventory sync"
@@ -100,7 +107,7 @@ func NewCommand(options Options) *cobra.Command {
 		}
 		var cfg config.Config
 		var err error
-		privileged := (cmd.Parent() != nil && cmd.Parent().Name() == "state") || cmd.Name() == "doctor" || (cmd.Name() == "emit" && cmd.Parent() != nil && cmd.Parent().Name() == "metrics") || cmd.Name() == "bootstrap" || (cmd.Name() == "credentials" && cmd.Parent() != nil && cmd.Parent().Name() == "bootstrap") || (cmd.Parent() != nil && ((cmd.Name() == "verify-leaf" && cmd.Parent().Name() == "radius") || (cmd.Name() == "renew" && cmd.Parent().Name() == "certificates") || (cmd.Name() == "apply" && cmd.Parent().Name() == "sources")))
+		privileged := (cmd.Parent() != nil && cmd.Parent().Name() == "state") || cmd.Name() == "doctor" || (cmd.Name() == "emit" && cmd.Parent() != nil && cmd.Parent().Name() == "metrics") || cmd.Name() == "bootstrap" || (cmd.Parent() != nil && cmd.Parent().Name() == "bootstrap") || (cmd.Parent() != nil && ((cmd.Name() == "verify-leaf" && cmd.Parent().Name() == "radius") || (cmd.Name() == "renew" && cmd.Parent().Name() == "certificates") || (cmd.Name() == "apply" && cmd.Parent().Name() == "sources")))
 		if privileged && processUID() == 0 {
 			if path != privilegedConfigFile {
 				return config.Config{}, errors.New("root operation requires the fixed protected application configuration")
@@ -108,7 +115,7 @@ func NewCommand(options Options) *cobra.Command {
 			if root.PersistentFlags().Changed("policy-address") {
 				return config.Config{}, errors.New("root operation rejects listener overrides")
 			}
-			if incoming && cmd.Name() == "bootstrap" {
+			if incoming && (cmd.Name() == "bootstrap" || (cmd.Parent() != nil && cmd.Parent().Name() == "bootstrap")) {
 				cfg, err = readFixedProtectedConfig("/var/cache/cloud-8021x/artifacts/config.yaml")
 			} else {
 				cfg, err = readProtectedSourceConfig()
@@ -181,7 +188,12 @@ func NewCommand(options Options) *cobra.Command {
 		}
 		if op == OperationStateExport {
 			cmd.Flags().BoolVar(&fenceOnly, "fence-only", false, "Revoke shared work and physically fence this node for cold rollback")
+		}
+		if op == OperationStateExport || op == OperationParallelDeactivate {
 			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume only the exact interrupted export-fence attempt")
+		}
+		if op == OperationParallelPrepare || op == OperationParallelActivate {
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Recover this exact expired parallel operation after original helper exit proof")
 		}
 		if op == OperationStateMigrate {
 			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Continue exact original committed bundle publication after helper exit proof")
@@ -215,8 +227,8 @@ func NewCommand(options Options) *cobra.Command {
 	bootstrap := operation("bootstrap", OperationBootstrap)
 	bootstrap.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove the exact interrupted fence or pre-install preparation attempt")
 	bootstrap.Flags().BoolVar(&fenceOnly, "fence-only", false, "Prepare only this node’s persistent legacy writer fence using the fixed incoming release")
-	bootstrap.Flags().BoolVar(&incoming, "incoming", false, "Bootstrap the verified release from the fixed protected incoming directory")
-	bootstrap.AddCommand(operation("credentials", OperationRefreshCredentials))
+	bootstrap.PersistentFlags().BoolVar(&incoming, "incoming", false, "Bootstrap the verified release from the fixed protected incoming directory")
+	bootstrap.AddCommand(operation("credentials", OperationRefreshCredentials), operation("prepare", OperationParallelPrepare), operation("source-key", OperationParallelSourceKey), operation("capture", OperationParallelCapture), operation("activate", OperationParallelActivate), operation("deactivate", OperationParallelDeactivate), operation("rollback-proof", OperationParallelRollbackProof), operation("resume-source", OperationParallelResumeSource))
 	root.AddCommand(operation("serve", OperationServe), bootstrap, operation("doctor", OperationDoctor), versionCmd(options.Version))
 	for _, group := range []struct {
 		name    string
@@ -262,10 +274,16 @@ func NewCommand(options Options) *cobra.Command {
 	}
 	cfgCmd := &cobra.Command{Use: "config"}
 	cfgCmd.AddCommand(&cobra.Command{Use: "validate", Short: "Validate configuration and secret references without opening secrets", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if _, err := load(cmd); err != nil {
+		cfg, err := load(cmd)
+		if err != nil {
 			return err
 		}
-		_, err := fmt.Fprintln(cmd.OutOrStdout(), "Configuration valid (schema_version 1); secret file contents were not read.")
+		if cfg.Parallel() {
+			if err = cfg.ValidateBootstrap(); err != nil {
+				return err
+			}
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Configuration valid (schema_version 1); secret file contents were not read.")
 		return err
 	}})
 	root.AddCommand(cfgCmd)

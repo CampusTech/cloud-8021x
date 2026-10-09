@@ -122,7 +122,15 @@ func processLocked(ctx context.Context, tx pgx.Tx, key []byte, maxAge time.Durat
 		}
 	} else {
 		result.EventID = event.ID
-		next, interval, reason := accounting.Apply(state, event)
+		var epoch time.Time
+		var epochPtr *time.Time
+		if err = tx.QueryRow(ctx, "SELECT (SELECT epoch FROM ledger.collection_epoch WHERE singleton)").Scan(&epochPtr); err != nil {
+			return result, err
+		}
+		if epochPtr != nil {
+			epoch = *epochPtr
+		}
+		next, interval, reason := accounting.ApplyEpoch(state, event, epoch)
 		interval, reason, baselineRequired, err = gateLegacyBaseline(ctx, tx, state, next, event, interval, reason, baselineRequired)
 		if err != nil {
 			return result, err
@@ -144,8 +152,10 @@ func processLocked(ctx context.Context, tx pgx.Tx, key []byte, maxAge time.Durat
 			if err != nil {
 				return result, err
 			}
-			if err = enqueue(ctx, tx, "accounting:"+event.ID, "outbox", body); err != nil {
-				return result, err
+			if reason != "before_collection_epoch" {
+				if err = enqueue(ctx, tx, "accounting:"+event.ID, "outbox", body); err != nil {
+					return result, err
+				}
 			}
 			if interval != nil {
 				result.UsageID = interval.ID

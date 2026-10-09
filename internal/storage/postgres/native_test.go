@@ -75,3 +75,13 @@ func TestNativeConninfoPreservesVerifiedTLSAndIgnoresDSNOverrides(t *testing.T) 
 		t.Fatal("accepted unverified native TLS")
 	}
 }
+
+func TestNativeDatabaseNameIsExplicitAndExclusive(t *testing.T) {
+	c := config.Defaults().Database
+	c.Name = "cloud8021x_green"
+	for _, name := range []string{"cloud8021x", "stepca", "cloud8021x_blue"} {
+		if _, err := NativeConninfoWithCA("postgres://native:fixture@localhost/"+name, c, nil); err == nil || !strings.Contains(err.Error(), "invalid native database") {
+			t.Fatalf("accepted foreign database %s: %v", name, err)
+		}
+	}
+}

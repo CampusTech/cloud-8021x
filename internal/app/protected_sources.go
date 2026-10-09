@@ -102,7 +102,7 @@ func protectedSources(ctx context.Context, cfg config.Config, o RunOptions) erro
 	if e = checkSourceDigest(candidates, o.SourceCandidateSHA256); e != nil {
 		return e
 	}
-	return coordinateSourceAttempt(ctx, repository.ForTransition(cfg.StateTransition), cfg.Network.Discovery.Firewall.Node, cfg.InstanceID+"-root", candidates, func(ctx context.Context, claimed []domain.SourceCandidate, digest string, claim jobs.Claim) error {
+	return coordinateSourceAttempt(ctx, repository.ForTransition(cfg.StateTransition), cfg.InstanceID, cfg.InstanceID+"-root", candidates, func(ctx context.Context, claimed []domain.SourceCandidate, digest string, claim jobs.Claim) error {
 		o.SourceCandidateSHA256 = digest
 		gate := postgres.MaintenanceGate{Store: repository}
 		operation, e := sourceMaintenanceIdentity(cfg, claim.ID, claim.Generation, claim.Payload)
@@ -171,6 +171,9 @@ func protectedSourceOperations(ctx context.Context, cfg config.Config, values ma
 	}
 	radius := &host.RadiusBackend{Local: cfg.Bootstrap.LocalAddress, Peer: cfg.Bootstrap.PeerAddress, Secret: bytes.TrimSpace(values[cfg.Bootstrap.HealthSecret.File]), Expected: expected}
 	target := sources.FirewallTarget{Project: cfg.Network.Discovery.Firewall.Project, Node: cfg.Network.Discovery.Firewall.Node, Network: cfg.Network.Discovery.Firewall.Network}
+	if cfg.Parallel() {
+		target.Deployment, target.Role = cfg.Deployment.ID, cfg.InstanceID
+	}
 	firewall, e := cloud.Firewall(target)
 	if e != nil {
 		return RootVerifier{}, nil, e
@@ -180,7 +183,7 @@ func protectedSourceOperations(ctx context.Context, cfg config.Config, values ma
 		return RootVerifier{}, nil, e
 	}
 	ops.RetainedProofs = func(ctx context.Context) ([]string, error) {
-		payloads, err := repository.UnresolvedSourcePayloads(ctx, target.Node)
+		payloads, err := repository.UnresolvedSourcePayloads(ctx, cfg.InstanceID)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +197,7 @@ func protectedSourceOperations(ctx context.Context, cfg config.Config, values ma
 				Node      string          `json:"node"`
 				Candidate json.RawMessage `json:"candidate"`
 			}
-			if domain.DecodeJSONStrict(payload, &work) != nil || work.Node != target.Node {
+			if domain.DecodeJSONStrict(payload, &work) != nil || work.Node != cfg.InstanceID {
 				return nil, errors.New("unresolved source evidence malformed")
 			}
 			var candidates []domain.SourceCandidate
@@ -220,8 +223,15 @@ func sourceMaintenanceIdentity(cfg config.Config, id string, generation int64, p
 		Node      string          `json:"node"`
 		Candidate json.RawMessage `json:"candidate"`
 	}
-	if domain.DecodeJSONStrict(payload, &work) != nil || work.Node != cfg.Network.Discovery.Firewall.Node || work.Node != cfg.InstanceID {
+	if domain.DecodeJSONStrict(payload, &work) != nil || work.Node != cfg.InstanceID {
 		return "", errors.New("source attempt node mismatch")
+	}
+	if cfg.Parallel() {
+		if err := cfg.ValidateDeployment(); err != nil {
+			return "", err
+		}
+	} else if cfg.Network.Discovery.Firewall.Node != cfg.InstanceID {
+		return "", errors.New("source firewall role mismatch")
 	}
 	_, hash, e := transitionBinding(cfg)
 	if e != nil {

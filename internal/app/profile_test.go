@@ -54,7 +54,7 @@ func TestRetainedPythonProfileFullParity(t *testing.T) {
 		o := profileOptions{Identity: identity, Provisioner: "scep", SSID: "Campus", ServerDNS: "radius.example", SCEPURL: "https://ca.example/scep/scep"}
 		input, _ := json.Marshal(map[string]string{"identity": identity, "provisioner": o.Provisioner, "ssid": o.SSID, "radius_server_name": o.ServerDNS, "scep_url": o.SCEPURL})
 		cmd := exec.Command(python, "-c", `import runpy,sys,json,types
-m=runpy.run_path('../../scripts/byod_profile.py')
+m=runpy.run_path('../../tests/legacy/scripts/byod_profile.py')
 a=types.SimpleNamespace(**json.load(sys.stdin))
 sys.stdout.buffer.write(m['profile_bytes'](a,bytes([1,2,3]),'original-challenge'))`)
 		cmd.Stdin = bytes.NewReader(input)

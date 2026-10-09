@@ -29,7 +29,7 @@ type Radius interface {
 	Activate(context.Context) error
 	Healthy(context.Context) error
 }
-type FirewallTarget struct{ Project, Node, Network string }
+type FirewallTarget struct{ Project, Node, Network, Deployment, Role string }
 type FirewallRule struct {
 	SourceRanges                                             []string
 	Disabled                                                 bool
@@ -65,7 +65,7 @@ type FileOperations struct {
 }
 
 func NewFileOperations(r Radius, f Firewall, target FirewallTarget, secrets SecretReader) (*FileOperations, error) {
-	if r == nil || f == nil || secrets == nil || !regexp.MustCompile(`^[a-z][a-z0-9-]{4,62}$`).MatchString(target.Project) || (target.Node != "radius-primary" && target.Node != "radius-secondary") || target.Network == "" {
+	if r == nil || f == nil || secrets == nil || target.Validate() != nil {
 		return nil, errors.New("invalid fixed source operation dependencies")
 	}
 	return &FileOperations{Radius: r, Firewall: f, Target: target, Secrets: secrets, clientsPath: ClientsFile, statePath: StateFile, proofPath: ProofDirectory, poll: time.Second}, nil

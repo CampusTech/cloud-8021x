@@ -65,7 +65,7 @@ func validateNetworkDetails(c Config) error {
 	if len(d.Bindings) == 0 || !filepath.IsAbs(d.CandidateFile) || filepath.Clean(d.CandidateFile) != d.CandidateFile || d.MaxAge > time.Hour {
 		return errors.New("source discovery requires bindings, private candidate path and max_age <= 1h")
 	}
-	if !regexp.MustCompile(`^[a-z][a-z0-9-]{4,62}$`).MatchString(d.Firewall.Project) || (d.Firewall.Node != "radius-primary" && d.Firewall.Node != "radius-secondary") || !strings.HasPrefix(d.Firewall.Network, "https://www.googleapis.com/compute/v1/projects/"+d.Firewall.Project+"/") {
+	if !regexp.MustCompile(`^[a-z][a-z0-9-]{4,62}$`).MatchString(d.Firewall.Project) || (!c.Parallel() && d.Firewall.Node != "radius-primary" && d.Firewall.Node != "radius-secondary") || !strings.HasPrefix(d.Firewall.Network, "https://www.googleapis.com/compute/v1/projects/"+d.Firewall.Project+"/") {
 		return errors.New("source discovery requires a fixed project, node and network")
 	}
 	seenClients, seenConsoles := map[string]bool{}, map[string]bool{}

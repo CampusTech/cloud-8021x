@@ -53,7 +53,7 @@ func TestLifecycleDatabaseOutageKeepsFreshLocalPolicyAndDeniesStale(t *testing.T
 	dbCfg.CAFile = ca
 	dbCfg.ConnectTimeout = time.Second
 	dbCfg.QueryTimeout = time.Second
-	repository, err := postgres.New(context.Background(), "postgres://fixture:fixture@"+db.Addr().String()+"/fixture", dbCfg)
+	repository, err := postgres.New(context.Background(), "postgres://fixture:fixture@"+db.Addr().String()+"/cloud8021x", dbCfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,7 @@ func NativeConninfo(dsn string, c config.Database) (string, error) {
 // final installed path in libpq configuration. It uses the same TLS/pin gate.
 func NativeConninfoWithCA(dsn string, c config.Database, data []byte) (string, error) {
 	p, e := pgconn.ParseConfig(dsn)
-	if e != nil || p.Database != "cloud8021x" || p.Host == "" || strings.HasPrefix(p.Host, "/") || strings.Contains(p.Host, ",") {
+	if e != nil || p.Database != databaseName(c) || p.Host == "" || strings.HasPrefix(p.Host, "/") || strings.Contains(p.Host, ",") {
 		return "", errors.New("invalid native database configuration")
 	}
 	if _, e = tlsConfigFromPEM(c, p.Host, data); e != nil {

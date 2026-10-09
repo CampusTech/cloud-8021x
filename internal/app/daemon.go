@@ -45,6 +45,11 @@ func serveDaemon(ctx context.Context, cfg config.Config, o RunOptions) error {
 		}
 		return json.NewEncoder(o.Output).Encode(map[string]any{"dry_run": true, "operation": "serve", "listeners": cfg.Listeners, "accounting_workers": cfg.Schedules.AccountingWorkers, "export_workers": cfg.Schedules.ExportWorkers})
 	}
+	if cfg.Parallel() {
+		if err := requireParallelRuntimeReceipt(cfg); err != nil {
+			return err
+		}
+	}
 	account, err := user.Lookup(cfg.RuntimeUser)
 	if err != nil {
 		return errors.New("dedicated runtime account unavailable")
@@ -131,7 +136,11 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	if o.Logger != nil {
 		localWriter = o.Logger.Out
 	}
-	sdk, err := telemetry.Initialize(ctx, cfg.Telemetry, telemetry.Identity{Version: o.Version, Instance: cfg.InstanceID, Environment: cfg.Environment, Host: cfg.Hostname}, localWriter)
+	telemetryInstance := cfg.InstanceID
+	if cfg.Parallel() {
+		telemetryInstance = cfg.Deployment.Instance
+	}
+	sdk, err := telemetry.Initialize(ctx, cfg.Telemetry, telemetry.Identity{Version: o.Version, Instance: telemetryInstance, Environment: cfg.Environment, Host: cfg.Hostname}, localWriter)
 	if err != nil {
 		return fail(err)
 	}

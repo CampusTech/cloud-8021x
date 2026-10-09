@@ -10,11 +10,15 @@ import (
 func TestAuthenticatedReadinessRequiresPolicyTrustAndFreshProof(t *testing.T) {
 	secret := []byte(strings.Repeat("s", 32))
 	expected := Readiness{ConfigSHA256: strings.Repeat("a", 64), TrustSHA256: strings.Repeat("b", 64), ServerDNS: "radius.fixture", Ready: true}
-	for _, mode := range []string{"valid", "policy", "trust", "unready", "wrong-key"} {
+	for _, mode := range []string{"valid", "policy", "trust", "unready", "wrong-key", "deployment", "instance"} {
 		t.Run(mode, func(t *testing.T) {
 			local := expected
 			key := secret
 			switch mode {
+			case "deployment":
+				local.Deployment = "foreign"
+			case "instance":
+				local.Instance = "foreign-primary"
 			case "policy":
 				local.ConfigSHA256 = strings.Repeat("c", 64)
 			case "trust":

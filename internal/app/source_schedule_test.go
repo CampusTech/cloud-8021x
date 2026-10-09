@@ -85,3 +85,21 @@ func TestSourceMaintenanceIdentityBindsNodeConfigAttempt(t *testing.T) {
 		t.Fatal("peer attempt accepted")
 	}
 }
+
+func TestParallelSourceMaintenanceKeepsLogicalClaimAndPhysicalTarget(t *testing.T) {
+	c := config.Defaults()
+	c.InstanceID = "radius-primary"
+	c.StateTransition = strings.Repeat("a", 64)
+	c.Database.Name = "cloud8021x_green"
+	c.Deployment = config.Deployment{Mode: "parallel", ID: "green", Instance: "green-primary", SourceID: "blue", SourcePrimary: "radius-primary", SourceSecondary: "radius-secondary", CollectionEpoch: time.Now().UTC().Truncate(time.Second)}
+	c.Network.Discovery.Enabled = true
+	c.Network.Discovery.Firewall.Node = "green-primary"
+	raw := json.RawMessage(`{"node":"radius-primary","candidate":[]}`)
+	if _, e := sourceMaintenanceIdentity(c, "sources:"+strings.Repeat("b", 64), 1, raw); e != nil {
+		t.Fatal(e)
+	}
+	c.Network.Discovery.Firewall.Node = "radius-primary"
+	if _, e := sourceMaintenanceIdentity(c, "sources:"+strings.Repeat("b", 64), 1, raw); e == nil {
+		t.Fatal("blue firewall admitted by green logical claim")
+	}
+}

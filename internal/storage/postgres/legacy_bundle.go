@@ -102,37 +102,8 @@ func (s *Store) ImportLegacyBundle(ctx context.Context, id string, data []byte) 
 				return errors.New("peer usage checkpoint differs; original highwater reconciliation required")
 			}
 		}
-		if len(b.Certificates) > 0 {
-			certs, e := migration.DecodeCertificates(b.Certificates)
-			if e != nil {
-				return e
-			}
-			for _, command := range certs.Commands {
-				for uuid := range command.Hosts {
-					host := certs.Hosts[uuid]
-					var hostID uint64
-					if json.Unmarshal(host.Binding[0], &hostID) != nil {
-						return errors.New("legacy host ID invalid")
-					}
-					raw, e := json.Marshal(command)
-					if e != nil {
-						return e
-					}
-					observation, e := json.Marshal(host)
-					if e != nil {
-						return e
-					}
-					scope := migration.LegacyCollectionScope(certs.Source, hostID, uuid)
-					guard := bundleDigest([]byte(scope + "\x00" + command.UUID))
-					tag, e := tx.Exec(ctx, `INSERT INTO ledger.legacy_collection_guards(id,scope,source,host_id,host_uuid,command_uuid,document,observation) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id WHERE legacy_collection_guards.document=EXCLUDED.document AND legacy_collection_guards.observation=EXCLUDED.observation`, guard, scope, certs.Source, strconv.FormatUint(hostID, 10), uuid, command.UUID, raw, observation)
-					if e != nil {
-						return e
-					}
-					if tag.RowsAffected() != 1 {
-						return errors.New("peer pending Fleet evidence differs")
-					}
-				}
-			}
+		if e = importLegacyCommandGuards(ctx, tx, b.Certificates); e != nil {
+			return e
 		}
 		_, e = tx.Exec(ctx, `INSERT INTO bootstrap_private.legacy_bundles(transition,node,checksum,document) VALUES($1,$2,$3,$4)`, id, b.Node, checksum, data)
 		return e
@@ -171,6 +142,42 @@ func (s *Store) ConfirmLegacyPublication(ctx context.Context, id, node, checksum
 	}
 	if e = commit(ctx, tx); e != nil {
 		return ErrUncertain
+	}
+	return nil
+}
+
+func importLegacyCommandGuards(ctx context.Context, tx pgx.Tx, rawCertificates []byte) error {
+	if len(rawCertificates) > 0 {
+		certs, e := migration.DecodeCertificates(rawCertificates)
+		if e != nil {
+			return e
+		}
+		for _, command := range certs.Commands {
+			for uuid := range command.Hosts {
+				host := certs.Hosts[uuid]
+				var hostID uint64
+				if json.Unmarshal(host.Binding[0], &hostID) != nil {
+					return errors.New("legacy host ID invalid")
+				}
+				raw, e := json.Marshal(command)
+				if e != nil {
+					return e
+				}
+				observation, e := json.Marshal(host)
+				if e != nil {
+					return e
+				}
+				scope := migration.LegacyCollectionScope(certs.Source, hostID, uuid)
+				guard := bundleDigest([]byte(scope + "\x00" + command.UUID))
+				tag, e := tx.Exec(ctx, `INSERT INTO ledger.legacy_collection_guards(id,scope,source,host_id,host_uuid,command_uuid,document,observation) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id WHERE legacy_collection_guards.document=EXCLUDED.document AND legacy_collection_guards.observation=EXCLUDED.observation`, guard, scope, certs.Source, strconv.FormatUint(hostID, 10), uuid, command.UUID, raw, observation)
+				if e != nil {
+					return e
+				}
+				if tag.RowsAffected() != 1 {
+					return errors.New("peer pending Fleet evidence differs")
+				}
+			}
+		}
 	}
 	return nil
 }

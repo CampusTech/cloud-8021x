@@ -18,6 +18,9 @@ import (
 )
 
 var fixedFiles = map[string]bool{
+	parallelPrepareFile: true, parallelActivationHelperFile: true, ParallelActiveFile: true, ParallelPublicActivationFile: true,
+	transactionRoot + "/rollback-radius-primary.json": true, transactionRoot + "/rollback-radius-secondary.json": true, transactionRoot + "/parallel-radius-primary.json": true, transactionRoot + "/parallel-radius-secondary.json": true,
+	legacyDowngradeGuard:                   true,
 	PostgresCAFile:                         true,
 	"/etc/cloud-8021x/legacy-display.json": true,
 	legacyPolicySnapshot:                   true, daemonPolicySnapshot: true,
@@ -39,6 +42,11 @@ var fixedFiles = map[string]bool{
 func AllowedFile(path string) bool {
 	if filepath.Clean(path) != path {
 		return false
+	}
+	for _, f := range ParallelPassiveFiles() {
+		if path == f.Path {
+			return true
+		}
 	}
 	if fixedFiles[path] || legacyWriterFile(path) {
 		return true

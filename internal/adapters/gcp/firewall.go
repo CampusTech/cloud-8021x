@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
-	"regexp"
 
 	"github.com/CampusTech/cloud-8021x/internal/network"
 
@@ -20,7 +19,7 @@ type Firewall struct {
 }
 
 func (c *Client) Firewall(target sources.FirewallTarget) (*Firewall, error) {
-	if (c.projectID != "" && target.Project != c.projectID) || !regexp.MustCompile(`^[a-z][a-z0-9-]{4,62}$`).MatchString(target.Project) || (target.Node != "radius-primary" && target.Node != "radius-secondary") || target.Network == "" {
+	if (c.projectID != "" && target.Project != c.projectID) || target.Validate() != nil {
 		return nil, errors.New("invalid fixed firewall target")
 	}
 	return &Firewall{client: c, target: target}, nil

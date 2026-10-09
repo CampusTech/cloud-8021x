@@ -45,7 +45,15 @@ func (b *RadiusBackend) probeReadiness(ctx context.Context, address string) erro
 	if b.readiness != nil {
 		return b.readiness(ctx, address, b.Secret, b.Expected)
 	}
-	return native.ProbeReadiness(ctx, address, b.Secret, b.Expected)
+	expected := b.Expected
+	if expected.Deployment != "" && strings.Contains(address, net.JoinHostPort(b.Peer, "18122")) {
+		if strings.HasSuffix(expected.Instance, "-primary") {
+			expected.Instance = expected.Deployment + "-secondary"
+		} else {
+			expected.Instance = expected.Deployment + "-primary"
+		}
+	}
+	return native.ProbeReadiness(ctx, address, b.Secret, expected)
 }
 func (b *RadiusBackend) Running(ctx context.Context) (bool, error) {
 	out, e := b.command(ctx, "/usr/bin/systemctl", "show", "freeradius.service", "--property=ActiveState", "--property=SubState", "--property=MainPID")

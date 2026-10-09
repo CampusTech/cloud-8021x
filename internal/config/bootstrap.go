@@ -78,6 +78,9 @@ func (c Config) ValidateBootstrap() error {
 	if !role.MatchString(b.RuntimeRole) || !role.MatchString(b.NativeRole) || b.RuntimeRole == b.NativeRole || b.RuntimeRole == "stepca" || b.NativeRole == "stepca" {
 		return errors.New("invalid dedicated application database roles")
 	}
+	if c.Parallel() && (b.RuntimeRole != c.Database.Name+"_runtime" || b.NativeRole != c.Database.Name+"_native") {
+		return errors.New("parallel roles must belong to the deployment database namespace")
+	}
 	// Fixed installed boundaries: root never derives commands or service paths
 	// from a daemon-controlled leaf/candidate or an overridden CLI configuration.
 	if c.RuntimeUser != "cloud8021x" || c.Backends.RadiusBinary != "/usr/sbin/freeradius" || c.Backends.RadiusConfigDir != "/etc/freeradius/3.0" || c.Backends.RadiusService != "freeradius" || c.Backends.StepCAService != "step-ca" || c.Backends.RadiusVerifyLeafDir != "/run/radius-verified-leaves" || c.Paths.HandoffDir != "/run/radius-certificate-bindings" {
@@ -153,11 +156,14 @@ func (c Config) ValidateBootstrap() error {
 		}
 	}
 	if c.Listeners.Broker.Enabled {
-		for _, ref := range []SecretRef{c.Listeners.Broker.Token, c.Listeners.Broker.SigningKey, c.Listeners.Broker.KeyFile} {
+		for _, ref := range []SecretRef{c.Listeners.Broker.Token, c.Listeners.Broker.SigningKey} {
 			if files[ref.File] != "runtime" {
 				return errors.New("broker runtime secret mapping missing")
 			}
 		}
+	}
+	if c.Listeners.Broker.Enabled && c.Listeners.Broker.KeyFile.File != "/run/cloud-8021x/credentials/webhook.key" && files[c.Listeners.Broker.KeyFile.File] != "runtime" {
+		return errors.New("broker TLS key requires inherited protected credential")
 	}
 	if c.Telemetry.Credential.File != "" && files[c.Telemetry.Credential.File] != "runtime" {
 		return errors.New("telemetry runtime secret mapping missing")

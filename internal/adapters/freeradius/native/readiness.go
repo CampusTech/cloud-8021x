@@ -24,6 +24,8 @@ import (
 // freshness and actual certificate validity. The maintenance caller supplies the
 // expected shared policy/trust identities; HTTP success alone never permits restart.
 type Readiness struct {
+	Deployment   string `json:"deployment,omitempty"`
+	Instance     string `json:"instance,omitempty"`
 	ConfigSHA256 string `json:"config_sha256"`
 	TrustSHA256  string `json:"trust_sha256"`
 	ServerDNS    string `json:"server_dns"`
@@ -108,7 +110,7 @@ func ProbeReadiness(ctx context.Context, endpoint string, secret []byte, expecte
 		return errors.New("peer readiness authentication failed")
 	}
 	var proof readinessProof
-	if json.Unmarshal(data, &proof) != nil || proof.Nonce != challenge || time.Now().Unix()-proof.Observed > 5 || proof.Observed > time.Now().Unix()+1 || !proof.State.Ready || proof.State.ConfigSHA256 != expected.ConfigSHA256 || proof.State.TrustSHA256 != expected.TrustSHA256 || proof.State.ServerDNS != expected.ServerDNS {
+	if json.Unmarshal(data, &proof) != nil || proof.Nonce != challenge || time.Now().Unix()-proof.Observed > 5 || proof.Observed > time.Now().Unix()+1 || !proof.State.Ready || proof.State.Deployment != expected.Deployment || proof.State.Instance != expected.Instance || proof.State.ConfigSHA256 != expected.ConfigSHA256 || proof.State.TrustSHA256 != expected.TrustSHA256 || proof.State.ServerDNS != expected.ServerDNS {
 		return errors.New("peer policy or certificate readiness rejected")
 	}
 	return nil
@@ -135,5 +137,5 @@ func ExpectedReadiness(cfg config.Config, trust []byte) (Readiness, error) {
 	}
 	policy := sha256.Sum256(data)
 	roots := sha256.Sum256(trust)
-	return Readiness{ConfigSHA256: hex.EncodeToString(policy[:]), TrustSHA256: hex.EncodeToString(roots[:]), ServerDNS: cfg.Bootstrap.ServerDNS}, nil
+	return Readiness{Deployment: cfg.Deployment.ID, Instance: cfg.Deployment.Instance, ConfigSHA256: hex.EncodeToString(policy[:]), TrustSHA256: hex.EncodeToString(roots[:]), ServerDNS: cfg.Bootstrap.ServerDNS}, nil
 }

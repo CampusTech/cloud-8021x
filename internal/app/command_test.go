@@ -240,3 +240,30 @@ func TestRecoverWorkCLIRequiresClosedOriginalSelection(t *testing.T) {
 		t.Fatalf("exact recovery selection lost: %#v", r.options)
 	}
 }
+
+func TestParallelBootstrapCommandsAreClosedAndRetainRecoveryOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		op               Operation
+		incoming, resume bool
+	}{
+		{"source-key", OperationParallelSourceKey, true, false}, {"capture", OperationParallelCapture, true, false}, {"prepare", OperationParallelPrepare, true, true}, {"activate", OperationParallelActivate, false, true}, {"deactivate", OperationParallelDeactivate, false, true}, {"rollback-proof", OperationParallelRollbackProof, false, false}, {"resume-source", OperationParallelResumeSource, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := new(recorder)
+			args := []string{"--dry-run", "bootstrap", tc.name}
+			if tc.incoming {
+				args = append(args, "--incoming")
+			}
+			if tc.resume {
+				args = append(args, "--resume-attempt", "17")
+			}
+			if _, err := execute(t, context.Background(), r, args...); err != nil {
+				t.Fatal(err)
+			}
+			if !r.called || r.operation != tc.op || !r.options.DryRun || r.options.Incoming != tc.incoming || (tc.resume && r.options.MaintenanceAttempt != 17) {
+				t.Fatal("parallel command lost its fixed operation/options")
+			}
+		})
+	}
+}

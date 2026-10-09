@@ -40,10 +40,17 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 
 // Runtime dispatch keeps privileged actions separate from unprivileged service ownership.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
-	if (o.Incoming && op != OperationBootstrap) || (o.FenceOnly && op != OperationBootstrap && op != OperationStateExport) {
+	parallelOperation := op == OperationParallelPrepare || op == OperationParallelSourceKey || op == OperationParallelCapture || op == OperationParallelActivate || op == OperationParallelDeactivate || op == OperationParallelRollbackProof || op == OperationParallelResumeSource
+	if (o.Incoming && op != OperationBootstrap && !parallelOperation) || (o.FenceOnly && op != OperationBootstrap && op != OperationStateExport) {
 		return errors.New("incoming release selector is bootstrap-only")
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if parallelOperation {
+		return protectedParallel(ctx, op, cfg, o)
+	}
+	if err := rejectParallelLegacyOperation(op, cfg); err != nil {
 		return err
 	}
 	if op == OperationServe {
@@ -72,6 +79,9 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	}
 	if op == OperationBootstrap {
 		return protectedBootstrap(ctx, cfg, o, false)
+	}
+	if op == OperationCertificatesRenew && cfg.Parallel() {
+		return renewParallel(ctx, cfg, o)
 	}
 	if op == OperationCertificatesRenew {
 		return protectedBootstrap(ctx, cfg, o, true)

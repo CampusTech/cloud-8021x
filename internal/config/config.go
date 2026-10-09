@@ -33,6 +33,7 @@ type SecretRef struct {
 }
 
 type Config struct {
+	Deployment      Deployment     `yaml:"deployment"`
 	StateTransition string         `yaml:"state_transition"`
 	Bootstrap       Bootstrap      `yaml:"bootstrap"`
 	RuntimeUser     string         `yaml:"runtime_user"`
@@ -183,6 +184,7 @@ type RadiusClient struct {
 	SignalingProfile string    `yaml:"signaling_profile"`
 }
 type Database struct {
+	Name string `yaml:"name"`
 	// cloudsql-instance-ca requires this explicit instance and exact trusted CA PEM pin.
 	CloudSQLInstance    string        `yaml:"cloud_sql_instance"`
 	InstanceCAPEMSHA256 string        `yaml:"instance_ca_pem_sha256"`
@@ -263,7 +265,7 @@ func Defaults() Config {
 		Inventory:   Inventory{Provider: "fleet", Fleet: Fleet{Timeout: 5 * time.Second, PollInterval: time.Hour, MaxPendingAge: 24 * time.Hour}},
 		Policy:      Policy{IdentityMode: "fingerprint", InventoryMaxAge: time.Hour, CertificateMaxAge: 24 * time.Hour, HandoffMaxAge: 120 * time.Second, ClassMaxAge: 30 * 24 * time.Hour},
 		Network:     Network{MetadataMaxAge: time.Hour, Discovery: Discovery{MaxAge: 15 * time.Minute}},
-		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
+		Database:    Database{Name: "cloud8021x", TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
 		Telemetry:   Telemetry{BusinessEndpoint: "http://127.0.0.1:4319", Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
 		CA:          CA{Provider: "step-ca"},
 		Backends:    Backends{RadiusVerifyLeafDir: "/run/radius-verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
@@ -383,6 +385,12 @@ func listenerBindingsOverlap(a, b netip.AddrPort) bool {
 }
 
 func (c Config) Validate() error {
+	if err := c.ValidateDeployment(); err != nil {
+		return err
+	}
+	if !regexp.MustCompile(`^cloud8021x(?:_[a-z][a-z0-9_]{0,39})?$`).MatchString(c.Database.Name) {
+		return errors.New("database.name must identify a dedicated application database")
+	}
 	if c.StateTransition != "" && !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(c.StateTransition) {
 		return errors.New("state_transition must be a protected shared 64-hex identity")
 	}

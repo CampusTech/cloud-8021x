@@ -25,6 +25,7 @@ var ErrUncertain = errors.New("database commit outcome uncertain; resolve using 
 var instanceRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]:[a-z]+-[a-z]+[0-9]:[a-z][a-z0-9-]{0,97}$`)
 
 type Store struct {
+	databaseName    string
 	pool            *pgxpool.Pool
 	timeout         time.Duration
 	transition      string
@@ -115,6 +116,9 @@ func newStore(ctx context.Context, dsn string, c config.Database, privileged boo
 	if err != nil {
 		return nil, errors.New("invalid database connection configuration")
 	}
+	if p.ConnConfig.Database != databaseName(c) {
+		return nil, errors.New("database identity differs from protected configuration")
+	}
 	if strings.HasPrefix(p.ConnConfig.Host, "/") || strings.Contains(p.ConnConfig.Host, ",") {
 		return nil, errors.New("database requires a single TLS host")
 	}
@@ -148,7 +152,7 @@ func newStore(ctx context.Context, dsn string, c config.Database, privileged boo
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	return &Store{pool: pool, timeout: c.QueryTimeout}, nil
+	return &Store{pool: pool, timeout: c.QueryTimeout, databaseName: databaseName(c)}, nil
 }
 func durationMS(d time.Duration) string { return fmtInt(max(1, d.Milliseconds())) }
 func (s *Store) Close()                 { s.pool.Close() }
@@ -173,4 +177,11 @@ func (s *Store) ForTransition(id string) *Store {
 	bound := *s
 	bound.transition, bound.transitionBound = id, true
 	return &bound
+}
+
+func databaseName(c config.Database) string {
+	if c.Name == "" {
+		return "cloud8021x"
+	}
+	return c.Name
 }

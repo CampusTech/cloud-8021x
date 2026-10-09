@@ -50,7 +50,11 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 	if err = tx.QueryRow(ctx, "SELECT current_database()").Scan(&selectedDB); err != nil {
 		return safeError(err)
 	}
-	if selectedDB != "cloud8021x" {
+	expectedDB := s.databaseName
+	if expectedDB == "" {
+		expectedDB = "cloud8021x"
+	}
+	if selectedDB != expectedDB {
 		return errors.New("application migrations require the dedicated cloud8021x database")
 	}
 	var roleCount int
@@ -121,6 +125,12 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 		}
 	}
 	if err = createMaintenance(ctx, tx, r); err != nil {
+		return safeError(err)
+	}
+	if err = createParallel(ctx, tx, r); err != nil {
+		return safeError(err)
+	}
+	if err = createParallelEpoch(ctx, tx, r); err != nil {
 		return safeError(err)
 	}
 	if err = createTransitions(ctx, tx, r); err != nil {
