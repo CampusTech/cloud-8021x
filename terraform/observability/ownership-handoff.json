@@ -1,0 +1,86 @@
+{
+  "exclusive_state_ownership_required": true,
+  "resources": [
+    {
+      "destination_address": "datadog_dashboard_json.radius[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_dashboard_json.radius[0]"
+    },
+    {
+      "destination_address": "datadog_dashboard_json.smallstep[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_dashboard_json.smallstep[0]"
+    },
+    {
+      "destination_address": "datadog_logs_custom_pipeline.radius_owner[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_logs_custom_pipeline.radius_owner[0]"
+    },
+    {
+      "destination_address": "datadog_logs_custom_pipeline.stepca[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_logs_custom_pipeline.stepca[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.radius_client_cert_expired[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.radius_client_cert_expired[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.radius_client_cert_expiring[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.radius_client_cert_expiring[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.radius_down[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.radius_down[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.radius_no_accepts[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.radius_no_accepts[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.radius_server_cert_expiry[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.radius_server_cert_expiry[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_cert_expiry[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_cert_expiry[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_decrypter[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_decrypter[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_health[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_health[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_kms_errors[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_kms_errors[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_no_issuance[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_no_issuance[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_process[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_process[0]"
+    },
+    {
+      "destination_address": "datadog_monitor.stepca_rsa_health[0]",
+      "existing_remote_id": null,
+      "source_address": "datadog_monitor.stepca_rsa_health[0]"
+    }
+  ],
+  "schema": 1
+}

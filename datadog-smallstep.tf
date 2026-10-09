@@ -4,15 +4,14 @@
 # Gated on BOTH enable_smallstep_ca (the CA exists) and datadog_app_key (TF can
 # manage Datadog). Metrics come from step-ca's native Prometheus endpoint
 # (metricsAddress in ca.json, namespace step_ca) scraped via the agent's
-# OpenMetrics check (namespace "smallstep" — see scripts/startup.sh), plus the
-# custom DogStatsD gauges (smallstep.cert.days_until_expiry,
-# smallstep.scep.decrypter_ready) and the file-tailed logs (source:stepca,
+# fresh-node Agent OpenMetrics check (namespace "smallstep"), plus neutral Go
+# OTel certificate/readiness observations (service:cloud-8021x) and native logs (source:stepca,
 # service:smallstep-ca) parsed by the pipeline at the bottom of this file.
 #
 # OpenMetrics maps counters to "<name>.count"; gauges keep their name.
 #
 # TWO CA instances feed this dashboard, both tagged service:smallstep-ca with a
-# distinguishing ca_instance tag: the EC CA (ACME + SCEP, :8443/:9090,
+# distinguishing ca_instance tag: the EC CA (ACME, :8443/:9090,
 # ca_instance:ec) and the RSA SCEP CA (Windows + non-ADE Mac, :8444/:9091,
 # ca_instance:rsa). Metric names are shared, so widgets aggregate both by
 # default; the $ca_instance template variable isolates one.
@@ -21,8 +20,13 @@
 locals {
   smallstep_datadog_enabled = local.datadog_enabled && var.enable_smallstep_ca
 
-  # Tag selector limiting all queries to this project's two CA hosts.
-  stepca_hosts = "{service:smallstep-ca}"
+  # One explicitly scoped card per physical host: never let a blue healthy
+  # instance conceal an absent/failing green peer at the default * selection.
+  stepca_health_widgets = flatten([for host in sort(values(local.datadog_radius_hosts)) : [
+    { definition = { title = "${host}: EC CA Health", type = "check_status", check = "http.can_connect", grouping = "cluster", group_by = ["host"], tags = ["service:smallstep-ca", "instance:stepca_health", "ca_instance:ec", "host:${host}", "$host"] } },
+    { definition = { title = "${host}: RSA CA Health", type = "check_status", check = "http.can_connect", grouping = "cluster", group_by = ["host"], tags = ["service:smallstep-ca", "instance:stepca_rsa_health", "ca_instance:rsa", "host:${host}", "$host"] } },
+    { definition = { title = "${host}: step-ca Processes", type = "check_status", check = "process.up", grouping = "cluster", group_by = ["host"], tags = ["service:smallstep-ca", "process:step-ca", "host:${host}", "$host"] } }
+  ]])
 
   smallstep_dashboard_json = {
     title       = "Smallstep step-ca (Wi-Fi CA)"
@@ -30,16 +34,13 @@ locals {
     layout_type = "ordered"
     template_variables = [
       {
-        name   = "host"
-        prefix = "host"
-        available_values = [
-          local.datadog_radius_hosts[google_compute_instance.radius.name],
-          local.datadog_radius_hosts[google_compute_instance.radius_secondary.name]
-        ]
-        defaults = ["*"]
+        name             = "host"
+        prefix           = "host"
+        available_values = sort(values(local.datadog_radius_hosts))
+        defaults         = ["*"]
       },
       {
-        # Break the two CA instances apart: EC (ACME + SCEP, :8443/:9090) vs RSA
+        # Break the two CA instances apart: EC (ACME, :8443/:9090) vs RSA
         # (SCEP-only, :8444/:9091). Both carry service:smallstep-ca, so the
         # issuance/KMS/expiry widgets aggregate both by default ($ca_instance=*);
         # select ec or rsa to isolate one.
@@ -58,34 +59,7 @@ locals {
           title       = "Overview"
           type        = "group"
           layout_type = "ordered"
-          widgets = [
-            {
-              definition = {
-                title    = "EC CA Health (/health)"
-                type     = "check_status"
-                check    = "http.can_connect"
-                grouping = "cluster"
-                tags     = ["instance:stepca-health"]
-              }
-            },
-            {
-              definition = {
-                title    = "RSA CA Health (/health)"
-                type     = "check_status"
-                check    = "http.can_connect"
-                grouping = "cluster"
-                tags     = ["instance:stepca-rsa-health"]
-              }
-            },
-            {
-              definition = {
-                title    = "step-ca Process Up"
-                type     = "check_status"
-                check    = "process.up"
-                grouping = "cluster"
-                tags     = ["process:step-ca"]
-              }
-            },
+          widgets = concat(local.stepca_health_widgets, [
             {
               definition = {
                 title     = "SCEP Decrypter Ready"
@@ -95,7 +69,7 @@ locals {
                 requests = [
                   {
                     queries = [
-                      { data_source = "metrics", name = "a", query = "min:smallstep.scep.decrypter_ready{$host,$ca_instance}", aggregator = "last" }
+                      { data_source = "metrics", name = "a", query = "min:cloud8021x.scep.decrypter_ready{${local.radius_hosts_filter} AND service:cloud-8021x AND component:step-ca AND ca_instance:rsa AND $ca_instance}", aggregator = "last" }
                     ]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
@@ -116,7 +90,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "max:smallstep.uptime{$host,$ca_instance}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "max:smallstep.uptime{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a / 86400" }]
                   }
@@ -131,14 +105,14 @@ locals {
                 precision = 1
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance}.as_rate()", aggregator = "avg" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance}.as_rate()", aggregator = "avg" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a * 60" }]
                   }
                 ]
               }
             }
-          ]
+          ])
         }
       },
 
@@ -161,7 +135,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance} by {provisioner,ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "signed" }]
@@ -183,7 +157,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,success}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance} by {provisioner,success}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "cool" }
@@ -199,7 +173,7 @@ locals {
                 requests = [
                   {
                     queries = [
-                      { data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()", aggregator = "sum" }
+                      { data_source = "metrics", name = "a", query = "sum:smallstep.x509.signed.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance} by {provisioner,ca_instance}.as_count()", aggregator = "sum" }
                     ]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
@@ -227,7 +201,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.x509.webhook_authorized.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance} by {provisioner}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     formulas        = [{ formula = "a", alias = "authorized" }]
@@ -242,14 +216,14 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.kms.signed.count{$host,$ca_instance}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "sum:smallstep.kms.signed.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     style           = { palette = "green" }
                     formulas        = [{ formula = "a", alias = "signed" }]
                   },
                   {
-                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.kms.errors.count{$host,$ca_instance}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "b", query = "sum:smallstep.kms.errors.count{${local.radius_hosts_filter} AND service:smallstep-ca AND $ca_instance}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "bars"
                     style           = { palette = "red" }
@@ -267,7 +241,7 @@ locals {
       # -----------------------------------------------------------------------
       {
         definition = {
-          # Both CA instances emit smallstep.cert.days_until_expiry; EC and RSA
+          # Both CA instances emit cloud8021x.certificate.days_until_expiry; EC and RSA
           # are combined (min across both) unless $ca_instance is set. The trend
           # widget breaks them out by {cert,ca_instance}.
           title       = "Certificate Expiry"
@@ -283,7 +257,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:intermediate,$host,$ca_instance}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:cloud8021x.certificate.days_until_expiry{${local.radius_hosts_filter} AND service:cloud-8021x AND component:step-ca AND cert:intermediate AND $ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
                     conditional_formats = [
@@ -304,7 +278,7 @@ locals {
                 custom_unit = "days"
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{cert:decrypter,$host,$ca_instance}", aggregator = "last" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:cloud8021x.certificate.days_until_expiry{${local.radius_hosts_filter} AND service:cloud-8021x AND component:step-ca AND cert:decrypter AND $ca_instance}", aggregator = "last" }]
                     response_format = "scalar"
                     formulas        = [{ formula = "a" }]
                     conditional_formats = [
@@ -323,7 +297,7 @@ locals {
                 show_legend = true
                 requests = [
                   {
-                    queries         = [{ data_source = "metrics", name = "a", query = "min:smallstep.cert.days_until_expiry{$host,$ca_instance} by {cert,ca_instance}" }]
+                    queries         = [{ data_source = "metrics", name = "a", query = "min:cloud8021x.certificate.days_until_expiry{${local.radius_hosts_filter} AND service:cloud-8021x AND component:step-ca AND $ca_instance} by {cert,ca_instance}" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     formulas        = [{ formula = "a" }]
@@ -349,7 +323,7 @@ locals {
                 title           = "step-ca request log"
                 type            = "log_stream"
                 indexes         = ["*"]
-                query           = "service:smallstep-ca $host"
+                query           = "service:smallstep-ca ${local.radius_log_hosts_filter}"
                 columns         = ["timestamp", "host", "@status", "@method", "@path", "@request-id"]
                 sort            = { column = "timestamp", order = "desc" }
                 message_display = "inline"
@@ -360,7 +334,7 @@ locals {
                 title           = "Errors / warnings"
                 type            = "log_stream"
                 indexes         = ["*"]
-                query           = "service:smallstep-ca $host (status:error OR status:warn OR @level:error OR @level:warn)"
+                query           = "service:smallstep-ca ${local.radius_log_hosts_filter} (status:error OR status:warn OR @level:error OR @level:warn)"
                 columns         = ["timestamp", "host", "@level", "@msg", "@error"]
                 sort            = { column = "timestamp", order = "desc" }
                 message_display = "expanded-md"
@@ -390,12 +364,16 @@ locals {
   dd_notify = var.datadog_monitor_notify != "" ? "\n\n${var.datadog_monitor_notify}" : ""
 }
 
+# Service-check includes use AND, so preserve the existing per-host monitor
+# IDs and discover all hosts with these exact service/instance tags. This broader
+# cohort intentionally includes staging/rollback groups; retire them explicitly.
+# Metric/log monitors and dashboard cards use the reviewed physical host set.
 # step-ca /health unreachable (the CA is down on a node).
 resource "datadog_monitor" "stepca_health" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep step-ca /health failing"
   type    = "service check"
-  query   = "\"http.can_connect\".over(\"instance:stepca-health\").by(\"host\").last(3).count_by_status()"
+  query   = "\"http.can_connect\".over(\"instance:stepca_health\",\"service:smallstep-ca\",\"ca_instance:ec\").by(\"host\").last(3).count_by_status()"
   message = "step-ca /health is failing on {{host.name}} — the Wi-Fi CA is unreachable on this node. EAP-TLS issuance (ACME + SCEP) may be degraded; check `systemctl status step-ca`.${local.dd_notify}"
   monitor_thresholds {
     critical = 2
@@ -408,12 +386,12 @@ resource "datadog_monitor" "stepca_health" {
 }
 
 # RSA step-ca /health unreachable (the RSA SCEP CA is down on a node). Mirrors
-# stepca_health but keys on the :8444 /health check (instance:stepca-rsa-health).
+# stepca_health but keys on the :8444 /health check (instance:stepca_rsa_health).
 resource "datadog_monitor" "stepca_rsa_health" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep step-ca-rsa /health failing"
   type    = "service check"
-  query   = "\"http.can_connect\".over(\"instance:stepca-rsa-health\").by(\"host\").last(3).count_by_status()"
+  query   = "\"http.can_connect\".over(\"instance:stepca_rsa_health\",\"service:smallstep-ca\",\"ca_instance:rsa\").by(\"host\").last(3).count_by_status()"
   message = "step-ca-rsa /health is failing on {{host.name}} — the RSA SCEP CA (Windows + non-ADE Mac Wi-Fi certs) is unreachable on this node. SCEP issuance may be degraded; check `systemctl status step-ca-rsa`.${local.dd_notify}"
   monitor_thresholds {
     critical = 2
@@ -430,7 +408,7 @@ resource "datadog_monitor" "stepca_process" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep step-ca process down"
   type    = "service check"
-  query   = "\"process.up\".over(\"process:step-ca\").by(\"host\").last(3).count_by_status()"
+  query   = "\"process.up\".over(\"process:step-ca\",\"service:smallstep-ca\").by(\"host\").last(3).count_by_status()"
   message = "The step-ca process is not running on {{host.name}}. Restart with `systemctl restart step-ca`.${local.dd_notify}"
   monitor_thresholds {
     critical = 2
@@ -444,13 +422,13 @@ resource "datadog_monitor" "stepca_process" {
 
 # SCEP decrypter degraded — the exact failure mode that broke Windows SCEP:
 # step-ca came up but the decrypter didn't initialize, so every PKIOperation
-# 500s. Caught by the smallstep.scep.decrypter_ready gauge.
+# 500s. Caught by the cloud8021x.scep.decrypter_ready gauge.
 resource "datadog_monitor" "stepca_decrypter" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep SCEP decrypter not initialized"
   type    = "metric alert"
-  query   = "min(last_10m):min:smallstep.scep.decrypter_ready{service:smallstep-ca} by {host} < 1"
-  message = "step-ca on {{host.name}} is running but its SCEP decrypter failed to initialize — every Windows SCEP PKIOperation will return HTTP 500 and no Wi-Fi certs will issue. Restart step-ca (the ExecStartPost probe should self-heal a transient KMS blip); if it persists, verify the decrypterKeyPEM/decrypterCertificate pair.${local.dd_notify}"
+  query   = "min(last_10m):min:cloud8021x.scep.decrypter_ready{${local.monitor_hosts_filter} AND service:cloud-8021x AND component:step-ca AND ca_instance:rsa} by {host,ca_instance} < 1"
+  message = "step-ca on {{host.name}} is running but its SCEP decrypter failed to initialize — every Windows SCEP PKIOperation will return HTTP 500 and no Wi-Fi certs will issue. Inspect the protected doctor output and step-ca-rsa logs; verify the preserved decrypterKeyPEM/decrypterCertificate pair and trust before a guarded repair.${local.dd_notify}"
   monitor_thresholds {
     critical = 1
   }
@@ -463,8 +441,8 @@ resource "datadog_monitor" "stepca_cert_expiry" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep CA certificate nearing expiry"
   type    = "metric alert"
-  query   = "min(last_1h):min:smallstep.cert.days_until_expiry{service:smallstep-ca} by {host,cert} < 14"
-  message = "The {{cert.name}} certificate on {{host.name}} is nearing expiry (warning <30 days, critical <14 days). Re-issue it (intermediate is KMS-backed; the SCEP decrypter is the shared software RSA key) before EAP-TLS breaks.${local.dd_notify}"
+  query   = "min(last_1h):min:cloud8021x.certificate.days_until_expiry{${local.monitor_hosts_filter} AND service:cloud-8021x AND component:step-ca} by {host,cert,ca_instance} < 14"
+  message = "The {{ca_instance.name}} {{cert.name}} certificate on {{host.name}} is nearing expiry (warning <30 days, critical <14 days). Re-issue it (intermediate is KMS-backed; the SCEP decrypter is the shared software RSA key) before EAP-TLS breaks.${local.dd_notify}"
   monitor_thresholds {
     critical = 14
     warning  = 30
@@ -478,7 +456,7 @@ resource "datadog_monitor" "stepca_kms_errors" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "Smallstep CA KMS errors"
   type    = "metric alert"
-  query   = "sum(last_15m):sum:smallstep.kms.errors.count{service:smallstep-ca}.as_count() > 5"
+  query   = "sum(last_15m):sum:smallstep.kms.errors.count{${local.monitor_hosts_filter} AND service:smallstep-ca}.as_count() > 5"
   message = "step-ca is hitting Cloud KMS errors (>5 in 15m) — the HSM-backed signing key may be unavailable or rate-limited, which blocks all certificate issuance.${local.dd_notify}"
   monitor_thresholds {
     critical = 5
@@ -497,8 +475,8 @@ resource "datadog_monitor" "radius_down" {
   count   = local.datadog_enabled ? 1 : 0
   name    = "FreeRADIUS down (no server reporting up)"
   type    = "metric alert"
-  query   = "max(last_5m):max:freeradius.up{*} + max:freeradius.freeradius_up{*} < 1"
-  message = "No FreeRADIUS server is reporting healthy — 802.1X Wi-Fi authentication is down network-wide. Check ${google_compute_instance.radius.name} and ${google_compute_instance.radius_secondary.name}.${local.dd_notify}"
+  query   = "max(last_5m):max:cloud8021x.backend.up{${local.monitor_hosts_filter} AND service:cloud-8021x AND component:freeradius} < 1"
+  message = "No FreeRADIUS server is reporting healthy — 802.1X Wi-Fi authentication is down network-wide. Check the reviewed physical hosts: ${join(", ", values(local.datadog_radius_hosts))}.${local.dd_notify}"
   monitor_thresholds {
     critical = 1
   }
@@ -530,7 +508,7 @@ resource "datadog_monitor" "radius_no_accepts" {
   count   = local.datadog_enabled ? 1 : 0
   name    = "FreeRADIUS no Access-Accepts"
   type    = "log alert"
-  query   = "logs(\"service:radius-auth @event:Access-Accept\").index(\"*\").rollup(\"count\").last(\"4h\") <= 0"
+  query   = "logs(\"service:radius-auth ${local.monitor_log_hosts_filter} @event:Access-Accept\").index(\"*\").rollup(\"count\").last(\"4h\") <= 0"
   message = "FreeRADIUS has logged zero Access-Accept events in the last 4 hours. During business hours this points to a broken auth path (cert trust, RADIUS config) with the daemon still up; overnight it can be normal (PMK caching means few full re-auths). Cross-check `radius_down`. (Source: the radius-auth log, NOT freeradius.total_access_accepts — that counter is always 0 under EAP-TLS.)${local.dd_notify}"
   monitor_thresholds {
     critical = 0
@@ -539,41 +517,16 @@ resource "datadog_monitor" "radius_no_accepts" {
   tags           = ["service:radius", "managed-by:terraform"]
 }
 
-# RADIUS server-certificate expiry — the backstop for radius-cert-renew.timer.
-#
-# This is the monitor that would have caught the 2026-09-02 outage. The
-# Smallstep-issued server cert is minted for 90 days and, before the renewal
-# timer existed, only at boot; it expired while both nodes were up and every
-# device started aborting the handshake with "certificate unknown". Nothing
-# alerted, because an expired SERVER cert produces no server-side failure —
-# freeradius stays up and healthy, so radius_down never fires, and the client
-# is the party doing the rejecting.
-#
-# Only meaningful when RADIUS presents a Smallstep-chained cert; under
-# Retired legacy self-signed deployments used a different certificate and
-# radius-cert-renew.sh (which emits this gauge) is never installed.
-#
-# Thresholds sit BELOW the renewal threshold on purpose: radius-cert-renew.sh
-# re-mints at 30 days remaining, so a reading under 25 means renewal itself is
-# broken, not that expiry is merely approaching.
-#
-# notify_no_data is the more important half. The gauge is emitted on every run
-# of the renew script INCLUDING no-ops, so a silent gauge means the timer has
-# stopped firing — which is precisely the failure mode that caused the outage.
-#
-# Detection latency is the whole point of this half, so the windows are sized
-# to keep it short. The two settings COMPOUND: the query window keeps returning
-# the last point for its full width after emission stops, and only then does
-# no_data_timeframe start counting. An hourly gauge with last_4h + 720 (12h)
-# surfaces a stalled timer in roughly half a day. (A daily gauge cannot do
-# better than days here, which is why the timer is hourly.) The 4h window still
-# tolerates a few consecutive missed runs before crying no-data.
+# RADIUS server-certificate expiry is observed independently of renewal. A
+# healthy native process does not prove a valid EAP-TLS leaf. Preserve the
+# established 4h evaluation/12h no-data window while periodic Go diagnostics
+# provide fresh observations; missing protected certificate bytes stay unknown.
 resource "datadog_monitor" "radius_server_cert_expiry" {
   count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "FreeRADIUS server certificate nearing expiry"
   type    = "metric alert"
-  query   = "min(last_4h):min:radius.server_cert.days_until_expiry{service:freeradius} by {host} < 14"
-  message = "The RADIUS EAP-TLS server certificate on {{host.name}} is at {{value}} days remaining (warning <25, critical <14). radius-cert-renew.timer should have re-minted it at 30 days — this firing means renewal is broken. An EXPIRED server cert is a total Wi-Fi outage that FreeRADIUS reports only as `eap_tls: (TLS) Alert read:fatal:certificate unknown`, with the daemon still healthy. Fix now: `sudo /usr/local/bin/radius-cert-renew.sh` on the affected node, then check `journalctl -u radius-cert-renew.service`. NO DATA on this monitor is equally serious — it means the renewal timer has stopped emitting entirely.${local.dd_notify}"
+  query   = "min(last_4h):min:cloud8021x.certificate.days_until_expiry{${local.monitor_hosts_filter} AND service:cloud-8021x AND component:freeradius AND cert:server AND ca_instance:ec} by {host} < 14"
+  message = "The RADIUS EAP-TLS server certificate on {{host.name}} has {{value}} days remaining (warning <25, critical <14). Inspect `cloud-8021x --config /etc/cloud-8021x/config.yaml doctor`, then use the protected `cloud-8021x --config /etc/cloud-8021x/config.yaml certificates renew` workflow after resolving peer, CA and authority failures. Inspect `journalctl -u cloud-8021x`. An expired leaf can break Wi-Fi while the process remains healthy. NO DATA means certificate observation or telemetry is unavailable; do not infer a valid certificate.${local.dd_notify}"
   monitor_thresholds {
     critical = 14
     warning  = 25
@@ -581,9 +534,8 @@ resource "datadog_monitor" "radius_server_cert_expiry" {
   notify_no_data    = true
   no_data_timeframe = 720
 
-  # The gauge lands once an hour, so the default require_full_window (true)
-  # would hold evaluation waiting for a densely-populated 4-hour window that
-  # a once-hourly emission never fills.
+  # Periodic observations may be sparse during recovery; keep evaluation
+  # independent of a densely populated four-hour window.
   require_full_window = false
 
   tags = ["service:radius", "managed-by:terraform"]
@@ -612,7 +564,7 @@ resource "datadog_monitor" "radius_server_cert_expiry" {
 #                                someone has lost Wi-Fi right now
 #
 # The gauge deliberately excludes already-expired certs (see
-# radius-client-cert-metrics.sh), so one decommissioned Mac that stops renewing
+# the verified Go certificate observation), so one decommissioned Mac that stops renewing
 # can't pin the "expiring" monitor above zero forever. Being permanently red is
 # how a monitor gets muted and stops being a monitor.
 resource "datadog_monitor" "radius_client_cert_expiring" {
@@ -620,11 +572,11 @@ resource "datadog_monitor" "radius_client_cert_expiring" {
   name  = "EAP-TLS client certificates nearing expiry"
   type  = "metric alert"
 
-  # max across hosts, not sum: both RADIUS nodes emit, and a device that
-  # authenticates against only one of them appears in that node's log alone.
-  # Summing would double-count every device that has hit both.
-  query   = "max(last_4h):max:radius.client_cert.expiring_soon{service:freeradius,window:48h} > 10"
-  message = "{{value}} device certificate(s) issued by the Smallstep Wi-Fi CA expire within 48 hours (warning >0, critical >10). Nothing renews these automatically — an expired client cert is a per-device Wi-Fi lockout that FreeRADIUS reports only as `eap_tls: (TLS) OpenSSL says error 10 : certificate has expired`. Force a re-issue by re-pushing the Campus Wi-Fi ACME profile to the affected hosts from fleet-gitops; check `radius.client_cert.min_days_until_expiry` and the 14d window for the shape of the wave. NO DATA means radius-client-cert-metrics.timer has stopped emitting.${local.dd_notify}"
+  # Both nodes read the shared verified observations of recently authenticated clients.
+  # This is not full issued/offline CA inventory; no CA database grant is required.
+  # Max across replicas, never sum; unknown provenance emits no guessed zero.
+  query   = "max(last_4h):max:cloud8021x.client_certificate.expiring_soon{${local.monitor_hosts_filter} AND service:cloud-8021x AND component:freeradius AND window:48h AND scope:shared} > 10"
+  message = "{{value}} recently authenticated client certificate(s) expire within 48 hours (warning >0, critical >10). Nothing renews these automatically — an expired client cert is a per-device Wi-Fi lockout that FreeRADIUS reports only as `eap_tls: (TLS) OpenSSL says error 10 : certificate has expired`. Force a re-issue by re-pushing the Campus Wi-Fi ACME profile to the affected hosts from fleet-gitops; inspect verified recent authentication observations and the 48h renewal window. This count does not cover all issued certificates or offline clients. NO DATA means verified recent-client observations or telemetry are unavailable; inspect `cloud-8021x --config /etc/cloud-8021x/config.yaml doctor` and `journalctl -u cloud-8021x`.${local.dd_notify}"
 
   monitor_thresholds {
     critical = 10
@@ -634,8 +586,8 @@ resource "datadog_monitor" "radius_client_cert_expiring" {
   notify_no_data    = true
   no_data_timeframe = 720
 
-  # Hourly gauge: the default require_full_window would wait forever for a
-  # densely-populated 4h window. Same reasoning as radius_server_cert_expiry.
+  # Periodic observations need not fill every point in the four-hour window;
+  # retain the original sparse/no-data evaluation behavior.
   require_full_window = false
 
   tags = ["service:radius", "managed-by:terraform"]
@@ -649,7 +601,7 @@ resource "datadog_monitor" "radius_client_cert_expired" {
   # Expired TLS certificates cannot establish a verified device identity. In
   # inventory mode count rejection events instead of silently dropping devices
   # without serials; this measures retries, not unique affected devices.
-  query   = try(var.radius_vlan_policy.certificate_inventory, false) ? "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"count\").last(\"1h\") > 5" : "logs(\"service:radius-auth @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"cardinality\", \"@serial\").last(\"1h\") > 5"
+  query   = try(var.radius_vlan_policy.certificate_inventory, false) ? "logs(\"service:radius-auth ${local.monitor_log_hosts_filter} @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"count\").last(\"1h\") > 5" : "logs(\"service:radius-auth ${local.monitor_log_hosts_filter} @event:Access-Reject @reject_reason:\\\"*certificate has expired*\\\"\").index(\"*\").rollup(\"cardinality\", \"@serial\").last(\"1h\") > 5"
   message = try(var.radius_vlan_policy.certificate_inventory, false) ? "{{value}} RADIUS rejection event(s) in the last hour presented an EXPIRED client certificate (warning >0, critical >5). This counts retries, not unique devices: expired TLS cannot establish a verified device identity. Inspect the matching logs by calling_station, src_ip and site_name; raw_identity and cert_cn are unverified diagnostic claims. Correlate with Fleet certificate inventory and re-deliver the affected Wi-Fi profile. Cross-check radius_client_cert_expiring for a renewal wave.${local.dd_notify}" : "{{value}} device(s) were rejected by RADIUS in the last hour for presenting an EXPIRED client certificate — they have no Wi-Fi (warning >0, critical >5). Identify them with `@reject_reason:\"*certificate has expired*\"` grouped by `@serial`, then re-push the Campus Wi-Fi ACME profile from fleet-gitops to force a fresh cert. If this fires in numbers, cross-check `radius_client_cert_expiring` — a wave means the renewal path is broken fleet-wide, not that one device drifted.${local.dd_notify}"
 
   monitor_thresholds {
@@ -677,8 +629,8 @@ resource "datadog_monitor" "stepca_no_issuance" {
   name  = "Smallstep CA issuing no ACME certificates"
   type  = "metric alert"
 
-  query   = "sum(last_24h):sum:smallstep.x509.signed.count{provisioner:wifi-acme}.as_count() <= 0"
-  message = "step-ca has signed zero wifi-acme certificates in 24 hours. With device renewal working this metric is never flat — a zero means devices have stopped ordering, and every EAP-TLS client cert in the fleet is now counting down to a lockout wave with no replacement coming. Check the ACME directory is reachable (`curl https://${var.smallstep_ca_dns_name}/acme/${var.smallstep_acme_provisioner_name}/directory`), then the authorizing webhook (`journalctl -u acme-authz-webhook`) for deny decisions.${local.dd_notify}"
+  query   = "sum(last_24h):sum:smallstep.x509.signed.count{${local.monitor_hosts_filter} AND service:smallstep-ca AND ca_instance:ec AND provisioner:${var.smallstep_acme_provisioner_name}}.as_count() <= 0"
+  message = "step-ca has signed zero wifi-acme certificates in 24 hours. With device renewal working this metric is never flat — a zero means devices have stopped ordering, and every EAP-TLS client cert in the fleet is now counting down to a lockout wave with no replacement coming. Check the ACME directory is reachable (`curl https://${var.smallstep_ca_dns_name}/acme/${var.smallstep_acme_provisioner_name}/directory`), then the authorizing webhook (`journalctl -u cloud-8021x`) for deny decisions.${local.dd_notify}"
 
   monitor_thresholds {
     critical = 0

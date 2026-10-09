@@ -1,6 +1,7 @@
 locals {
   application_database = var.deployment_id == "" ? "cloud8021x" : "cloud8021x_${replace(var.deployment_id, "-", "_")}"
-  runtime_limit        = 2 * var.runtime_connections_per_node
+  # The daemon partitions this aggregate budget; observations are included.
+  runtime_limit = 2 * var.runtime_connections_per_node
   # The reviewed native SQL template has two connections per node.
   native_limit = 4
   # Protected migration uses the same configured pool maximum on each node.

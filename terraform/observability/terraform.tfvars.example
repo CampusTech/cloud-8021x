@@ -1,0 +1,14 @@
+# Nonsecret reviewed inputs. Exact existing resource IDs belong in the separately
+# reviewed ownership handoff, not generated source or any VM input.
+project_id = "campus-example"
+datadog_site = "us5.datadoghq.com"
+datadog_monitor_notify = ""
+enable_smallstep_ca = true
+enable_acme_issuance_monitor = false
+smallstep_ca_dns_name = "ca.example.edu"
+smallstep_acme_provisioner_name = "wifi-acme"
+radius_vlan_policy = { certificate_inventory = true }
+datadog_usage_sites = {}
+# Green-only validation/cutover. Explicitly add both original emitted blue names
+# only for deliberate four-host staging; no wildcard or implicit blue suffix.
+datadog_observability_hosts = ["green-20261008-primary", "green-20261008-secondary"]

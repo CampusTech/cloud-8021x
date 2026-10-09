@@ -2,6 +2,7 @@
 # Initialize an independently protected backend using backend.hcl.example.
 project_id    = "campus-example"
 deployment_id = "green-20261008"
+runtime_connections_per_node = 8 # aggregate across all runtime pools, including observations
 private_administrator = {
   host                    = "10.0.2.2"
   port                    = 5432

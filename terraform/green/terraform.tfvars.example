@@ -81,3 +81,12 @@
   "state_transition": "<independent 64 lowercase hex transition>",
   "application_version": "<reviewed application version>"
 }
+
+# Exact reviewed nonsecret output of the separately applied private-green state.
+application_capacity = {
+  deployment_id = "green-20261008"
+  runtime_connections_per_node = 8
+  runtime_role_limit = 16
+  native_role_limit = 4
+  migration_role_limit = 16
+}

@@ -17,6 +17,14 @@ variable "deployment_id" {
     error_message = "Private green state requires an explicit isolated deployment ID."
   }
 }
+variable "runtime_connections_per_node" {
+  description = "Reviewed aggregate per-node runtime pool budget; copy application_capacity to green compute and use this same max_connections in its base YAML."
+  type        = number
+  validation {
+    condition     = var.runtime_connections_per_node >= 8 && var.runtime_connections_per_node <= 64 && floor(var.runtime_connections_per_node) == var.runtime_connections_per_node
+    error_message = "The aggregate runtime budget must be an integer 8..64."
+  }
+}
 variable "private_administrator" {
   description = "Nonsecret reviewed private-runner connection/CA/ACL inventory. Password comes only from PGPASSWORD. No VM uses this input or this state."
   type = object({
@@ -34,20 +42,21 @@ resource "random_password" "application" {
   lifecycle { prevent_destroy = true }
 }
 module "database" {
-  source                  = "../postgres"
-  deployment_id           = var.deployment_id
-  host                    = var.private_administrator.host
-  port                    = var.private_administrator.port
-  administrator           = var.private_administrator.administrator
-  admin_tool              = var.private_administrator.admin_tool
-  ca_file                 = var.private_administrator.ca_file
-  ca_pem_sha256           = var.private_administrator.ca_pem_sha256
-  tls_mode                = "cloudsql-instance-ca"
-  cloud_sql_instance      = var.private_administrator.cloud_sql_instance
-  reserved_ca_connections = var.private_administrator.reserved_ca_connections
-  expected_ca_acl         = var.private_administrator.expected_ca_acl
-  approved_ca_access      = var.private_administrator.approved_ca_access
-  passwords               = { for k, p in random_password.application : k => p.result }
+  source                       = "../postgres"
+  deployment_id                = var.deployment_id
+  runtime_connections_per_node = var.runtime_connections_per_node
+  host                         = var.private_administrator.host
+  port                         = var.private_administrator.port
+  administrator                = var.private_administrator.administrator
+  admin_tool                   = var.private_administrator.admin_tool
+  ca_file                      = var.private_administrator.ca_file
+  ca_pem_sha256                = var.private_administrator.ca_pem_sha256
+  tls_mode                     = "cloudsql-instance-ca"
+  cloud_sql_instance           = var.private_administrator.cloud_sql_instance
+  reserved_ca_connections      = var.private_administrator.reserved_ca_connections
+  expected_ca_acl              = var.private_administrator.expected_ca_acl
+  approved_ca_access           = var.private_administrator.approved_ca_access
+  passwords                    = { for k, p in random_password.application : k => p.result }
 }
 resource "google_secret_manager_secret" "application" {
   for_each  = toset(["runtime", "native", "migration"])
@@ -138,4 +147,15 @@ output "inherited_ca_dsn_references" {
   value       = { for database, secret in google_secret_manager_secret.ca_dsn : database => secret.id }
   depends_on  = [google_secret_manager_secret_version.ca_dsn]
   description = "New wrappers around the exact preserved original CA password. Same stepca role, fixed original databases and shared private instance; no CA credential rotation."
+}
+
+output "application_capacity" {
+  description = "Reviewed nonsecret aggregate runtime budget and exact pair-wide role limits; hand this whole object to green compute."
+  value = {
+    deployment_id                = var.deployment_id
+    runtime_connections_per_node = var.runtime_connections_per_node
+    runtime_role_limit           = module.database.application_identity.roles.runtime.connections
+    native_role_limit            = module.database.application_identity.roles.native.connections
+    migration_role_limit         = module.database.application_identity.roles.migration.connections
+  }
 }

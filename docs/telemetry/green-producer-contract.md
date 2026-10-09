@@ -1,0 +1,26 @@
+# Fresh green monitoring contract
+
+Fresh nodes generate their Agent native configurations through the protected Go collector publication. Go emits vendor-neutral OTLP metrics through the existing DDOT pipeline. Datadog queries consume those exact metric names; no OpenMetrics suffix or old exporter alias is added to neutral metrics. The SDK resource uses `service.name=cloud-8021x` and the distinct physical `host.name`; the Datadog exporter supplies their service/host attribution. This is a local producer/query contract, not evidence of live Datadog ingestion or rendering.
+
+| Observation | Actual producer / Datadog query | Units and dimensions |
+|---|---|---|
+| RADIUS server certificate | Protected public leaf → `cloud8021x.certificate.days_until_expiry` | Days, including negative expired values; `component:freeradius,cert:server,ca_instance:ec` |
+| CA intermediate/decrypter | Adopted protected public certificates → same neutral expiry metric | Days; `component:step-ca`, `cert:intermediate/decrypter`, `ca_instance:ec/rsa` |
+| Client certificates due soon | Verified native TLS observations of recently authenticated clients → `cloud8021x.client_certificate.expiring_soon` | Count of recently authenticated clients with unexpired certificates due within 48h; `component:freeradius,window:48h,scope:shared,cluster:<transition>`; max across replicas, never sum |
+| RSA SCEP decrypter | Bounded authenticated/trust-checked GetCACert probe → `cloud8021x.scep.decrypter_ready` | Gauge 0/1; `component:step-ca,ca_instance:rsa`. EC's adopted authority is ACME-only; no invented EC SCEP readiness |
+| Native RADIUS readiness | Authenticated Status-Server plus protected policy readiness → `cloud8021x.backend.up` | Gauge 0/1, `component:freeradius`; failures are unhealthy, unknown observations omitted |
+| Native request/error counters | Existing authenticated native status probe → `cloud8021x.radius.<name>` | Monotonic cumulative OTLP counters, `{packet}`, `component:freeradius`; Datadog `.as_rate()`, requests/min multiplies by 60 |
+| Native queue depth | Same probe → `cloud8021x.radius.queue_len_auth/acct/internal` | Gauge `{packet}`, max by physical host, no rate conversion or missing→zero fallback |
+| CA issuance/KMS | Generated Agent OpenMetrics instances on loopback 9090/9091 | Native `smallstep.x509.signed.count`, `.x509.webhook_authorized.count`, `.kms.signed.count`, `.kms.errors.count`, plus uptime gauge seconds. `service:smallstep-ca,ca_instance:ec/rsa`; preserve native provisioner/success labels |
+| CA health | Generated Agent HTTP checks on verified TLS 8443/8444 | `http.can_connect`; `service:smallstep-ca`, `ca_instance:ec/rsa`, normalized `instance:stepca_health/stepca_rsa_health` |
+| CA process / RADIUS uptime | Generated Agent process checks | `process.up{process:step-ca,service:smallstep-ca}`; `system.processes.run_time.max{process_name:freeradius}` seconds, dashboard divides by 3600 |
+
+The client-expiry count covers recently authenticated clients (serial ACME, BYOD and Windows), not the full issued certificate population or offline clients. Verified TLS observations provide certificate identity and expiry without granting application access to either CA database.
+
+The eight retained native counter basenames are `total_access_requests`, `total_access_challenges`, `total_acct_requests`, `total_acct_responses`, `total_auth_duplicate_requests`, `total_auth_malformed_requests`, `total_auth_invalid_requests`, and `total_auth_dropped_requests`. The native producer establishes a baseline, accumulates observed deltas, and restarts its baseline on native restart/decrease; it does not turn reset values into spikes. Missing, unauthenticated or duplicate statistics do not become fabricated zero observations. EAP business accepts/rejects and verified identities remain log-derived; these packet counters are not successful authentication totals.
+
+Generated HTTP checks verify the original CA trust and DNS Host identity over loopback, refuse redirects and require successful health content. The Agent normalizes hyphens in HTTP instance names to underscores. Native OpenMetrics counters use the Agent's `.count` translation; neutral Go counters do not inherit that suffix. Process integration runtime is seconds, not days/hours.
+
+The explicit `datadog_observability_hosts` set scopes metric/log monitors, host selectors and individual dashboard health cards. Existing service-check monitors retain their remote IDs and separate `host` groups; their exact service/instance/process tags discover the broader staged/rollback cohort because Datadog include tags use AND. Do not combine two host includes or interpret blue success as green success. Retire old groups deliberately. See the [separate ownership/admission workflow](../../terraform/observability/README.md).
+
+`tests/test_green_monitoring.py` compares retained queries to actual runtime-exported SDK names/units/attributes and clean-node Agent YAML when `C8021X_MONITORING_CONTRACT` points at the owned fixture output. The runtime owner's shipped-Agent/native fixtures establish local native collection. Infrastructure checks do not call Datadog, mutate monitors, refresh live state, or replace later no-data/routing/ingestion acceptance.

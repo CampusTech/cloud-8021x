@@ -27,7 +27,7 @@ class DashboardTelemetryTests(unittest.TestCase):
         for definition in self.widgets.values():
             for request in definition.get('requests', []):
                 for query in request.get('queries', []):
-                    if query.get('data_source') == 'metrics' and ':freeradius.' in query.get('query', ''):
+                    if query.get('data_source') == 'metrics' and ':cloud8021x.radius.' in query.get('query', ''):
                         with self.subTest(widget=definition.get('title'), query=query['query']):
                             self.assertIn('host:radius-primary', query['query'])
                             self.assertIn('host:radius-secondary', query['query'])
@@ -67,8 +67,8 @@ class DashboardTelemetryTests(unittest.TestCase):
     def test_packet_activity_uses_real_request_counters(self):
         widget=next(w for title,w in self.widgets.items() if title and ('Packets Per Second' in title or 'requests / sec' in title))
         queries=[q['query'] for r in widget['requests'] for q in r['queries']]
-        self.assertTrue(any('total_access_requests.count' in q for q in queries))
-        self.assertTrue(any('total_acct_requests.count' in q for q in queries))
+        self.assertTrue(any('cloud8021x.radius.total_access_requests' in q for q in queries))
+        self.assertTrue(any('cloud8021x.radius.total_acct_requests' in q for q in queries))
         for query in queries:
             self.assertNotIn('queue_pps',query)
             self.assertIn('.as_rate()',query)

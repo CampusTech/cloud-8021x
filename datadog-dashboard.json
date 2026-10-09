@@ -47,7 +47,7 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_red",
                       "value": 1
                     },
@@ -57,7 +57,7 @@
                       "value": 1
                     },
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_green",
                       "value": 2
                     }
@@ -72,7 +72,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "online",
-                      "query": "max:freeradius.up{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.fill(last,60)"
+                      "query": "max:cloud8021x.backend.up{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.fill(last,60)"
                     }
                   ],
                   "response_format": "scalar"
@@ -99,7 +99,7 @@
                 {
                   "formulas": [
                     {
-                      "formula": "(default_zero(a) + default_zero(b)) * 60"
+                      "formula": "(a) * 60"
                     }
                   ],
                   "queries": [
@@ -107,13 +107,7 @@
                       "aggregator": "avg",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "aggregator": "avg",
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_access_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "scalar"
@@ -137,7 +131,7 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": ">",
+                      "comparator": "\u003e",
                       "palette": "white_on_green",
                       "value": 0
                     }
@@ -180,7 +174,7 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": ">",
+                      "comparator": "\u003e",
                       "palette": "white_on_yellow",
                       "value": 0
                     }
@@ -224,17 +218,17 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_green",
                       "value": 99
                     },
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_yellow",
                       "value": 95
                     },
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_red",
                       "value": 95
                     }
@@ -352,19 +346,14 @@
                   "formulas": [
                     {
                       "alias": "Challenges",
-                      "formula": "default_zero(e) + default_zero(f)"
+                      "formula": "e"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "e",
-                      "query": "sum:freeradius.total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "f",
-                      "query": "sum:freeradius.freeradius_total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_access_challenges{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -485,7 +474,7 @@
           {
             "definition": {
               "background_color": "white",
-              "content": "Reject attempts include retries; affected clients count station addresses per source/site, excluding missing addresses. Private addresses may change, and blank site labels can split buckets. Open an affected-client row\u2019s \u2018View latest successful authentication\u2019 link for successes, newest first; widen the Logs window for older events. Claimed identity is unverified. Owner/device details require verified enrichment.",
+              "content": "Reject attempts include retries; affected clients count station addresses per source/site, excluding missing addresses. Private addresses may change, and blank site labels can split buckets. Open an affected-client row’s ‘View latest successful authentication’ link for successes, newest first; widen the Logs window for older events. Claimed identity is unverified. Owner/device details require verified enrichment.",
               "font_size": "14",
               "show_tick": false,
               "text_align": "left",
@@ -612,7 +601,7 @@
               "custom_links": [
                 {
                   "label": "View latest successful authentication",
-                  "link": "/logs?query=service:radius-auth (host:radius-primary OR host:radius-secondary) @event:Access-Accept {{@src_ip}} {{@calling_station}}&stream_sort=time%2Cdesc&viz=stream&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}&live=false"
+                  "link": "/logs?query=service:radius-auth (host:radius-primary OR host:radius-secondary) @event:Access-Accept {{@src_ip}} {{@calling_station}}\u0026stream_sort=time%2Cdesc\u0026viz=stream\u0026from_ts={{timestamp_start}}\u0026to_ts={{timestamp_end}}\u0026live=false"
                 }
               ],
               "has_search_bar": "always",
@@ -682,7 +671,7 @@
                   }
                 }
               ],
-              "title": "Affected clients \u2014 reject attempts (open row for latest successful auth)",
+              "title": "Affected clients — reject attempts (open row for latest successful auth)",
               "type": "query_table"
             },
             "layout": {
@@ -712,7 +701,7 @@
                 "column": "timestamp",
                 "order": "desc"
               },
-              "title": "Recent rejected clients \u2014 claimed identity is unverified",
+              "title": "Recent rejected clients — claimed identity is unverified",
               "type": "log_stream"
             },
             "layout": {
@@ -744,7 +733,7 @@
                 "column": "timestamp",
                 "order": "desc"
               },
-              "title": "Successful authentications \u2014 newest first (verified details when available)",
+              "title": "Successful authentications — newest first (verified details when available)",
               "type": "log_stream"
             },
             "layout": {
@@ -1383,7 +1372,7 @@
                   "response_format": "scalar"
                 }
               ],
-              "title": "Top authenticators \u2014 successful auth",
+              "title": "Top authenticators — successful auth",
               "type": "sunburst"
             },
             "layout": {
@@ -1411,7 +1400,7 @@
           {
             "definition": {
               "background_color": "white",
-              "content": "**Usage:** Upload/download are from the device\u2019s perspective. Totals include ongoing sessions and deduplicate reports. Totals follow the network\u2019s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. Usage requires an enabled collector.",
+              "content": "**Usage:** Upload/download are from the device’s perspective. The shared PostgreSQL ledger deduplicates accounting reports and is authoritative for exact totals. These dashboard totals are observed telemetry: downstream at-least-once delivery can duplicate intervals, and stable IDs do not deduplicate sums. Totals follow the network’s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. The Go daemon emits committed PostgreSQL intervals through the local durable OTLP collector.",
               "font_size": "14",
               "show_tick": false,
               "text_align": "left",
@@ -1470,7 +1459,7 @@
                   "response_format": "scalar"
                 }
               ],
-              "title": "Observed traffic \u2014 Upload (GiB)",
+              "title": "Observed traffic — Upload (GiB)",
               "type": "query_value"
             },
             "layout": {
@@ -1526,7 +1515,7 @@
                   "response_format": "scalar"
                 }
               ],
-              "title": "Observed traffic \u2014 Download (GiB)",
+              "title": "Observed traffic — Download (GiB)",
               "type": "query_value"
             },
             "layout": {
@@ -1582,7 +1571,7 @@
                   "response_format": "scalar"
                 }
               ],
-              "title": "Observed traffic \u2014 Total (GiB)",
+              "title": "Observed traffic — Total (GiB)",
               "type": "query_value"
             },
             "layout": {
@@ -1624,7 +1613,7 @@
               "time": {
                 "live_span": "1h"
               },
-              "title": "All sites \u2014 Accounting events (1h)",
+              "title": "All sites — Accounting events (1h)",
               "type": "query_value"
             },
             "layout": {
@@ -1666,7 +1655,7 @@
               "time": {
                 "live_span": "1h"
               },
-              "title": "All sites \u2014 Usage intervals (1h)",
+              "title": "All sites — Usage intervals (1h)",
               "type": "query_value"
             },
             "layout": {
@@ -1767,7 +1756,7 @@
               "time": {
                 "live_span": "30m"
               },
-              "title": "Measured client coverage \u2014 last 30m",
+              "title": "Measured client coverage — last 30m",
               "type": "query_table"
             },
             "layout": {
@@ -2280,7 +2269,7 @@
               "time": {
                 "live_span": "30m"
               },
-              "title": "Cumulative session counters \u2014 reported in last 30m (GiB)",
+              "title": "Cumulative session counters — reported in last 30m (GiB)",
               "type": "query_table"
             },
             "layout": {
@@ -2426,7 +2415,7 @@
               "time": {
                 "live_span": "30m"
               },
-              "title": "Reported interval throughput by client \u2014 last 30m (Mbps)",
+              "title": "Reported interval throughput by client — last 30m (Mbps)",
               "type": "query_table"
             },
             "layout": {
@@ -2543,19 +2532,14 @@
                   "formulas": [
                     {
                       "alias": "Requests",
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "formula": "a"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_acct_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -2568,19 +2552,14 @@
                   "formulas": [
                     {
                       "alias": "Responses",
-                      "formula": "default_zero(c) + default_zero(d)"
+                      "formula": "c"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "c",
-                      "query": "sum:freeradius.total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "sum:freeradius.freeradius_total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_acct_responses{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -2872,7 +2851,7 @@
                     {
                       "data_source": "metrics",
                       "name": "depth",
-                      "query": "max:freeradius.queue_len_acct{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                      "query": "max:cloud8021x.radius.queue_len_acct{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -2889,7 +2868,7 @@
                     {
                       "data_source": "metrics",
                       "name": "depth",
-                      "query": "max:freeradius.queue_len_auth{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                      "query": "max:cloud8021x.radius.queue_len_auth{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -2906,7 +2885,7 @@
                     {
                       "data_source": "metrics",
                       "name": "depth",
-                      "query": "max:freeradius.queue_len_internal{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                      "query": "max:cloud8021x.radius.queue_len_internal{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -2938,7 +2917,7 @@
                     {
                       "data_source": "metrics",
                       "name": "requests",
-                      "query": "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_access_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -2955,7 +2934,7 @@
                     {
                       "data_source": "metrics",
                       "name": "requests",
-                      "query": "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_acct_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -2980,19 +2959,14 @@
                   "formulas": [
                     {
                       "alias": "Malformed",
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "formula": "a"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "sum:freeradius.freeradius_total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_auth_malformed_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -3005,19 +2979,14 @@
                   "formulas": [
                     {
                       "alias": "Invalid",
-                      "formula": "default_zero(c) + default_zero(d)"
+                      "formula": "c"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "c",
-                      "query": "sum:freeradius.total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "sum:freeradius.freeradius_total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_auth_invalid_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -3030,19 +2999,14 @@
                   "formulas": [
                     {
                       "alias": "Dropped",
-                      "formula": "default_zero(e) + default_zero(f)"
+                      "formula": "e"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "e",
-                      "query": "sum:freeradius.total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "f",
-                      "query": "sum:freeradius.freeradius_total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_auth_dropped_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -3055,19 +3019,14 @@
                   "formulas": [
                     {
                       "alias": "Duplicate",
-                      "formula": "default_zero(g) + default_zero(h)"
+                      "formula": "g"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
                       "name": "g",
-                      "query": "sum:freeradius.total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "h",
-                      "query": "sum:freeradius.freeradius_total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                      "query": "sum:cloud8021x.radius.total_auth_duplicate_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",

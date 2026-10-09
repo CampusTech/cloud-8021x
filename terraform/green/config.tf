@@ -26,6 +26,8 @@ locals {
 
     }
     database = merge(local.base.database, {
+      max_connections        = var.application_capacity.runtime_connections_per_node
+      min_connections        = 0
       name                   = "cloud8021x_${replace(local.name, "-", "_")}"
       ca_file                = "/etc/cloud-8021x/postgres-ca.pem"
       tls_mode               = "cloudsql-instance-ca"
@@ -64,6 +66,10 @@ locals {
 resource "terraform_data" "configuration" {
   input = { for role in keys(var.nodes) : role => sha256(local.config[role]) }
   lifecycle {
+    precondition {
+      condition     = try(local.base.database.max_connections, 8) == var.application_capacity.runtime_connections_per_node && try(local.base.database.min_connections, 0) == 0 && alltrue([for yaml in values(local.config) : yamldecode(yaml).database.max_connections == var.application_capacity.runtime_connections_per_node && yamldecode(yaml).database.min_connections == 0])
+      error_message = "Both rendered configurations and the base YAML must match the provisioned aggregate runtime budget, with min_connections=0."
+    }
     precondition {
       condition     = alltrue([for validation in data.external.strict_config : validation.result.validated == "true"])
       error_message = "Both serialized configurations must pass the strict Go validator before any compute publication."

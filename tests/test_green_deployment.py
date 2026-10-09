@@ -92,6 +92,55 @@ class ActualTerraformContract(unittest.TestCase):
                 self.assertNotIn('unknown_injected_field', checked.stdout+checked.stderr)
 
 
+    def test_nondefault_private_capacity_matches_both_actual_configs(self):
+        import tempfile
+        result = self.subprocess.run(['terraform', '-chdir=' + str(ROOT / 'terraform/private-green'), 'test', '-json', '-verbose'], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        plans = [self.json.loads(line) for line in result.stdout.splitlines()]
+        private = next(event['test_plan'] for event in plans if event.get('type') == 'test_plan' and event['@testrun'] == 'nondefault_aggregate_runtime_capacity')
+        capacity = private['output_changes']['application_capacity']['after']
+        prerequisite = private['output_changes']['ca_acl_review_input']['after']
+        self.assertEqual(capacity['runtime_connections_per_node'], 12)
+        self.assertEqual(prerequisite['runtime_limit'], 24)
+        self.assertEqual(prerequisite['native_limit'], 4)
+        self.assertEqual(prerequisite['migration_limit'], 24)
+        self.assertEqual(prerequisite['reserved_connections'], 60)
+        with tempfile.TemporaryDirectory(prefix='cloud8021x-capacity-pair-') as directory:
+            values = self.json.loads((self.module / 'tests/fixtures/fixture.tfvars.json').read_text())
+            base = pathlib.Path(directory) / 'base.yaml'
+            base.write_text((ROOT / 'examples/cloud-8021x-green.yaml').read_text().replace('max_connections: 8', 'max_connections: 12'))
+            values.update(application_capacity=capacity, base_config_file=str(base))
+            inputs = pathlib.Path(directory) / 'fixture.tfvars.json'
+            inputs.write_text(self.json.dumps(values))
+            result = self.subprocess.run(['terraform', '-chdir=' + str(self.module), 'test', '-var-file=' + str(inputs), '-json', '-verbose'], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            events = [self.json.loads(line) for line in result.stdout.splitlines()]
+            plan = next(event['test_plan'] for event in events if event.get('type') == 'test_plan' and event['@testrun'] == 'new_green_plan')
+            configs = plan['output_changes']['rendered_config']['after']
+            self.assertEqual(set(configs), {'primary', 'secondary'})
+            validator = pathlib.Path(directory) / 'cloud-8021x'
+            built = self.subprocess.run(['go', 'build', '-o', str(validator), './cmd/cloud-8021x'], cwd=ROOT, text=True, capture_output=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            for role, config in configs.items():
+                self.assertIn('"max_connections": 12', config)
+                self.assertIn('"min_connections": 0', config)
+                config_file = pathlib.Path(directory) / (role + '.yaml')
+                config_file.write_text(config)
+                checked = self.subprocess.run([str(validator), 'config', 'validate', '--config', str(config_file)], text=True, capture_output=True)
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+    def test_provisioned_capacity_mismatch_refused(self):
+        import tempfile
+        values = self.json.loads((self.module / 'tests/fixtures/fixture.tfvars.json').read_text())
+        values['application_capacity'] = {'deployment_id': 'green-test', 'runtime_connections_per_node': 12,
+                                          'runtime_role_limit': 24, 'native_role_limit': 4, 'migration_role_limit': 24}
+        with tempfile.TemporaryDirectory(prefix='cloud8021x-green-capacity-') as directory:
+            path = pathlib.Path(directory) / 'capacity.tfvars.json'
+            path.write_text(self.json.dumps(values))
+            result = self.subprocess.run(['terraform', '-chdir=' + str(self.module), 'test', '-var-file=' + str(path), '-no-color'], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, 'Provisioned budget differs from the rendered application but plan succeeded')
+            self.assertIn('aggregate runtime budget', result.stdout + result.stderr)
+
     def test_tampered_artifact_pin_refused(self):
         import tempfile
         values = self.json.loads((self.module / 'tests/fixtures/fixture.tfvars.json').read_text())

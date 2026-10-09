@@ -187,6 +187,10 @@ reviewed retention/recovery command; explicit republishing must disclose possibl
 downstream duplicates and use separate audited evidence. Exact usage totals come
 from the shared PostgreSQL ledger, never a Datadog aggregate sum/readback.
 
+The [fresh green producer/query contract](green-producer-contract.md) lists the
+current safety, expiry, native counter and queue names, units, dimensions and
+observability-owner boundaries.
+
 ## Reproducible verification
 
 ```

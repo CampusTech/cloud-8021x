@@ -19,3 +19,4 @@ __pycache__/
 !/terraform/green/.terraform.lock.hcl
 !/terraform/private-green/.terraform.lock.hcl
 !/terraform/postgres/.terraform.lock.hcl
+!/terraform/observability/.terraform.lock.hcl

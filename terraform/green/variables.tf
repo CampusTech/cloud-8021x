@@ -135,3 +135,12 @@ variable "destination_public_keys" {
   default     = { primary = "", secondary = "" }
   description = "Authenticated green root receipt public-key pins; enroll before freezing the final pair manifest. Required by reversible handoff, not credentials."
 }
+
+variable "application_capacity" {
+  description = "Exact reviewed application_capacity output from the separate private-green state owner; never read administrator state remotely."
+  type        = object({ deployment_id = string, runtime_connections_per_node = number, runtime_role_limit = number, native_role_limit = number, migration_role_limit = number })
+  validation {
+    condition     = var.application_capacity.deployment_id == var.deployment_id && var.application_capacity.runtime_connections_per_node >= 8 && var.application_capacity.runtime_connections_per_node <= 64 && floor(var.application_capacity.runtime_connections_per_node) == var.application_capacity.runtime_connections_per_node && var.application_capacity.runtime_role_limit == 2 * var.application_capacity.runtime_connections_per_node && var.application_capacity.native_role_limit == 4 && var.application_capacity.migration_role_limit == 2 * var.application_capacity.runtime_connections_per_node
+    error_message = "The aggregate runtime budget must belong to this deployment and match the pair-wide runtime/native/migration role limits."
+  }
+}

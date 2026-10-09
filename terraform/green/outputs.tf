@@ -17,3 +17,8 @@ output "backend_switch" {
 output "ownership" {
   value = { deployment = local.name, source = var.blue, collection_epoch = var.collection_epoch, service_account = google_service_account.green.email, application_database = "cloud8021x_${replace(local.name, "-", "_")}" }
 }
+
+output "observability_handoff" {
+  description = "Exact green physical host admission input for the separately approved Datadog-only owner. Does not alter blue dashboards or traffic."
+  value       = { deployment_id = local.name, datadog_observability_hosts = sort([for yaml in values(local.config) : yamldecode(yaml).hostname]) }
+}

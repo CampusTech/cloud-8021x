@@ -29,11 +29,12 @@ variable "cloud_sql_instance" {
   default = ""
 }
 variable "runtime_connections_per_node" {
-  type    = number
-  default = 8
+  description = "Aggregate budget across accounting/export/auth/certificate/observation pools on each node, not an individual pool cap."
+  type        = number
+  default     = 8
   validation {
-    condition     = var.runtime_connections_per_node >= 1 && var.runtime_connections_per_node <= 64
-    error_message = "Runtime pool capacity must match both daemon configurations."
+    condition     = var.runtime_connections_per_node >= 8 && var.runtime_connections_per_node <= 64 && floor(var.runtime_connections_per_node) == var.runtime_connections_per_node
+    error_message = "Aggregate runtime capacity must be an integer 8..64 matching both daemon configurations (min_connections=0)."
   }
 }
 variable "reserved_ca_connections" {

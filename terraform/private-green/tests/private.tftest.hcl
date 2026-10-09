@@ -9,9 +9,10 @@ mock_provider "external" {
   mock_data "external" { defaults = { result = { verified = "true" } } }
 }
 variables {
-  project_id            = "campus-example"
-  deployment_id         = "green-test"
-  inherited_ca_password = { secret_id = "smallstep-db-password", version = "17" }
+  runtime_connections_per_node = 8
+  project_id                   = "campus-example"
+  deployment_id                = "green-test"
+  inherited_ca_password        = { secret_id = "smallstep-db-password", version = "17" }
   private_administrator = {
     host               = "10.0.2.2", port = 5432, administrator = "private-admin", admin_tool = "/bin/false",
     ca_file            = "tests/fixtures/ca.pem", ca_pem_sha256 = filesha256("tests/fixtures/ca.pem"),
@@ -53,4 +54,13 @@ run "refuse_nonlegacy_database_port" {
     }
   }
   expect_failures = [google_secret_manager_secret_version.ca_dsn]
+}
+
+run "nondefault_aggregate_runtime_capacity" {
+  command = plan
+  variables { runtime_connections_per_node = 12 }
+  assert {
+    condition     = output.application_identity.roles.runtime.connections == 24 && output.application_identity.roles.native.connections == 4 && output.application_identity.roles.migration.connections == 24
+    error_message = "The exact per-node aggregate runtime budget must reach the pair role and capacity prerequisite while retaining native/migration reservations."
+  }
 }

@@ -38,7 +38,7 @@ protected encrypted backend for real operation.
    The application release builder does not include this administrator tool.
 3. Supply this root's declared variables through protected `.tfvars` or runner
    inputs: connection/CA identity, absolute helper path, three application
-   passwords, both daemon pool bounds, reviewed CA capacity reservation, exact
+   passwords, the matching aggregate runtime budget per node, reviewed CA capacity reservation, exact
    original owners/ACLs for **both** `stepca` and `stepca_rsa`, and the complete
    explicitly approved existing CA client access list. A grant record contains
    `grantor`, `role`, `privilege` (`CONNECT`, `TEMPORARY`, `CREATE`) and `grantable`.
@@ -57,7 +57,18 @@ protected encrypted backend for real operation.
    Run the protected Go migration/bootstrap flow; Terraform does not manage the
    daemon ledger tables or mutate CA data.
 
-The module's capacity calculation reserves two complete runtime pools and two
+`runtime_connections_per_node` is an integer 8..64 aggregate budget, matching
+`database.max_connections` on both daemons; `min_connections` must be zero.
+Each node reserves auth intake1, certificate work2 and observations1; accounting
+gets floor((budget-4)/2), and export gets the remainder. The production pool
+constructors and per-class process locks enforce these caps; concurrent periodic
+and operator observers cannot create a second observation pool. Default8 means
+2 accounting +2 export +1 auth +2 certificate +1 observation, not four pools of8.
+Private-green exposes the exact deployment-bound `application_capacity` output;
+green compute refuses a mismatched base YAML and renders matching values in both
+configs. Disabled certificate work leaves its reservation unused, not borrowed.
+
+The module's capacity calculation reserves two aggregate runtime budgets and two
 complete protected migration pools at the configured per-node maximum, plus
 four native SQL connections (the native template has max2 per node). The
 explicit `reserved_ca_connections` includes existing CA demand, other approved
