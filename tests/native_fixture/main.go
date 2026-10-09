@@ -2,8 +2,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -31,6 +33,27 @@ func main() {
 			return e
 		}
 		switch args[0] {
+		case "issuers":
+			return json.NewEncoder(os.Stdout).Encode(fixtureCertificateIssuers(cfg))
+		case "observe-expiry":
+			dsn, err := os.ReadFile(cfg.Database.RuntimeDSN.File)
+			if err != nil {
+				return err
+			}
+			s, err := postgres.New(context.Background(), string(dsn), cfg.Database)
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			n, err := s.ObserveClientExpiry(context.Background(), time.Now().UTC())
+			result := struct {
+				Available bool `json:"available"`
+				Count     *int `json:"count,omitempty"`
+			}{Available: err == nil}
+			if err == nil {
+				result.Count = &n
+			}
+			return json.NewEncoder(os.Stdout).Encode(result)
 		case "sudoers-render":
 			files, err := systemd.Render()
 			if err != nil {
@@ -149,7 +172,7 @@ func main() {
 			if e != nil {
 				return e
 			}
-			reader, e := auth.New(auth.Options{Directory: cfg.Paths.AuthLogDir, Host: cfg.Hostname, ProducerUID: uid, EventGID: gid, Store: s, Enrich: auth.InventoryEnricher(key, service.Snapshots(), cfg.Policy.InventoryMaxAge)})
+			reader, e := auth.New(auth.Options{Directory: cfg.Paths.AuthLogDir, Host: cfg.Hostname, ProducerUID: uid, EventGID: gid, Store: s, Enrich: auth.WithCertificateExpiry(auth.InventoryEnricher(key, service.Snapshots(), cfg.Policy.InventoryMaxAge), fixtureCertificateIssuers(cfg))})
 			if e != nil {
 				return e
 			}
@@ -163,4 +186,49 @@ func main() {
 	if e := cmd.Execute(); e != nil {
 		logrus.WithError(e).Fatal("native fixture failed")
 	}
+}
+
+// The ordinary synthetic CA represents both Wi-Fi CA slots, so its shared DN
+// is "wifi", never a guessed EC/RSA distinction. The separate attested fixture
+// CA is EC. Names come from the same public-certificate API as the daemon.
+func fixtureCertificateIssuers(cfg config.Config) map[string]string {
+	var attestedDER []byte
+	if cfg.Policy.AttestedACME.Enabled {
+		raw, err := os.ReadFile(cfg.Policy.AttestedACME.IssuerFile)
+		if err != nil {
+			return nil
+		}
+		block, _ := pem.Decode(raw)
+		if block == nil {
+			return nil
+		}
+		attestedDER = block.Bytes
+	}
+	result := map[string]string{}
+	for _, path := range cfg.CA.RootFiles {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for len(bytes.TrimSpace(raw)) > 0 {
+			block, rest := pem.Decode(raw)
+			if block == nil {
+				return nil
+			}
+			raw = rest
+			name, err := auth.NativeIssuerName(pem.EncodeToMemory(block))
+			if err != nil {
+				return nil
+			}
+			ca := "wifi"
+			if bytes.Equal(block.Bytes, attestedDER) {
+				ca = "ec"
+			}
+			if previous, exists := result[name]; exists && previous != ca {
+				ca = "wifi"
+			}
+			result[name] = ca
+		}
+	}
+	return result
 }

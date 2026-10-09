@@ -265,7 +265,8 @@ def attested_test():
     try:
         run('/task6-native-fixture','render',str(CFG));log=open(ROOT/'attested-policy.log','w');app=subprocess.Popen(['runuser','-u','cloud8021x','--','/task6-native-fixture','serve',str(CFG)],stdout=log,stderr=subprocess.STDOUT);time.sleep(.4)
         radius=start_radius()
-        authenticate('attested-ACME',certificate='attested')
+        accepted=authenticate('attested-ACME',certificate='attested')
+        assert_certificate_observation(accepted,'attested','ec')
         authenticate('attested-wrong-provisioner-type',certificate='attested-wrong',expected=None)
     finally:
         if radius and radius.poll() is None:radius.terminate();radius.wait(timeout=3)
@@ -410,7 +411,69 @@ def authenticate(name, expected=200, certificate='personal', ports=(19,), remove
         # Keep the exact occurrence count independent of native list expansion.
         assert 0<new_context.count('\tC8021X-Port-Type = ')<=len(ports),('lost final port context',name)
     print('PASS EAP',name,flush=True)
-    return {'classes':attrs.get(25,[]),'station':station}
+    return {'classes':attrs.get(25,[]),'station':station,'auth_context':new_context}
+
+def auth_outbox():
+    return postgres_json("SELECT coalesce(json_agg(json_build_object('id',id,'payload',payload) ORDER BY id),'[]') FROM ledger.work WHERE kind='outbox' AND id LIKE 'auth:%';")
+
+def ingest_auth():
+    return json.loads(run('runuser','-u','cloud8021x','--','/task6-native-fixture','ingest',str(CFG)).stdout)
+
+def observed_expiry():
+    return json.loads(run('runuser','-u','cloud8021x','--','/task6-native-fixture','observe-expiry',str(CFG)).stdout)
+
+def assert_certificate_observation(accepted,certificate,ca):
+    """Native EAP fields must survive the real reader and runtime-role ledger."""
+    context=accepted['auth_context']
+    end=run('openssl','x509','-in',str(CERT/(certificate+'.pem')),'-noout','-enddate').stdout.strip().split('=',1)[1]
+    expires=int(ssl.cert_time_to_seconds(end))
+    native_expiry=time.strftime('%y%m%d%H%M%SZ',time.gmtime(expires))
+    assert re.findall(r'^\tC8021X-Cert-Expiration = "([^"]*)"$',context,re.M)==[native_expiry],('native expiry propagation',certificate,context)
+    issuer=re.findall(r'^\tC8021X-Cert-Issuer = "([^"]*)"$',context,re.M)
+    trusted=json.loads(run('/task6-native-fixture','issuers',str(CFG)).stdout)
+    assert len(issuer)==1 and trusted.get(issuer[0])==ca,('actual public issuer classification',certificate,issuer,trusted)
+    fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert((CERT/(certificate+'.pem')).read_text())).hexdigest()
+    before={row['id'] for row in auth_outbox()}
+    assert ingest_auth()>0,'native final-auth stream did not ingest'
+    rows=auth_outbox()
+    matching=[row['payload'] for row in rows if row['id'] not in before and row['payload']['event']=='Access-Accept' and row['payload']['certificate_fingerprint']==fingerprint]
+    assert len(matching)==1,('accepted fingerprint observation missing or duplicated',certificate,matching)
+    payload=matching[0]
+    assert payload['device_id']=='fixture:1' and payload['vlan_id']=='200',('expiry changed verified attribution',payload)
+    assert payload['certificate_observation']=={'expires_at':expires,'ca_instance':ca},('persisted native expiry differs',payload)
+    for row in rows:
+        serialized=json.dumps(row['payload'])
+        assert all(value not in serialized for value in ['TLS-Client-Cert-','TLS-Session-',issuer[0],native_expiry,'C8021X-Cert-','c8021x.1.']),('raw native metadata leaked into auth outbox',row['id'])
+    observation=observed_expiry()
+    assert observation=={'available':True,'count':1},('actual persisted seen-client expiry',observation)
+    print('PASS native dedicated expiry/issuer fields, verified '+certificate+' fingerprint, sanitized persisted observation and runtime-role expiry count',flush=True)
+
+def missing_expiry_test():
+    """A retained native accepted record lacking R97 fields remains unavailable."""
+    app=radius=None
+    try:
+        inventory()
+        stream=open(ROOT/'expiry-missing-policy.log','w')
+        app=subprocess.Popen(['runuser','-u','cloud8021x','--','/task6-native-fixture','serve',str(CFG)],stdout=stream,stderr=subprocess.STDOUT)
+        time.sleep(.4);radius=start_radius()
+        accepted=authenticate('expiry-missing-control')
+        assert_certificate_observation(accepted,'personal','wifi')
+        # Retain the genuine accepted record and verified Class; remove only the
+        # new optional monitoring fields to model an old final-auth stream.
+        context=re.sub(r'^\tC8021X-Cert-(?:Expiration|Issuer) = .*\n','',accepted['auth_context'],flags=re.M)
+        assert context and 'C8021X-Cert-' not in context
+        before={row['id'] for row in auth_outbox()}
+        path=AUTH/('auth-'+os.urandom(16).hex()+'-'+str(int(time.time()))+'.detail')
+        write(path,context,0o640,'freerad');shutil.chown(path,group='cloud8021x-events')
+        assert ingest_auth()==1,'retained missing-field record not ingested exactly once'
+        new=[row['payload'] for row in auth_outbox() if row['id'] not in before]
+        assert len(new)==1 and new[0]['event']=='Access-Accept' and new[0]['device_id']=='fixture:1' and new[0]['certificate_fingerprint'],new
+        assert 'certificate_observation' not in new[0],'missing native fields invented expiry'
+        assert observed_expiry()=={'available':False},'missing coverage invented zero'
+        print('PASS genuine retained accepted record without expiry preserves attribution and marks monitoring unavailable',flush=True)
+    finally:
+        if radius and radius.poll() is None:radius.terminate();radius.wait(timeout=3)
+        if app and app.poll() is None:app.terminate();app.wait(timeout=3)
 
 def accounting(name, binding=None, status=1, extra=(), expect_ack=True, omit=()):
     received_min=int(time.time())
@@ -497,6 +560,7 @@ def main():
     if sys.argv[1]=='permissions':permissions_test();return
     if sys.argv[1]=='prepare':prepare();return
     if sys.argv[1]=='attested':attested_test();return
+    if sys.argv[1]=='expiry-missing':missing_expiry_test();return
     if sys.argv[1] in ['replay','replay-duplicate']:
         replay_test(duplicate=sys.argv[1]=='replay-duplicate');return
     if sys.argv[1]=='legacy':
@@ -507,7 +571,13 @@ def main():
         app_log=open(ROOT/'legacy-policy.log','w');app=subprocess.Popen(['runuser','-u','cloud8021x','--','/task6-native-fixture','serve',str(CFG)],stdout=app_log,stderr=subprocess.STDOUT);time.sleep(.4)
         radius=start_radius()
         try:
+            before={row['id'] for row in auth_outbox()}
             inventory();authenticate('legacy-current-policy',expected=(200,None),certificate='legacy',after_accept=lambda:inventory(enrolled=False),legacy=True)
+            assert ingest_auth()>0,'legacy final-auth stream did not ingest'
+            legacy_rows=[row['payload'] for row in auth_outbox() if row['id'] not in before and row['payload']['event']=='Access-Accept']
+            assert len(legacy_rows)==1 and not legacy_rows[0]['device_id'] and not legacy_rows[0]['certificate_fingerprint'] and 'certificate_observation' not in legacy_rows[0],('legacy invented verified certificate observation',legacy_rows)
+            assert observed_expiry()=={'available':False},'legacy unbound coverage invented expiry count'
+            print('PASS legacy native auth retains missing/unavailable expiry coverage',flush=True)
         finally:
             radius.terminate();radius.wait(timeout=3);app.terminate();app.wait(timeout=3);write(CFG,original);run('/task6-native-fixture','render',str(CFG));inventory()
         return
@@ -606,6 +676,7 @@ def main():
             print('PASS database outage retains native replay files after NAS ACK',flush=True)
             return
         byod=authenticate('wireless')
+        assert_certificate_observation(byod,'personal','wifi')
         negative_certificates()
         authenticate('wrong-chain',expected=None,certificate='wrong-chain')
         authenticate('expired-leaf',expected=None,certificate='expired')
