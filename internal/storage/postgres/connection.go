@@ -36,6 +36,20 @@ func tlsConfig(c config.Database, host string) (*tls.Config, error) {
 	if err != nil {
 		return nil, errors.New("database CA unavailable")
 	}
+	return tlsConfigFromPEM(c, host, data)
+}
+
+func tlsConfigFromPEM(c config.Database, host string, data []byte) (*tls.Config, error) {
+	if len(data) == 0 || len(data) > 1<<20 {
+		return nil, errors.New("invalid database CA size")
+	}
+	if c.InstanceCAPEMSHA256 != "" {
+		pin, err := hex.DecodeString(c.InstanceCAPEMSHA256)
+		sum := sha256.Sum256(data)
+		if err != nil || len(pin) != 32 || !strings.EqualFold(hex.EncodeToString(sum[:]), c.InstanceCAPEMSHA256) {
+			return nil, errors.New("database instance CA pin mismatch")
+		}
+	}
 	roots := x509.NewCertPool()
 	if c.TLSMode == "verify-full" {
 		if !roots.AppendCertsFromPEM(data) || host == "" {

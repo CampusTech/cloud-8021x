@@ -37,3 +37,22 @@ func TestCredentialCacheRejectsUnboundOrAlteredSets(t *testing.T) {
 		t.Fatal("trailing object accepted")
 	}
 }
+
+func TestCredentialTrustBindingVersionIsRequiredForNewDocuments(t *testing.T) {
+	files := []File{{Path: "/run/cloud-8021x/credentials/policy", Data: []byte("policy"), UID: 1001, GID: 1001, Mode: 0600}}
+	cache := credentialCache{TrustBindingVersion: 1, Reference: strings.Repeat("a", 32), Files: files, Bindings: map[string]string{"/usr/local/bin/cloud-8021x": strings.Repeat("a", 64), "/etc/cloud-8021x/config.yaml": strings.Repeat("b", 64), radiusDirectory + "/radiusd.conf": strings.Repeat("c", 64)}}
+	raw, _ := json.Marshal(cache)
+	if _, err := decodeCredentialCache(raw, files); err == nil {
+		t.Fatal("new credential cache accepts absent database CA binding")
+	}
+	cache.Bindings[PostgresCAFile] = strings.Repeat("d", 64)
+	raw, _ = json.Marshal(cache)
+	if _, err := decodeCredentialCache(raw, files); err != nil {
+		t.Fatal(err)
+	}
+	cache.TrustBindingVersion = 2
+	raw, _ = json.Marshal(cache)
+	if _, err := decodeCredentialCache(raw, files); err == nil {
+		t.Fatal("unknown trust binding schema accepted")
+	}
+}

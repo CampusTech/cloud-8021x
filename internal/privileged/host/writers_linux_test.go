@@ -127,7 +127,7 @@ func TestInstalledLegacyWriterFenceRetainsAndRestoresExactFiles(t *testing.T) {
 		t.Fatal(e)
 	}
 	tree := map[string][]byte{"radiusd.conf": []byte("new-native")}
-	files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("new-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("new-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("pinned"), Mode: 0600}}
+	files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("new-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("new-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("pinned"), Mode: 0600}, {Path: PostgresCAFile, Data: []byte("old-database-trust"), Mode: 0644}}
 	cache, e := tx.CredentialCacheFiles(files, tree)
 	if e != nil {
 		t.Fatal(e)

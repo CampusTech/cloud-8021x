@@ -31,6 +31,22 @@ func TestNativeConninfoPreservesVerifiedTLSAndIgnoresDSNOverrides(t *testing.T) 
 	if e = os.WriteFile(c.CAFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); e != nil {
 		t.Fatal(e)
 	}
+	t.Run("incoming-public-trust-before-installed-file", func(t *testing.T) {
+		incoming := c
+		incoming.CAFile = "/etc/cloud-8021x/postgres-ca.pem"
+		incoming.InstanceCAPEMSHA256 = pinFile(t, c.CAFile)
+		ca, err := os.ReadFile(c.CAFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := NativeConninfoWithCA("postgres://native:fixture@localhost/cloud8021x", incoming, ca)
+		if err != nil || !strings.Contains(conn, "sslrootcert='/etc/cloud-8021x/postgres-ca.pem'") {
+			t.Fatal("incoming trust validation did not retain installed path", err)
+		}
+		if _, err := NativeConninfoWithCA("postgres://native:fixture@localhost/cloud8021x", incoming, append(ca, '\n')); err == nil {
+			t.Fatal("changed incoming trust accepted")
+		}
+	})
 	dsn := `host=localhost port=5432 dbname=cloud8021x user=native password='quote\'slash\\' sslmode=disable options='-c synchronous_commit=off' connect_timeout=999`
 	rendered, e := NativeConninfo(dsn, c)
 	if e != nil {

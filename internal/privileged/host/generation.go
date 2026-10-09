@@ -15,7 +15,11 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/config"
 )
 
-type installedGeneration struct{ Reference, ApplicationSHA256, ConfigSHA256 string }
+type installedGeneration struct {
+	Reference, ApplicationSHA256, ConfigSHA256 string
+	TrustBindingVersion                        int    `json:"trust_binding_version,omitempty"`
+	PostgresCASHA256                           string `json:"postgres_ca_sha256,omitempty"`
+}
 
 func installedHash(path string, maximum int64) (string, error) {
 	f, err := rootFile(path, maximum)
@@ -44,7 +48,7 @@ func KnownInstallation() (bool, error) {
 	var generation installedGeneration
 	decoder := json.NewDecoder(f)
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&generation) != nil || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(generation.Reference) {
+	if decoder.Decode(&generation) != nil || decoder.Decode(new(any)) != io.EOF || (generation.TrustBindingVersion != 0 && generation.TrustBindingVersion != 1) || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(generation.Reference) {
 		return false, errors.New("installed generation record rejected")
 	}
 	binary, err := installedHash("/usr/local/bin/cloud-8021x", 256<<20)
@@ -57,6 +61,14 @@ func KnownInstallation() (bool, error) {
 	}
 	if binary != generation.ApplicationSHA256 || cfg != generation.ConfigSHA256 {
 		return false, errors.New("active installation differs from completed generation")
+	}
+	if generation.TrustBindingVersion == 1 {
+		ca, err := installedHash(PostgresCAFile, 1<<20)
+		if err != nil || ca != generation.PostgresCASHA256 {
+			return false, errors.New("active database trust differs from completed generation")
+		}
+	} else if generation.PostgresCASHA256 != "" {
+		return false, errors.New("ambiguous historical database trust binding")
 	}
 	return true, nil
 }
@@ -75,7 +87,11 @@ func (t *Transaction) completeInstalled(publish func(string) error) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(installedGeneration{t.receipt.ID, binary, cfg})
+	ca, err := installedHash(PostgresCAFile, 1<<20)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(installedGeneration{Reference: t.receipt.ID, ApplicationSHA256: binary, ConfigSHA256: cfg, TrustBindingVersion: 1, PostgresCASHA256: ca})
 	if err != nil {
 		return err
 	}

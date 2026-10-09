@@ -17,11 +17,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CampusTech/cloud-8021x/internal/config"
 	"golang.org/x/sys/unix"
 )
 
 const ArtifactDirectory = "/var/cache/cloud-8021x/artifacts"
 const ArtifactManifest = ArtifactDirectory + "/manifest.json"
+const PostgresCAFile = "/etc/cloud-8021x/postgres-ca.pem"
+const IncomingPostgresCAFile = ArtifactDirectory + "/postgres-ca.pem"
 const maxArchiveBytes int64 = 1 << 30
 
 // Preserve the previous twelve-archive aggregate ceiling while allowing a bounded closure.
@@ -44,6 +47,7 @@ type Artifact struct {
 	SHA256       string `json:"sha256"`
 }
 type Manifest struct {
+	PostgresCASHA256   string     `json:"postgres_ca_sha256"`
 	CollectorSHA256    string     `json:"collector_sha256"`
 	ApplicationVersion string     `json:"application_version"`
 	ApplicationSHA256  string     `json:"application_sha256"`
@@ -58,7 +62,7 @@ func radiusPackage(name string) bool {
 }
 func (a Artifact) filename() string { return a.Name + "_" + a.Version + "_" + a.Architecture + ".deb" }
 func (m Manifest) Validate(arch string) error {
-	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.CollectorSHA256) || m.Schema != 1 || (arch != "amd64" && arch != "arm64") || m.Architecture != arch || (len(m.Artifacts) < len(requiredArtifacts) || len(m.Artifacts) > maxForwardArtifacts) {
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.PostgresCASHA256) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.CollectorSHA256) || m.Schema != 1 || (arch != "amd64" && arch != "arm64") || m.Architecture != arch || (len(m.Artifacts) < len(requiredArtifacts) || len(m.Artifacts) > maxForwardArtifacts) {
 		return errors.New("unsupported or incomplete protected artifact manifest")
 	}
 	seen := map[string]bool{}
@@ -260,7 +264,7 @@ func installArtifacts(ctx context.Context, m Manifest, retained map[string]Artif
 }
 
 // IncomingFiles exposes no path selector: the verified downloader places only
-// these two fixed incoming artifacts. Go backs up the actual active files inside
+// these three fixed incoming artifacts. Go backs up the actual active files inside
 // its maintenance transaction before publishing either incoming file.
 func IncomingFiles() ([]File, error) {
 	manifest, e := LoadManifest()
@@ -278,6 +282,7 @@ func IncomingFiles() ([]File, error) {
 	}{
 		{ArtifactDirectory + "/cloud-8021x", "/usr/local/bin/cloud-8021x", manifest.ApplicationSHA256, 0755, 256 << 20},
 		{ArtifactDirectory + "/config.yaml", "/etc/cloud-8021x/config.yaml", manifest.ConfigSHA256, 0644, 1 << 20},
+		{IncomingPostgresCAFile, PostgresCAFile, manifest.PostgresCASHA256, 0644, 1 << 20},
 	} {
 		if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(item.hash) {
 			return nil, errors.New("mandatory incoming checksum missing")
@@ -298,4 +303,27 @@ func IncomingFiles() ([]File, error) {
 		files = append(files, File{Path: item.target, Data: data, Mode: item.mode})
 	}
 	return files, nil
+}
+
+// IncomingDatabase changes only a copied prepublication connection config. The
+// installed config and native connection strings keep the fixed installed path.
+func IncomingDatabase(c config.Database) (config.Database, []byte, error) {
+	manifest, err := LoadManifest()
+	if err != nil {
+		return c, nil, err
+	}
+	if c.CAFile != PostgresCAFile || c.InstanceCAPEMSHA256 != manifest.PostgresCASHA256 {
+		return c, nil, errors.New("incoming database CA differs from configured trust pin")
+	}
+	file, err := rootFile(IncomingPostgresCAFile, 1<<20)
+	if err != nil {
+		return c, nil, err
+	}
+	data, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil || digestBytes(data) != manifest.PostgresCASHA256 {
+		return c, nil, errors.New("incoming database CA checksum rejected")
+	}
+	c.CAFile = IncomingPostgresCAFile
+	return c, data, nil
 }

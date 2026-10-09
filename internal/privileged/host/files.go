@@ -18,6 +18,7 @@ import (
 )
 
 var fixedFiles = map[string]bool{
+	PostgresCAFile:                         true,
 	"/etc/cloud-8021x/legacy-display.json": true,
 	legacyPolicySnapshot:                   true, daemonPolicySnapshot: true,
 	"/etc/cloud-8021x/sources/clients.conf": true,

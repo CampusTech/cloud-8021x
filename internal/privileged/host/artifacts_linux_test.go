@@ -5,6 +5,8 @@ import (
 	"os"
 	"runtime"
 	"testing"
+
+	"github.com/CampusTech/cloud-8021x/internal/config"
 )
 
 func TestInstalledArtifactInputs(t *testing.T) {
@@ -23,14 +25,54 @@ func TestInstalledArtifactInputs(t *testing.T) {
 	manifest.ApplicationVersion = "fixture-1"
 	manifest.ApplicationSHA256 = digestBytes(binary)
 	manifest.ConfigSHA256 = digestBytes(configuration)
+	ca := []byte("exact-public-postgres-ca")
+	manifest.PostgresCASHA256 = digestBytes(ca)
 	data, _ := json.Marshal(manifest)
-	for path, value := range map[string][]byte{ArtifactManifest: data, ArtifactDirectory + "/cloud-8021x": binary, ArtifactDirectory + "/config.yaml": configuration} {
+	for path, value := range map[string][]byte{ArtifactManifest: data, ArtifactDirectory + "/cloud-8021x": binary, ArtifactDirectory + "/config.yaml": configuration, IncomingPostgresCAFile: ca} {
 		if e := os.WriteFile(path, value, 0600); e != nil {
 			t.Fatal(e)
 		}
 	}
-	if files, e := IncomingFiles(); e != nil || len(files) != 2 {
+	if files, e := IncomingFiles(); e != nil || len(files) != 3 {
 		t.Fatal("valid incoming rejected", e)
+	}
+	db := config.Defaults().Database
+	db.CAFile, db.InstanceCAPEMSHA256 = PostgresCAFile, manifest.PostgresCASHA256
+	preflight, gotCA, err := IncomingDatabase(db)
+	if err != nil || string(gotCA) != string(ca) || preflight.CAFile != IncomingPostgresCAFile || db.CAFile != PostgresCAFile {
+		t.Fatal("fresh prepublication trust unavailable or installed config mutated", err)
+	}
+	if e := os.WriteFile(IncomingPostgresCAFile, []byte("changed trust"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, err := IncomingDatabase(db); err == nil {
+		t.Fatal("changed incoming CA accepted")
+	}
+	if _, err := IncomingFiles(); err == nil {
+		t.Fatal("changed CA entered publication transaction")
+	}
+	if e := os.WriteFile(IncomingPostgresCAFile, ca, 0600); e != nil {
+		t.Fatal(e)
+	}
+	bad := db
+	bad.InstanceCAPEMSHA256 = digestBytes([]byte("different-pin"))
+	if _, _, err := IncomingDatabase(bad); err == nil {
+		t.Fatal("configuration and manifest CA mismatch accepted")
+	}
+	if e := os.Rename(IncomingPostgresCAFile, ArtifactDirectory+"/trusted-ca"); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink("trusted-ca", IncomingPostgresCAFile); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, err := IncomingDatabase(db); err == nil {
+		t.Fatal("symlink incoming CA accepted")
+	}
+	if e := os.Remove(IncomingPostgresCAFile); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Rename(ArtifactDirectory+"/trusted-ca", IncomingPostgresCAFile); e != nil {
+		t.Fatal(e)
 	}
 	if e := os.WriteFile(ArtifactDirectory+"/cloud-8021x", []byte("changed"), 0600); e != nil {
 		t.Fatal(e)

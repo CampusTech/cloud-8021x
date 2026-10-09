@@ -16,9 +16,10 @@ const credentialCachePath = transactionRoot + "/active-credentials.json"
 const credentialMarkerPath = "/run/cloud-8021x-root/credential-set.json"
 
 type credentialCache struct {
-	Reference string            `json:"reference"`
-	Bindings  map[string]string `json:"bindings"`
-	Files     []File            `json:"files"`
+	TrustBindingVersion int               `json:"trust_binding_version,omitempty"`
+	Reference           string            `json:"reference"`
+	Bindings            map[string]string `json:"bindings"`
+	Files               []File            `json:"files"`
 }
 type credentialMarker struct{ Reference, SHA256 string }
 
@@ -50,11 +51,14 @@ func decodeCredentialCache(data []byte, layout []File) (credentialCache, error) 
 		}
 		delete(expected, f.Path)
 	}
+	if c.TrustBindingVersion != 0 && c.TrustBindingVersion != 1 {
+		return c, errors.New("unsupported credential trust binding version")
+	}
 	if len(expected) != 0 || len(c.Bindings) < 3 || len(c.Bindings) > 32 {
 		return c, errors.New("credential binding incomplete")
 	}
 	for p, h := range c.Bindings {
-		if (p != "/usr/local/bin/cloud-8021x" && p != "/etc/cloud-8021x/config.yaml" && !strings.HasPrefix(p, radiusDirectory+"/")) || !AllowedFile(p) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(h) {
+		if (p != "/usr/local/bin/cloud-8021x" && p != "/etc/cloud-8021x/config.yaml" && p != PostgresCAFile && !strings.HasPrefix(p, radiusDirectory+"/")) || !AllowedFile(p) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(h) {
 			return c, errors.New("credential binding rejected")
 		}
 	}
@@ -63,6 +67,9 @@ func decodeCredentialCache(data []byte, layout []File) (credentialCache, error) 
 			return c, errors.New("required credential binding missing")
 		}
 	}
+	if c.TrustBindingVersion == 1 && c.Bindings[PostgresCAFile] == "" {
+		return c, errors.New("required database trust binding missing")
+	}
 	return c, nil
 }
 
@@ -70,13 +77,13 @@ func decodeCredentialCache(data []byte, layout []File) (credentialCache, error) 
 // executable, config and native tree. Only root-local receipt/cache files contain
 // credential bytes; the PG installation journal holds the opaque reference alone.
 func (t *Transaction) CredentialCacheFiles(files []File, tree map[string][]byte) ([]File, error) {
-	c := credentialCache{Reference: t.Reference(), Bindings: map[string]string{}}
+	c := credentialCache{TrustBindingVersion: 1, Reference: t.Reference(), Bindings: map[string]string{}}
 	for _, f := range files {
 		if strings.HasPrefix(f.Path, "/run/cloud-8021x") {
 			c.Files = append(c.Files, f)
 		}
 	}
-	for _, p := range []string{"/usr/local/bin/cloud-8021x", "/etc/cloud-8021x/config.yaml"} {
+	for _, p := range []string{"/usr/local/bin/cloud-8021x", "/etc/cloud-8021x/config.yaml", PostgresCAFile} {
 		found := false
 		for _, f := range files {
 			if f.Path == p {
@@ -130,6 +137,9 @@ func loadCredentialCache(layout []File) (credentialCache, []byte, error) {
 	if e != nil {
 		return c, nil, e
 	}
+	if c.TrustBindingVersion != 1 {
+		return c, nil, errors.New("historical credential cache lacks required database trust binding")
+	}
 	for p, want := range c.Bindings {
 		got, e := installedHash(p, 256<<20)
 		if e != nil || got != want {
@@ -150,7 +160,7 @@ func committedCredentialCache(layout []File) (credentialCache, []byte, error) {
 	var generation installedGeneration
 	d := json.NewDecoder(bytes.NewReader(current))
 	d.DisallowUnknownFields()
-	if d.Decode(&generation) != nil || d.Decode(new(any)) != io.EOF || generation.Reference != c.Reference || generation.ApplicationSHA256 != c.Bindings["/usr/local/bin/cloud-8021x"] || generation.ConfigSHA256 != c.Bindings["/etc/cloud-8021x/config.yaml"] {
+	if d.Decode(&generation) != nil || d.Decode(new(any)) != io.EOF || generation.Reference != c.Reference || generation.ApplicationSHA256 != c.Bindings["/usr/local/bin/cloud-8021x"] || generation.ConfigSHA256 != c.Bindings["/etc/cloud-8021x/config.yaml"] || generation.TrustBindingVersion != 1 || generation.PostgresCASHA256 != c.Bindings[PostgresCAFile] {
 		return c, nil, errors.New("credential cache is not the completed installation")
 	}
 	return c, data, nil

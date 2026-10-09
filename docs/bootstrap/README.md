@@ -1,9 +1,10 @@
 # Protected Go bootstrap and recovery contract
 
-Shipping activation requires Debian 13; existing Debian 12 nodes first need the
-[separately approved staged OS upgrade](../debian13-rollout.md). Incoming fence-only
-preparation remains available on the old OS. Terraform image drift does not
-upgrade an existing disk and cannot authorize its replacement.
+Shipping activation requires Debian 13. The default deployment is a separately
+owned new pair adopting existing CA state and starting a new accounting epoch;
+the existing production pair remains intact. The
+[staged OS upgrade](../debian13-rollout.md) applies only to an optional in-place
+migration. Image metadata does not upgrade an existing disk or authorize replacement.
 
 The Go helper owns installation, CA adoption, certificate renewal, native
 activation, rollback and root source application. The unprivileged daemon owns
@@ -31,7 +32,7 @@ before invoking the verified incoming executable:
 
 Only this selector reads `artifacts/config.yaml`. It does not accept a caller path.
 Go verifies mandatory SHA256 values, package metadata and architecture, then
-snapshots the **actual** active binary/config inside the shared gate. The thin
+snapshots the **actual** active binary/config/database trust inside the shared gate. The thin
 startup downloader must not overwrite active paths or implement a parallel Bash
 backup/activation engine.
 
@@ -43,8 +44,23 @@ backup/activation engine.
 | `architecture` | `arm64` or `amd64`, equal to executing binary architecture |
 | `application_version` | Bounded release identifier, required for `--incoming` |
 | `application_sha256`, `config_sha256` | Lowercase SHA256 of incoming fixed `cloud-8021x` and `config.yaml` |
+| `postgres_ca_sha256` | Mandatory lowercase SHA256 of fixed incoming `postgres-ca.pem`, equal to configured `database.instance_ca_pem_sha256` |
 | `collector_sha256` | Mandatory lowercase SHA256 of the installed standalone collector executable |
 | `artifacts` | All ten product records below plus only the static reviewed Debian13 dependency closure (at most64 total), each with `name`, `version`, `architecture`, `sha256` |
+
+Before installed database trust exists, the helper uses a copied database
+configuration pointing only to the protected incoming `postgres-ca.pem`. Its
+hash must match both the manifest and configuration pin, including `verify-full`
+mode. TLS and native validation use those exact bytes; native libpq configuration
+still names `/etc/cloud-8021x/postgres-ca.pem`. No live file is written merely to
+make preflight work. Publication and rollback use the existing file transaction.
+New credential caches and completed generations require trust binding version1
+and the exact installed PEM hash. Missing/changed trust blocks activation and
+credential restoration. Historical unbound documents remain decodable for cold
+recovery, but cannot authorize a new publication or current runtime restoration.
+Installed boot/renewal never selects incoming trust. The actual fresh-TLS fixture
+is `scripts/test_postgres_ca_input.sh`; protected isolation fixtures also test
+input tampering and interrupted completion rollback.
 
 Archives are named `<name>_<version>_<architecture>.deb` in that directory.
 The coherent FreeRADIUS family is `freeradius`, `freeradius-common`,

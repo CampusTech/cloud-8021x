@@ -42,12 +42,25 @@ func Render(cfg config.Config, generation string) (map[string][]byte, error) {
 			owner = uid
 		}
 		return read(path, owner)
-	})
+	}, nil)
 }
 
 // RenderWithSecrets serializes a protected bootstrap candidate entirely from
 // its already fetched in-memory credentials, before replacing any live files.
 func RenderWithSecrets(cfg config.Config, generation string, credentials map[string][]byte) (map[string][]byte, error) {
+	return renderWithSecrets(cfg, generation, credentials, nil)
+}
+
+// RenderWithSecretsAndDatabaseCA binds native prepublication validation to the
+// exact incoming public PEM, without leaking its staging path into runtime SQL.
+func RenderWithSecretsAndDatabaseCA(cfg config.Config, generation string, credentials map[string][]byte, databaseCA []byte) (map[string][]byte, error) {
+	if len(databaseCA) == 0 {
+		return nil, errors.New("incoming database CA missing")
+	}
+	return renderWithSecrets(cfg, generation, credentials, databaseCA)
+}
+
+func renderWithSecrets(cfg config.Config, generation string, credentials map[string][]byte, databaseCA []byte) (map[string][]byte, error) {
 	if e := cfg.Validate(); e != nil {
 		return nil, e
 	}
@@ -57,9 +70,9 @@ func RenderWithSecrets(cfg config.Config, generation string, credentials map[str
 			return "", errors.New("required candidate credential missing")
 		}
 		return string(bytes.TrimSpace(b)), nil
-	})
+	}, databaseCA)
 }
-func render(cfg config.Config, generation string, read func(string) (string, error)) (map[string][]byte, error) {
+func render(cfg config.Config, generation string, read func(string) (string, error), databaseCA []byte) (map[string][]byte, error) {
 	token, e := read(cfg.Listeners.Policy.Token.File)
 	if e != nil {
 		return nil, e
@@ -68,7 +81,12 @@ func render(cfg config.Config, generation string, read func(string) (string, err
 	if e != nil {
 		return nil, e
 	}
-	conn, e := postgres.NativeConninfo(dsn, cfg.Database)
+	var conn string
+	if databaseCA == nil {
+		conn, e = postgres.NativeConninfo(dsn, cfg.Database)
+	} else {
+		conn, e = postgres.NativeConninfoWithCA(dsn, cfg.Database, databaseCA)
+	}
 	if e != nil {
 		return nil, e
 	}

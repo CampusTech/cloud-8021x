@@ -162,6 +162,20 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			}
 		}
 	}
+	database := cfg.Database
+	var databaseCA []byte
+	if o.Incoming {
+		database, databaseCA, e = host.IncomingDatabase(cfg.Database)
+		if e != nil {
+			return e
+		}
+	}
+	renderNative := func(generation string, credentials map[string][]byte) (map[string][]byte, error) {
+		if databaseCA != nil {
+			return native.RenderWithSecretsAndDatabaseCA(cfg, generation, credentials, databaseCA)
+		}
+		return native.RenderWithSecrets(cfg, generation, credentials)
+	}
 	var cloud *gcp.Client
 	var credentials map[string][]byte
 	if renew {
@@ -185,7 +199,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return e
 		}
 	}
-	repository, e := postgres.NewMigration(ctx, string(credentials[cfg.Database.MigrationDSN.File]), cfg.Database)
+	repository, e := postgres.NewMigration(ctx, string(credentials[cfg.Database.MigrationDSN.File]), database)
 	if e != nil {
 		return e
 	}
@@ -364,7 +378,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			return e
 		}
 		// Pure credential/profile validation precedes any native stop or package mutation.
-		if _, e = native.RenderWithSecrets(cfg, strings.Repeat("0", 32), credentials); e != nil {
+		if _, e = renderNative(strings.Repeat("0", 32), credentials); e != nil {
 			return e
 		}
 		if _, e = host.CollectorEnvironment(credentials["/run/cloud-8021x-collector/datadog-api-key"], host.Accounts{}); e != nil {
@@ -582,7 +596,7 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 			}
 			return nil
 		}
-		tree, e := native.RenderWithSecrets(cfg, authGeneration, credentials)
+		tree, e := renderNative(authGeneration, credentials)
 		if e != nil {
 			return e
 		}

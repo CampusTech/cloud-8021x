@@ -18,7 +18,7 @@ func TestInstalledCredentialRebootConsistency(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("fixture-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("fixture-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("pinned-policy-secret"), Mode: 0600}}
+	files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("fixture-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("fixture-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("pinned-policy-secret"), Mode: 0600}, {Path: PostgresCAFile, Data: []byte("old-database-trust"), Mode: 0644}}
 	tree := map[string][]byte{"radiusd.conf": []byte("pinned-native-secret")}
 	transaction, e := BeginTransaction(func(string) error { return nil })
 	if e != nil {
@@ -69,6 +69,21 @@ func TestInstalledCredentialRebootConsistency(t *testing.T) {
 	values, e := CommittedCredentials(layout)
 	if e != nil || !bytes.Equal(values[files[2].Path], files[2].Data) {
 		t.Fatal("renewal did not pin committed bytes")
+	}
+	if e := os.WriteFile(PostgresCAFile, []byte("unreviewed-trust"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := KnownInstallation(); e == nil {
+		t.Fatal("completed generation accepts changed database trust")
+	}
+	if _, e := CommittedCredentials(layout); e == nil {
+		t.Fatal("credential restore accepts changed database trust")
+	}
+	if e := os.WriteFile(PostgresCAFile, files[3].Data, 0644); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := CommittedCredentials(layout); e != nil {
+		t.Fatal("original trust restoration failed", e)
 	}
 	if e := os.Remove(credentialMarkerPath); e != nil {
 		t.Fatal(e)
@@ -138,7 +153,7 @@ func TestInstalledCompletionPublicationRollback(t *testing.T) {
 	}
 	for _, failure := range []string{"rename", "directory-sync", "committed"} {
 		t.Run(failure, func(t *testing.T) {
-			files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("old-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("old-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("old-pinned-policy"), Mode: 0600}}
+			files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("old-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("old-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("old-pinned-policy"), Mode: 0600}, {Path: PostgresCAFile, Data: []byte("old-database-trust"), Mode: 0644}}
 			tree := map[string][]byte{"radiusd.conf": []byte("old-native")}
 			old, e := BeginTransaction(func(string) error { return nil })
 			if e != nil {

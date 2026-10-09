@@ -1,12 +1,13 @@
 package host
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func fixtureManifest() Manifest {
-	m := Manifest{Schema: 1, Architecture: "arm64", CollectorSHA256: strings.Repeat("c", 64)}
+	m := Manifest{Schema: 1, Architecture: "arm64", CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
 		version := "1.0.0-1"
 		if radiusPackage(name) {
@@ -44,5 +45,29 @@ func TestArtifactManifestRequiresCompletePinnedFamily(t *testing.T) {
 				t.Fatalf("%s: %v", mode, e)
 			}
 		})
+	}
+}
+
+func TestManifestCannotPublishWithoutPinnedDatabaseTrust(t *testing.T) {
+	m := fixtureManifest()
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err = json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	delete(fields, "postgres_ca_sha256")
+	data, err = json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = Manifest{}
+	if err = json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Validate("arm64"); err == nil {
+		t.Fatal("new publication accepts an unbound PostgreSQL trust artifact")
 	}
 }

@@ -75,7 +75,7 @@ func TestInstalledPackageRollbackAndMaintainerSuppression(t *testing.T) {
 	if err := os.WriteFile(rollbackArtifactDirectory+"/manifest.json", encoded, 0600); err != nil {
 		t.Fatal(err)
 	}
-	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64)}
+	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
 		if !radiusPackage(name) {
 			incoming.Artifacts = append(incoming.Artifacts, build(name, "1.0.0-1", ArtifactDirectory))
@@ -333,7 +333,7 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64)}
+	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
 		version := "1.0.0-1"
 		if radiusPackage(name) {

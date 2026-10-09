@@ -3,6 +3,7 @@ package postgres
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,11 +15,21 @@ import (
 // bounded libpq keyword connection string, discarding DSN-supplied options.
 // Instance-CA mode still requires Task8 root attestation of the configured pin.
 func NativeConninfo(dsn string, c config.Database) (string, error) {
+	data, err := os.ReadFile(c.CAFile)
+	if err != nil {
+		return "", errors.New("database CA unavailable")
+	}
+	return NativeConninfoWithCA(dsn, c, data)
+}
+
+// NativeConninfoWithCA validates a protected incoming PEM while retaining the
+// final installed path in libpq configuration. It uses the same TLS/pin gate.
+func NativeConninfoWithCA(dsn string, c config.Database, data []byte) (string, error) {
 	p, e := pgconn.ParseConfig(dsn)
 	if e != nil || p.Database != "cloud8021x" || p.Host == "" || strings.HasPrefix(p.Host, "/") || strings.Contains(p.Host, ",") {
 		return "", errors.New("invalid native database configuration")
 	}
-	if _, e = tlsConfig(c, p.Host); e != nil {
+	if _, e = tlsConfigFromPEM(c, p.Host, data); e != nil {
 		return "", e
 	}
 	if c.ConnectTimeout <= 0 || c.ConnectTimeout.Seconds() > 60 || c.QueryTimeout <= 0 || c.QueryTimeout.Seconds() > 60 {
