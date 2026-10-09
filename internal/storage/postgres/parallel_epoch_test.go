@@ -144,7 +144,7 @@ func TestPostgresParallelSignedHandoffAndActivation(t *testing.T) {
 			cfg.Deployment.Instance = "handofffixture-secondary"
 			cfg.Bootstrap.LocalAddress, cfg.Bootstrap.PeerAddress = cfg.Bootstrap.PeerAddress, cfg.Bootstrap.LocalAddress
 		}
-		b, err := parallelBinding(cfg, strings.Repeat("d", 64))
+		b, err := adoption.ExpectedBinding(cfg, strings.Repeat("d", 64))
 		if err != nil {
 			t.Fatal(err)
 		}

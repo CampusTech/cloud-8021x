@@ -160,7 +160,7 @@ func TestInstalledParallelSourceCaptureRetainsAuthorizationOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = child.Wait()
-	binding, _ := ParallelBinding(cfg, strings.Repeat("d", 64))
+	binding, _ := adoption.ExpectedBinding(cfg, strings.Repeat("d", 64))
 	proof, _ := json.Marshal(parallelPrepareHelper{ConfigSHA256: binding.ConfigSHA256, ReleaseSHA256: strings.Repeat("d", 64), Helper: original})
 	if err = Write(File{Path: parallelPrepareFile, Data: proof, Mode: 0600}); err != nil {
 		t.Fatal(err)

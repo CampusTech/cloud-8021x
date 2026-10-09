@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -51,21 +50,6 @@ func ParallelSourceKey() (string, error) {
 	}
 	return hex.EncodeToString(ed25519.PrivateKey(key).Public().(ed25519.PublicKey)), nil
 }
-func ParallelBinding(c config.Config, release string) (adoption.Binding, error) {
-	manifest, err := c.ParallelManifest()
-	if err != nil {
-		return adoption.Binding{}, err
-	}
-	raw, err := json.Marshal(c)
-	if err != nil {
-		return adoption.Binding{}, err
-	}
-	source := c.Deployment.SourcePrimary
-	if c.InstanceID == "radius-secondary" {
-		source = c.Deployment.SourceSecondary
-	}
-	return adoption.Binding{Transition: c.StateTransition, ManifestSHA256: manifest, ConfigSHA256: adoption.Digest(raw), ReleaseSHA256: release, SourceDeployment: c.Deployment.SourceID, SourceInstance: source, Deployment: c.Deployment.ID, Instance: c.Deployment.Instance, Role: c.InstanceID, CollectionEpoch: c.Deployment.CollectionEpoch}, nil
-}
 func parallelSourcePin(c config.Config) (ed25519.PublicKey, error) {
 	pin := c.Deployment.SourcePrimaryKey
 	if c.InstanceID == "radius-secondary" {
@@ -78,7 +62,7 @@ func parallelSourcePin(c config.Config) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(key), nil
 }
 func VerifyParallelSource(raw []byte, c config.Config, release string, now time.Time) (adoption.Authorization, error) {
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return adoption.Authorization{}, err
 	}
@@ -99,7 +83,7 @@ func captureParallelSource(ctx context.Context, c config.Config, release string,
 	if err := c.ValidateHandoffPins(); err != nil {
 		return nil, err
 	}
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return nil, err
 	}

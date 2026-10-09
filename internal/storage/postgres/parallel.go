@@ -25,21 +25,6 @@ func createParallel(ctx context.Context, tx pgx.Tx, r Roles) error {
 	}
 	return nil
 }
-func parallelBinding(c config.Config, release string) (adoption.Binding, error) {
-	manifest, err := c.ParallelManifest()
-	if err != nil {
-		return adoption.Binding{}, err
-	}
-	raw, err := json.Marshal(c)
-	if err != nil {
-		return adoption.Binding{}, err
-	}
-	source := c.Deployment.SourcePrimary
-	if c.InstanceID == "radius-secondary" {
-		source = c.Deployment.SourceSecondary
-	}
-	return adoption.Binding{Transition: c.StateTransition, ManifestSHA256: manifest, ConfigSHA256: adoption.Digest(raw), ReleaseSHA256: release, SourceDeployment: c.Deployment.SourceID, SourceInstance: source, Deployment: c.Deployment.ID, Instance: c.Deployment.Instance, Role: c.InstanceID, CollectionEpoch: c.Deployment.CollectionEpoch}, nil
-}
 
 // ImportParallelAuthorization verifies the source signature again at the storage
 // boundary. Only original command quarantine is imported; no old accounting
@@ -52,7 +37,7 @@ func (s *Store) ImportParallelAuthorization(ctx context.Context, c config.Config
 	if err := c.ValidateHandoffPins(); err != nil {
 		return err
 	}
-	expected, err := parallelBinding(c, release)
+	expected, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return err
 	}

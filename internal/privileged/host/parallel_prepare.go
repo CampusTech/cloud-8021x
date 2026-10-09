@@ -21,7 +21,7 @@ type parallelPrepareHelper struct {
 }
 
 func BeginParallelPrepare(c config.Config, release string) error {
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func recoverParallelPrepare(ctx context.Context, c config.Config, release, refer
 		return "", "", err
 	}
 	var proof parallelPrepareHelper
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return "", "", err
 	}
@@ -170,7 +170,7 @@ func PublishParallelAuthorization(ctx context.Context, c config.Config, doc adop
 const parallelActivationHelperFile = transactionRoot + "/parallel-activation-helper.json"
 
 func BeginParallelActivation(c config.Config, release string) error {
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func VerifyParallelActivationRecovery(ctx context.Context, c config.Config, rele
 	if err != nil {
 		return err
 	}
-	binding, err := ParallelBinding(c, release)
+	binding, err := adoption.ExpectedBinding(c, release)
 	if err != nil {
 		return err
 	}

@@ -90,7 +90,7 @@ func resumeParallelSource(ctx context.Context, c config.Config, release string, 
 		return err
 	}
 	defer unlock()
-	binding, err := ParallelBinding(c, strings.Repeat("0", 64))
+	binding, err := adoption.ExpectedBinding(c, strings.Repeat("0", 64))
 	if err != nil {
 		return err
 	}
