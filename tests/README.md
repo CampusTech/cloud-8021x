@@ -14,19 +14,21 @@ limit. Fleet bulk-refresh tests inject collection failures and verify that
 enrichment and legacy policy continue updating while enforced snapshots keep
 their original age. Null-policy collection staging is covered as well.
 
-The webhook's Go tests include the complete SCEP handler → authorizer → Fleet
-HTTP adapter flow for an enrolled iOS device without a serial:
+The root Go module's tests include the SCEP handler → authorizer → Fleet
+HTTP adapter flow for an enrolled iOS device without a serial. Run from the
+repository root:
 
 ```sh
-cd webhook
 go test ./...
 golangci-lint run
 ```
 
-Both Go modules require Go 1.27.2 or newer. The `go-security` workflow tests
-and scans imported packages, including test dependencies, on PRs and in the
-merge queue. To run the same vulnerability check locally, run this command in
-both `webhook/` and `tests/scep/`:
+The Go modules require Go 1.27.2 or newer. The `go-security` workflow
+tests and scans imported packages, including test dependencies, on PRs and in
+the merge queue. To run the same vulnerability check locally, run this command
+in the repository root (`.`), `tests/scep/`, and `tools/dashboard/`, matching
+the [current security workflow](../.github/workflows/go-security.yml). The former
+`webhook/` module is retired; its runtime now lives in the root module:
 
 ```sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
@@ -34,7 +36,7 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
 
 The SCEP harness uses `x/crypto/cryptobyte`; it does not import SSH or OpenPGP.
 Module-only scans can still report the unpatched, unused OpenPGP advisory
-GO-2026-5932. The release workflow separately scans the compiled webhook so
+GO-2026-5932. The release workflow separately scans the compiled daemon so
 standard-library findings use the actual build toolchain version.
 
 ## FreeRADIUS / UniFi packet integration
@@ -100,7 +102,7 @@ and pass `--container <name>`; that mode leaves it available afterward. Logs are
 `python3 tests/scep/run.py` exercises actual step-ca issuance and renewal through
 the mutual-TLS webhook using the rendered CA configuration. See
 [`scep/README.md`](scep/README.md). The normal Python suite also tests the private
-per-device profile generator using a locally built webhook CLI.
+per-device profile generator using a locally built `cloud-8021x` CLI.
 
 ## Windows certificate inventory
 
