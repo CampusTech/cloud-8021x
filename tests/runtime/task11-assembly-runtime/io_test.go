@@ -31,10 +31,7 @@ func TestPinnedReadRejectsSubstitutedSymlinkAndTrailingPlan(t *testing.T) {
 	}
 }
 func TestCandidateWriterNeverInstallsAndRefusesReuse(t *testing.T) {
-	parent, e := filepath.EvalSymlinks(t.TempDir())
-	if e != nil {
-		t.Fatal(e)
-	}
+	parent := protectedCandidateFixture(t)
 	dir := filepath.Join(parent, "candidates")
 	o := output{Files: map[string]candidate{"blue-primary/etc/test": {Data: []byte("secret"), SHA256: digest([]byte("secret")), Owner: "root", Group: "root", Mode: 0600}}}
 	if err := writeCandidates(dir, o); err != nil {
@@ -67,10 +64,8 @@ func TestPrivateSeedInputRejectsPublicMode(t *testing.T) {
 	}
 }
 func TestOutputRejectsSymlinkAndAttackerWritableParent(t *testing.T) {
-	parent, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	parent := protectedCandidateFixture(t)
+	var err error
 	real := filepath.Join(parent, "real")
 	if err = os.Mkdir(real, 0700); err != nil {
 		t.Fatal(err)
@@ -91,10 +86,8 @@ func TestOutputRejectsSymlinkAndAttackerWritableParent(t *testing.T) {
 	}
 }
 func TestHeldCandidateDirectoryRejectsSubstitutionAndIndexSymlink(t *testing.T) {
-	parent, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	parent := protectedCandidateFixture(t)
+	var err error
 	t.Run("renamed-root", func(t *testing.T) {
 		root := filepath.Join(parent, "held")
 		w, err := newCandidateWriter(root)
@@ -164,6 +157,51 @@ func TestHeldCandidateDirectoryRejectsSubstitutionAndIndexSymlink(t *testing.T) 
 		}
 		if w.write("candidate-index.json", []byte("index")) == nil {
 			t.Fatal("newly attacker-writable parent accepted")
+		}
+	})
+}
+
+// Candidate outputs need protected ancestry; generic system temporary roots do not.
+func protectedCandidateFixture(t *testing.T) string {
+	t.Helper()
+	p, err := os.MkdirTemp(".", ".task11-candidate-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute, err := filepath.Abs(p)
+	if err != nil {
+		_ = os.RemoveAll(p)
+		t.Fatal(err)
+	}
+	p, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		_ = os.RemoveAll(absolute)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(p); err != nil {
+			t.Errorf("remove owned private fixture: %v", err)
+		}
+	})
+	return p
+}
+func TestCandidateFixtureDoesNotTrustSystemTemp(t *testing.T) {
+	unsafe, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(unsafe, 0777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", unsafe)
+	o := output{Files: map[string]candidate{"blue-primary/etc/test": {Data: []byte("private"), SHA256: digest([]byte("private")), Owner: "root", Group: "root", Mode: 0600}}}
+	if err = writeCandidates(filepath.Join(unsafe, "must-refuse"), o); err == nil {
+		t.Fatal("world-writable system temporary root became trusted")
+	}
+	t.Run("fresh-fixture", func(t *testing.T) {
+		parent := protectedCandidateFixture(t)
+		if err := writeCandidates(filepath.Join(parent, "candidate"), o); err != nil {
+			t.Fatalf("private output fixture inherited unsafe system temp ancestry: %v", err)
 		}
 	})
 }
