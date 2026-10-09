@@ -22,6 +22,10 @@ import (
 
 const ArtifactDirectory = "/var/cache/cloud-8021x/artifacts"
 const ArtifactManifest = ArtifactDirectory + "/manifest.json"
+const maxArchiveBytes int64 = 1 << 30
+
+// Preserve the previous twelve-archive aggregate ceiling while allowing a bounded closure.
+const maxArtifactBytes int64 = 12 << 30
 const RadiusVersion = "3.2.10+dfsg-2~bookworm+campus3"
 
 var requiredArtifacts = []string{"freeradius", "freeradius-common", "freeradius-config", "freeradius-utils", "freeradius-rest", "freeradius-postgresql", "libfreeradius3", "step-ca", "datadog-agent", "datadog-agent-ddot"}
@@ -30,7 +34,7 @@ var requiredArtifacts = []string{"freeradius", "freeradius-common", "freeradius-
 var retiredArtifacts = []string{"step-cli", "step-kms-plugin"}
 
 func managedPackage(name string) bool {
-	return slices.Contains(requiredArtifacts, name) || slices.Contains(retiredArtifacts, name)
+	return slices.Contains(requiredArtifacts, name) || slices.Contains(retiredArtifacts, name) || slices.Contains(dependencyArtifacts, name)
 }
 
 type Artifact struct {
@@ -54,18 +58,23 @@ func radiusPackage(name string) bool {
 }
 func (a Artifact) filename() string { return a.Name + "_" + a.Version + "_" + a.Architecture + ".deb" }
 func (m Manifest) Validate(arch string) error {
-	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.CollectorSHA256) || m.Schema != 1 || (arch != "amd64" && arch != "arm64") || m.Architecture != arch || len(m.Artifacts) != len(requiredArtifacts) {
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.CollectorSHA256) || m.Schema != 1 || (arch != "amd64" && arch != "arm64") || m.Architecture != arch || (len(m.Artifacts) < len(requiredArtifacts) || len(m.Artifacts) > maxForwardArtifacts) {
 		return errors.New("unsupported or incomplete protected artifact manifest")
 	}
 	seen := map[string]bool{}
 	for _, a := range m.Artifacts {
-		if !slices.Contains(requiredArtifacts, a.Name) || seen[a.Name] || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != arch && (a.Name != "freeradius-common" || a.Architecture != "all")) {
+		if (!slices.Contains(requiredArtifacts, a.Name) && !slices.Contains(dependencyArtifacts, a.Name)) || seen[a.Name] || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != arch && ((a.Name != "freeradius-common" && !slices.Contains(dependencyArtifacts, a.Name)) || a.Architecture != "all")) {
 			return errors.New("unapproved artifact identity, checksum or architecture")
 		}
 		if radiusPackage(a.Name) && a.Version != RadiusVersion {
 			return errors.New("coherent reviewed campus3 FreeRADIUS family required")
 		}
 		seen[a.Name] = true
+	}
+	for _, name := range requiredArtifacts {
+		if !seen[name] {
+			return errors.New("required product artifact missing")
+		}
 	}
 	var agent, collector string
 	for _, a := range m.Artifacts {
@@ -174,11 +183,22 @@ func verifyArtifacts(ctx context.Context, m Manifest, run commandRunner) error {
 	if e := m.Validate(runtime.GOARCH); e != nil {
 		return e
 	}
+	var total int64
 	for _, a := range m.Artifacts {
 		path := filepath.Join(ArtifactDirectory, a.filename())
-		f, e := rootFile(path, 1<<30)
+		f, e := rootFile(path, maxArchiveBytes)
 		if e != nil {
 			return errors.New("protected artifact unavailable")
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		total += info.Size()
+		if total > maxArtifactBytes {
+			_ = f.Close()
+			return errors.New("artifact closure exceeds aggregate size limit")
 		}
 		sum := sha256.New()
 		_, e = io.Copy(sum, f)
@@ -200,7 +220,7 @@ func VerifyArtifacts(ctx context.Context, m Manifest) error { return verifyArtif
 // InstallArtifacts must be called within the shared maintenance operation after
 // the active-node peer gate. Maintainer scripts cannot stop/start services. No
 // network package resolution, upgrade, arbitrary package or fallback is allowed.
-func InstallArtifacts(ctx context.Context, m Manifest) error {
+func installArtifacts(ctx context.Context, m Manifest, retained map[string]Artifact) error {
 	if os.Geteuid() != 0 {
 		return errors.New("artifact installation requires root")
 	}
@@ -210,15 +230,26 @@ func InstallArtifacts(ctx context.Context, m Manifest) error {
 	if e := VerifyArtifacts(ctx, m); e != nil {
 		return e
 	}
+	if e := verifyPackageDependencies(ctx, m, retained); e != nil {
+		return e
+	}
 	return withPackagePolicy(ctx, func() error {
 		args := []string{"--force-confold", "--install"}
 		for _, a := range m.Artifacts {
+			if _, keep := retained[a.Name]; keep {
+				continue
+			}
 			args = append(args, filepath.Join(ArtifactDirectory, a.filename()))
 		}
-		if _, e := execute(ctx, "/usr/bin/dpkg", args...); e != nil {
-			return errors.New("pinned package installation failed; maintenance remains blocked")
+		if len(args) > 2 {
+			if _, e := execute(ctx, "/usr/bin/dpkg", args...); e != nil {
+				return errors.New("pinned package installation failed; maintenance remains blocked")
+			}
 		}
 		for _, a := range m.Artifacts {
+			if old, keep := retained[a.Name]; keep {
+				a = old
+			}
 			out, e := execute(ctx, "/usr/bin/dpkg-query", "--show", "--showformat=${db:Status-Abbrev}\t${Version}\t${Architecture}", a.Name)
 			if e != nil || strings.TrimSpace(string(out)) != "ii \t"+a.Version+"\t"+a.Architecture {
 				return fmt.Errorf("package %s is not fully configured at the pinned version", a.Name)

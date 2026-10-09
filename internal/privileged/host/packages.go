@@ -10,25 +10,28 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 const rollbackArtifactDirectory = ArtifactDirectory + "/rollback"
 
 type PackagePlan struct {
-	Incoming  Manifest            `json:"incoming"`
-	Previous  []Artifact          `json:"previous"`
-	Absent    []string            `json:"originally_absent"`
-	Installed map[string]Artifact `json:"installed"`
-	Retired   []string            `json:"retired,omitempty"`
-	Changed   bool                `json:"changed"`
+	InventoryVersion int                 `json:"inventory_version,omitempty"`
+	Incoming         Manifest            `json:"incoming"`
+	Previous         []Artifact          `json:"previous"`
+	Absent           []string            `json:"originally_absent"`
+	Installed        map[string]Artifact `json:"installed"`
+	Retained         map[string]Artifact `json:"retained,omitempty"`
+	Retired          []string            `json:"retired,omitempty"`
+	Changed          bool                `json:"changed"`
 }
 
 func samePackage(a, b Artifact) bool {
 	return a.Name == b.Name && a.Version == b.Version && a.Architecture == b.Architecture
 }
-func planPackages(incoming, prior Manifest, current map[string]Artifact) (PackagePlan, error) {
-	plan := PackagePlan{Incoming: incoming, Installed: current}
+func planPackages(incoming, prior Manifest, current map[string]Artifact, compare versionCompare) (PackagePlan, error) {
+	plan := PackagePlan{InventoryVersion: 1, Incoming: incoming, Installed: current, Retained: map[string]Artifact{}}
 	if err := incoming.Validate(incoming.Architecture); err != nil {
 		return plan, err
 	}
@@ -51,7 +54,7 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 	}
 	archives := map[string]Artifact{}
 	for _, a := range prior.Artifacts {
-		if !managedPackage(a.Name) || archives[a.Name].Name != "" || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != incoming.Architecture && (a.Name != "freeradius-common" || a.Architecture != "all")) {
+		if !managedPackage(a.Name) || archives[a.Name].Name != "" || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != incoming.Architecture && ((a.Name != "freeradius-common" && !slices.Contains(dependencyArtifacts, a.Name)) || a.Architecture != "all")) {
 			return plan, errors.New("invalid rollback artifact identity")
 		}
 		archives[a.Name] = a
@@ -63,8 +66,12 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 			plan.Changed = true
 			continue
 		}
-		if samePackage(a, old) {
+		if samePackage(a, old) || slices.Contains(dependencyArtifacts, a.Name) && old.Architecture == a.Architecture && compare != nil && compare(old.Version, ">=", a.Version) {
+			plan.Retained[a.Name] = old
 			continue
+		}
+		if slices.Contains(protectedBaseDependencies, a.Name) {
+			return plan, errors.New("existing base helper replacement requires explicit OS preparation")
 		}
 		previous, ok := archives[a.Name]
 		if !ok || !samePackage(previous, old) || prior.Schema != 1 || prior.Architecture != incoming.Architecture {
@@ -92,52 +99,44 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 // Installed state is read independently from dpkg's protected status database.
 // Truncation, partial package state and mixed native families are refused.
 func installedPackages() (map[string]Artifact, error) {
-	f, err := rootFile("/var/lib/dpkg/status", 4<<20)
-	if err != nil {
-		return nil, errors.New("installed package database unavailable")
-	}
-	data, err := io.ReadAll(f)
-	_ = f.Close()
+	inventory, err := readPackageInventory()
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]Artifact{}
-	seen := map[string]bool{}
-	for _, paragraph := range strings.Split(string(data), "\n\n") {
-		fields := map[string]string{}
-		for _, line := range strings.Split(paragraph, "\n") {
-			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-				continue
-			}
-			key, value, ok := strings.Cut(line, ": ")
-			if ok {
-				fields[key] = value
-			}
-		}
-		name := fields["Package"]
-		if !managedPackage(name) {
-			continue
-		}
-		if seen[name] {
-			return nil, errors.New("ambiguous installed package identity")
-		}
-		seen[name] = true
-		switch fields["Status"] {
-		case "install ok installed":
-			if fields["Version"] == "" || fields["Architecture"] == "" {
-				return nil, errors.New("incomplete installed package identity")
-			}
-			result[name] = Artifact{Name: name, Version: fields["Version"], Architecture: fields["Architecture"]}
-		case "deinstall ok config-files", "purge ok not-installed":
-		default:
-			return nil, errors.New("package database requires explicit recovery")
+	for name, p := range inventory {
+		if managedPackage(name) {
+			result[name] = p.Artifact
 		}
 	}
 	return result, nil
 }
+func rollbackArchiveBounds(artifacts []Artifact) error {
+	if len(artifacts) > maxForwardArtifacts {
+		return errors.New("oversized rollback closure")
+	}
+	var total int64
+	for _, a := range artifacts {
+		f, err := rootFile(filepath.Join(rollbackArtifactDirectory, a.filename()), maxArchiveBytes)
+		if err != nil {
+			return err
+		}
+		info, err := f.Stat()
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		if total > maxArtifactBytes {
+			return errors.New("rollback closure exceeds aggregate size limit")
+		}
+	}
+	return nil
+}
+
 func verifyRollbackArtifact(ctx context.Context, a Artifact) error {
 	path := filepath.Join(rollbackArtifactDirectory, a.filename())
-	f, err := rootFile(path, 1<<30)
+	f, err := rootFile(path, maxArchiveBytes)
 	if err != nil {
 		return errors.New("prior package archive unavailable")
 	}
@@ -219,8 +218,11 @@ func PreparePackages(ctx context.Context, incoming Manifest) (PackagePlan, error
 	if err != nil {
 		return PackagePlan{}, errors.New("protected rollback manifest unavailable")
 	}
-	plan, err := planPackages(incoming, prior, current)
+	plan, err := planPackages(incoming, prior, current, debianCompare(ctx))
 	if err != nil {
+		return plan, err
+	}
+	if err = rollbackArchiveBounds(plan.Previous); err != nil {
 		return plan, err
 	}
 	for _, a := range plan.Previous {
@@ -228,12 +230,15 @@ func PreparePackages(ctx context.Context, incoming Manifest) (PackagePlan, error
 			return plan, err
 		}
 	}
+	if err = verifyPackageDependencies(ctx, incoming, plan.Retained); err != nil {
+		return plan, err
+	}
 	return plan, nil
 }
 
 // install applies only the journaled plan; retired utilities are never forward artifacts.
 func (p PackagePlan) install(ctx context.Context) error {
-	if err := InstallArtifacts(ctx, p.Incoming); err != nil {
+	if err := installArtifacts(ctx, p.Incoming, p.Retained); err != nil {
 		return err
 	}
 	if len(p.Retired) == 0 {
@@ -258,6 +263,12 @@ func (p PackagePlan) install(ctx context.Context) error {
 }
 
 func (p PackagePlan) Rollback(ctx context.Context) error {
+	if p.InventoryVersion < 0 || p.InventoryVersion > 1 {
+		return errors.New("unknown package inventory version")
+	}
+	if err := rollbackArchiveBounds(p.Previous); err != nil {
+		return err
+	}
 	// Reverify immutable local bytes immediately before use; never fetch packages.
 	for _, a := range p.Previous {
 		if err := verifyRollbackArtifact(ctx, a); err != nil {
@@ -283,6 +294,15 @@ func (p PackagePlan) Rollback(ctx context.Context) error {
 		actual, err := installedPackages()
 		if err != nil {
 			return err
+		}
+		if p.InventoryVersion == 0 {
+			// Historical journals observed only the twelve original product packages.
+			// Newly tracked base dependencies were outside that receipt's mutation scope.
+			for name := range actual {
+				if !slices.Contains(requiredArtifacts, name) && !slices.Contains(retiredArtifacts, name) {
+					delete(actual, name)
+				}
+			}
 		}
 		if len(actual) != len(p.Installed) {
 			return errors.New("package rollback state differs")

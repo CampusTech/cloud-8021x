@@ -18,21 +18,21 @@ func TestPackageRollbackMustMatchIndependentInstalledState(t *testing.T) {
 		current[a.Name] = old
 		prior.Artifacts = append(prior.Artifacts, old)
 	}
-	if _, err := planPackages(incoming, prior, current); err != nil {
+	if _, err := planPackages(incoming, prior, current, nil); err != nil {
 		t.Fatal(err)
 	}
 	prior.Artifacts[0].Version = "foreign"
-	if _, err := planPackages(incoming, prior, current); err == nil {
+	if _, err := planPackages(incoming, prior, current, nil); err == nil {
 		t.Fatal("rollback version not bound to installed state")
 	}
 	prior.Artifacts[0] = current[prior.Artifacts[0].Name]
 	prior.Artifacts[0].SHA256 = ""
-	if _, err := planPackages(incoming, prior, current); err == nil {
+	if _, err := planPackages(incoming, prior, current, nil); err == nil {
 		t.Fatal("unchecked archive accepted")
 	}
 	prior.Artifacts[0].SHA256 = strings.Repeat("a", 64)
 	delete(current, "freeradius-rest")
-	if _, err := planPackages(incoming, prior, current); err == nil {
+	if _, err := planPackages(incoming, prior, current, nil); err == nil {
 		t.Fatal("incomplete legacy family accepted")
 	}
 }
@@ -46,11 +46,11 @@ func TestRetiredUtilitiesRequireExactColdArchives(t *testing.T) {
 	}
 	old := Artifact{Name: "step-cli", Version: "0.30.2-1", Architecture: "arm64", SHA256: strings.Repeat("d", 64)}
 	current := map[string]Artifact{old.Name: old}
-	if _, err := planPackages(incoming, Manifest{}, current); err == nil {
+	if _, err := planPackages(incoming, Manifest{}, current, nil); err == nil {
 		t.Fatal("retirement accepted without exact cold archive")
 	}
 	prior := Manifest{Schema: 1, Architecture: "arm64", Artifacts: []Artifact{old}}
-	plan, err := planPackages(incoming, prior, current)
+	plan, err := planPackages(incoming, prior, current, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

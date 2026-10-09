@@ -283,6 +283,7 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	if err := os.MkdirAll(rollbackArtifactDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
+	fixtureDependency := "libpq5 (>= 1.0.0-1)"
 	build := func(name, version, base string, utility bool) Artifact {
 		t.Helper()
 		dir := t.TempDir()
@@ -290,6 +291,9 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 		control := "Package: " + name + "\nVersion: " + version + "\nArchitecture: " + runtime.GOARCH + "\nMaintainer: Owned Task10 fixture\nDescription: disposable protected package fixture\n"
+		if name == "step-ca" && fixtureDependency != "" {
+			control += "Depends: " + fixtureDependency + "\n"
+		}
 		if err := os.WriteFile(filepath.Join(dir, "DEBIAN/control"), []byte(control), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -322,8 +326,8 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 		return a
 	}
 	old := Manifest{Schema: 1, Architecture: runtime.GOARCH}
-	for _, name := range retiredArtifacts {
-		a := build(name, "0.30.2-1", rollbackArtifactDirectory, true)
+	for _, name := range []string{"step-cli", "step-kms-plugin", "libpq5"} {
+		a := build(name, "0.30.2-1", rollbackArtifactDirectory, name != "libpq5")
 		old.Artifacts = append(old.Artifacts, a)
 		if _, err := execute(ctx, "/usr/bin/dpkg", "--install", filepath.Join(rollbackArtifactDirectory, a.filename())); err != nil {
 			t.Fatal(err)
@@ -337,6 +341,7 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 		}
 		incoming.Artifacts = append(incoming.Artifacts, build(name, version, ArtifactDirectory, false))
 	}
+	incoming.Artifacts = append(incoming.Artifacts, build("libpq5", "1.0.0-1", ArtifactDirectory, false))
 	if _, err := PreparePackages(ctx, incoming); err == nil {
 		t.Fatal("retired utilities accepted without archives manifest")
 	}
@@ -356,11 +361,23 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	if err := os.Remove("/usr/local/bin/step"); err != nil {
 		t.Fatal(err)
 	}
+	for i, a := range incoming.Artifacts {
+		if a.Name != "step-ca" {
+			continue
+		}
+		fixtureDependency = "missing-fixture-dependency (>= 1)"
+		incoming.Artifacts[i] = build(a.Name, a.Version, ArtifactDirectory, false)
+		if _, err := PreparePackages(ctx, incoming); err == nil {
+			t.Fatal("incomplete dependency closure accepted before package mutation")
+		}
+		fixtureDependency = "libpq5 (>= 1.0.0-1)"
+		incoming.Artifacts[i] = build(a.Name, a.Version, ArtifactDirectory, false)
+	}
 	plan, err := PreparePackages(ctx, incoming)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Retired) != 2 || len(plan.Previous) != 2 {
+	if len(plan.Retired) != 2 || len(plan.Previous) != 3 {
 		t.Fatalf("retirement plan: %#v", plan)
 	}
 	checkpoint, err := json.Marshal(plan)
@@ -369,6 +386,10 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	}
 	if err = plan.install(ctx); err != nil {
 		t.Fatal(err)
+	}
+	upgraded, err := installedPackages()
+	if err != nil || upgraded["libpq5"].Version != "1.0.0-1" {
+		t.Fatal("dependency upgrade missing", err)
 	}
 	for _, path := range []string{"/usr/bin/step", "/usr/bin/step-cli", "/usr/bin/step-kms-plugin"} {
 		if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -386,7 +407,7 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(current) != 2 {
+	if len(current) != len(plan.Installed) {
 		t.Fatalf("unexpected restored package count: %d", len(current))
 	}
 	for _, a := range old.Artifacts {
@@ -399,5 +420,39 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	}
 	if target, err := filepath.EvalSymlinks("/usr/bin/step"); err != nil || target != "/usr/bin/step-cli" {
 		t.Fatal("official alternative not restored", err)
+	}
+	// A compatible newer dependency is retained without any matching old archive;
+	// both forward installation and rollback must leave its version untouched.
+	newer := build("libpq5", "1.1.0-1", ArtifactDirectory, false)
+	if _, err = execute(ctx, "/usr/bin/dpkg", "--install", filepath.Join(ArtifactDirectory, newer.filename())); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := PreparePackages(ctx, incoming)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !samePackage(retained.Retained["libpq5"], newer) || len(retained.Previous) != 2 {
+		t.Fatal("newer satisfied dependency not retained")
+	}
+	if err = retained.install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = retained.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err = installedPackages()
+	if err != nil || !samePackage(current["libpq5"], newer) {
+		t.Fatal("newer dependency changed during transition", err)
+	}
+	legacy := PackagePlan{Installed: map[string]Artifact{}}
+	for _, name := range retiredArtifacts {
+		legacy.Installed[name] = current[name]
+	}
+	if err = legacy.Rollback(ctx); err != nil {
+		t.Fatal("historical product-only journal rejected pre-existing dependency", err)
+	}
+	legacy.InventoryVersion = 1
+	if err = legacy.Rollback(ctx); err == nil {
+		t.Fatal("current journal ignored unrecorded dependency")
 	}
 }

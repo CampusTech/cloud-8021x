@@ -44,7 +44,7 @@ backup/activation engine.
 | `application_version` | Bounded release identifier, required for `--incoming` |
 | `application_sha256`, `config_sha256` | Lowercase SHA256 of incoming fixed `cloud-8021x` and `config.yaml` |
 | `collector_sha256` | Mandatory lowercase SHA256 of the installed standalone collector executable |
-| `artifacts` | Exactly the ten allowlisted product records below, each with `name`, `version`, `architecture`, `sha256` |
+| `artifacts` | All ten product records below plus only the static reviewed Debian13 dependency closure (at most64 total), each with `name`, `version`, `architecture`, `sha256` |
 
 Archives are named `<name>_<version>_<architecture>.deb` in that directory.
 The coherent FreeRADIUS family is `freeradius`, `freeradius-common`,
@@ -55,6 +55,26 @@ The coherent FreeRADIUS family is `freeradius`, `freeradius-common`,
 Task 10 supplies authenticated, scanned compatible versions and all required
 base-image dependencies. There is no unverified fallback, apt resolver, broad
 upgrade or automatic downgrade of unrelated packages.
+
+The dependency-name allowlist is fixed in `internal/privileged/host/dependencies.go`;
+it is not an apt resolver or a general package-install API. The measured clean
+Debian13 native/host-helper closure contains48 dependency archives (58 including
+products). Every archive has an exact name/version/architecture/hash; each is at
+most1GiB, with the historical12GiB aggregate ceiling retained. `all` architecture
+is allowed for the reviewed common/dependency packages only. Read-only validation
+checks selected package dependencies, versioned virtual providers, alternatives,
+reverse dependencies, conflicts and breaks against installed state before mutation.
+`dpkg --no-act --install` alone is insufficient: it accepts missing dependencies.
+Ordinary dpkg dependency enforcement remains enabled during installation/rollback.
+
+Compatible newer dependencies remain installed unchanged; changed library versions
+require their exact prior archive. Existing `adduser`, `ca-certificates`, `sudo`,
+`nftables` and `openssl` replacements require separate OS/dependency preparation;
+initial installation is supported. libc/libssl/systemd/apt/dpkg/kernel replacements
+are outside the archive allowlist. Missing dependencies, unsupported metadata,
+unreviewed base changes or an incomplete closure refuse before mutation. Historical
+product-only rollback journals keep their original observation scope; current
+journals also bind all reviewed dependencies.
 
 Before changing an installed package, Go independently reads protected dpkg
 state and requires its exact prior archive in
