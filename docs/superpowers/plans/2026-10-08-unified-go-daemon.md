@@ -112,12 +112,16 @@ Files: internal/app, internal/jobs, internal/migration, CLI operational/profile 
 
 Files: root *.tf, scripts/startup.sh, .github/workflows, VERSION, examples, README/CLAUDE/docs.
 
-- [ ] Provision cloud8021x DB/least-privilege roles/secrets on existing HA PostgreSQL without changing step-ca DBs. Non-secret YAML + secret references, daemon/DDOT/native replay config. Preserve opt-out/Wi-Fi scope.
-- [ ] Replace 3991-line startup with pinned binary download, mandatory checksum and bootstrap. No generated executable Bash/Python, MySQL/MariaDB, old usage collector or DD read credentials in enabled runtime.
-- [ ] Remove all active Okta/Jamf variables/resources/options/examples/docs. Use explicit reviewed Terraform state-removal migration preserving obsolete rollback secrets, not destructive resource deletion.
-- [ ] Build one application binary and compatibility aliases plus the narrowly patched native FreeRADIUS artifact/package from exact verified source/ABI; pin versions/mandatory checksums, detect incompatible replacement, update root CI/security/lint and module harnesses. Keep backend as FreeRADIUS. Do not publish a release in this task.
-- [ ] Keep development Python parity tests only where useful, Windows PowerShell; retire server Python/Bash files and update docs/profile examples for actual new paths and rollback/HA/ack limitations.
-- [ ] Terraform fmt/validate, template/render/checksum/release tests; commit.
+- [x] Provision cloud8021x DB/least-privilege roles/secrets on existing HA PostgreSQL without changing step-ca DBs. Non-secret YAML + secret references, daemon/DDOT/native replay config. Preserve opt-out/Wi-Fi scope.
+- [x] Replace 3991-line startup with pinned binary download, mandatory checksum and bootstrap. No generated executable Bash/Python, MySQL/MariaDB, old usage collector or DD read credentials in enabled runtime.
+- [x] Remove all active Okta/Jamf variables/resources/options/examples/docs. Use explicit reviewed Terraform state-removal migration preserving obsolete rollback secrets, not destructive resource deletion.
+- [x] Build one application binary and compatibility aliases plus the narrowly patched native FreeRADIUS artifact/package from exact verified source/ABI; pin versions/mandatory checksums, detect incompatible replacement, update root CI/security/lint and module harnesses. Keep backend as FreeRADIUS. Do not publish a release in this task.
+- [x] Keep development Python parity tests only where useful, Windows PowerShell; retire server Python/Bash files and update docs/profile examples for actual new paths and rollback/HA/ack limitations.
+- [x] Terraform fmt/validate, template/render/checksum/release tests; commit.
+
+Task 10 completion covers the implemented configuration, reviewed packages and
+isolated validation. No production provisioning, state apply or release publication
+has occurred. Full installed migration and HA acceptance remain open in Task 11.
 
 ## Task 11: Integration, security and final review
 
