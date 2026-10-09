@@ -158,11 +158,7 @@ func savePassiveManifest(ctx context.Context, e *enrollment, node, phase string,
 		e.Passive.Manifests = map[string]string{}
 	}
 	e.Passive.Manifests[key] = pin
-	state, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	return atomicPrivate(control+"/enrollment.json", state, 0)
+	return persistPassivePhasePins(*e, atomicPrivate)
 }
 func loadPassiveManifest(e enrollment, node, phase string) (audit.Manifest, error) {
 	var m audit.Manifest

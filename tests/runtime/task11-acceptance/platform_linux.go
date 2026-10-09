@@ -24,14 +24,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type nodeEnrollment struct{ MachineID, Hostname, Pin, ConfigSHA256 string }
-type enrollment struct {
-	Cloud                               cloudPins
-	Passive                             passivePins
-	Schema                              int
-	ApplicationSHA256, ControllerSHA256 string
-	Nodes                               map[string]nodeEnrollment
-}
 type nodeProof struct {
 	MachineID, Hostname, BootID, PID1, ApplicationSHA256, ConfigSHA256 string
 	Namespaces                                                         map[string]string
@@ -83,6 +75,9 @@ func loadEnrollment() (enrollment, error) {
 			return e, errors.New("invalid enrolled physical node")
 		}
 		seen[v.MachineID] = true
+	}
+	if err := loadPassivePhasePins(&e, readPrivate); err != nil {
+		return e, err
 	}
 	return e, nil
 }
