@@ -286,3 +286,30 @@ exact provider origin, console/site/location scope. Otherwise historical raw byt
 remain in export and display is unavailable. Fallback age is capped at the original
 one-hour TTL and the current metadata maximum, independent of inventory/source TTL.
 A successful current VLAN observation, including an empty one, supersedes fallback.
+
+## Interrupted legacy baseline checkpoints
+
+A deployed PR38 version2 checkpoint with `phase: baseline` records an incomplete
+historical source scan. Migration preserves the exact original document,
+`credit_start`, `through`, original timestamps and integer counters. Its scan
+`through` is never a native spool cursor or proof of delivered traffic.
+
+A protected migration-only floor in PostgreSQL suppresses usage intervals for
+original receipts before the original credit floor. Valid reports still update
+counter baselines. Each session then learns its first valid, non-predating native
+observation at or after that floor without credit, preventing a delta across
+unobserved history; subsequent valid intervals use ordinary processing. A delayed
+pre-floor report that advances counters re-arms that baseline requirement. This
+can conservatively undercount a first interval; it does not reconstruct missing
+history or change ordinary version1 checkpoint semantics.
+
+Cold rollback export of an incomplete version2 checkpoint returns its exact
+original baseline state, independently from the advanced sessions, intervals,
+outcomes and floor retained in the full current ledger sidecar. It includes
+`legacy_usage_recovery: incomplete_history_manual_reconciliation`. **Reconcile
+the retained sidecar before reactivating legacy usage writers.** Never combine
+the original scan cursor with advanced native counters, discard the sidecar,
+automatically replay/send events, or mark the legacy scan complete based on a
+native receipt time. Only an actual resumed legacy scan can finish its original
+baseline and return to version1. The new enabled runtime performs no Datadog
+readback.

@@ -84,7 +84,7 @@ func TestPostgresCollectionMigrationUpgradesV1AndUsesScopedIndexes(t *testing.T)
 	reset(t, admin)
 	ctx := context.Background()
 	// Recreate a genuine reviewed v1 database state without touching CA objects.
-	_, err := admin.pool.Exec(ctx, "DROP INDEX IF EXISTS ledger.work_collection_recent; DROP INDEX IF EXISTS ledger.work_collection_pending; ALTER TABLE ledger.intake DROP COLUMN terminate_cause, DROP COLUMN terminate_cause_count; DELETE FROM ledger.schema_version WHERE version>1")
+	_, err := admin.pool.Exec(ctx, "DROP INDEX IF EXISTS ledger.work_collection_recent; DROP INDEX IF EXISTS ledger.work_collection_pending; ALTER TABLE ledger.intake DROP COLUMN terminate_cause, DROP COLUMN terminate_cause_count; ALTER TABLE ledger.sessions DROP COLUMN native_baseline_required; DROP TABLE ledger.legacy_usage_floor; DELETE FROM ledger.schema_version WHERE version>1")
 	if err != nil {
 		t.Fatal(err)
 	}

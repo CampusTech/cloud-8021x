@@ -43,6 +43,7 @@ type LegacyTracker struct {
 }
 type UsageCheckpoint struct {
 	Version     int               `json:"version"`
+	Phase       string            `json:"phase,omitempty"`
 	Tracker     LegacyTracker     `json:"tracker"`
 	Through     json.RawMessage   `json:"through"`
 	Pending     []json.RawMessage `json:"pending"`
@@ -71,11 +72,18 @@ func DecodeUsage(data []byte, hosts []string) (UsageCheckpoint, error) {
 	bad := func() (UsageCheckpoint, error) {
 		return UsageCheckpoint{}, errors.New("invalid legacy usage checkpoint")
 	}
-	if len(data) > 64<<20 || len(hosts) == 0 || requireFields(data, "version", "tracker", "through", "pending", "uncertain", "seeded", "preview_id") != nil || domain.DecodeJSONStrict(data, &c) != nil || c.Version != 1 || c.Tracker.Version != 1 || c.Tracker.Sessions == nil || c.Pending == nil || len(c.Tracker.Sessions) > 100000 || len(c.Pending) > 10000 {
+	if len(data) > 64<<20 || len(hosts) == 0 || requireFields(data, "version", "tracker", "through", "pending", "uncertain", "seeded", "preview_id") != nil || domain.DecodeJSONStrict(data, &c) != nil || (c.Version != 1 && c.Version != 2) || c.Tracker.Version != 1 || c.Tracker.Sessions == nil || c.Pending == nil || len(c.Tracker.Sessions) > 100000 || len(c.Pending) > 10000 {
 		return bad()
 	}
 	var top map[string]json.RawMessage
 	_ = json.Unmarshal(data, &top)
+	if c.Version == 2 {
+		if requireFields(data, "phase", "credit_start") != nil || c.Phase != "baseline" || c.Seeded || c.Uncertain || len(c.Pending) != 0 {
+			return bad()
+		}
+	} else if _, present := top["phase"]; present {
+		return bad()
+	}
 	for _, name := range []string{"uncertain", "seeded"} {
 		if bytes.Equal(top[name], []byte("null")) {
 			return bad()
@@ -151,12 +159,12 @@ func DecodeUsage(data []byte, hosts []string) (UsageCheckpoint, error) {
 	}
 	if len(c.CreditStart) != 0 {
 		absent := bytes.Equal(bytes.TrimSpace(c.CreditStart), []byte("null"))
-		if absent != throughAbsent {
+		if absent != throughAbsent || c.Version == 2 && absent {
 			return bad()
 		}
 		if !absent {
 			floor, e := ReceiptTime(c.CreditStart)
-			if e != nil || floor.After(through) {
+			if e != nil || c.Version == 1 && floor.After(through) || c.Version == 2 && !floor.After(through) {
 				return bad()
 			}
 		}

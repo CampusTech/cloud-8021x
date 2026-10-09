@@ -191,3 +191,10 @@ absent metadata and immutable observations/work payloads are never rewritten.
 The normalizer projects only single recognized standard termination values;
 unknown/duplicate/absent values are `N/A` display data, not accounting quarantine
 or authorization inputs. Event IDs and interval arithmetic remain unchanged.
+
+Migration004 retains the original incomplete legacy credit floor in a singleton
+`ledger.legacy_usage_floor` table (migration writes, runtime SELECT only), plus
+the per-session `native_baseline_required` flag. It never exposes protected
+legacy documents to runtime or grants runtime/native schema privileges. The
+full cold export retains these fields; see `docs/daemon-operations.md` for the
+incomplete-history rollback prerequisite.

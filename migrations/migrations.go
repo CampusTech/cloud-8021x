@@ -12,4 +12,7 @@ var Collection string
 //go:embed 003_termination_cause.sql
 var TerminationCause string
 
-const Version = 3
+//go:embed 004_legacy_baseline.sql
+var LegacyBaseline string
+
+const Version = 4

@@ -88,7 +88,8 @@ func processLocked(ctx context.Context, tx pgx.Tx, key []byte, maxAge time.Durat
 	var duration, upload, download string
 	var identity []byte
 	var seen *time.Time
-	err = tx.QueryRow(ctx, "SELECT initialized,duration::text,upload::text,download::text,bits,marked,stopped,last_seen,identity FROM ledger.sessions WHERE session_key=$1", session).Scan(&state.Initialized, &duration, &upload, &download, &state.Bits, &state.Marked, &state.Stopped, &seen, &identity)
+	var baselineRequired bool
+	err = tx.QueryRow(ctx, "SELECT initialized,duration::text,upload::text,download::text,bits,marked,stopped,last_seen,identity,native_baseline_required FROM ledger.sessions WHERE session_key=$1", session).Scan(&state.Initialized, &duration, &upload, &download, &state.Bits, &state.Marked, &state.Stopped, &seen, &identity, &baselineRequired)
 	if err != nil {
 		return ProcessResult{}, err
 	}
@@ -122,6 +123,10 @@ func processLocked(ctx context.Context, tx pgx.Tx, key []byte, maxAge time.Durat
 	} else {
 		result.EventID = event.ID
 		next, interval, reason := accounting.Apply(state, event)
+		interval, reason, baselineRequired, err = gateLegacyBaseline(ctx, tx, state, next, event, interval, reason, baselineRequired)
+		if err != nil {
+			return result, err
+		}
 		result.Reason = reason
 		body, _ := json.Marshal(event)
 		tag, err := tx.Exec(ctx, "INSERT INTO ledger.observations(event_id,intake_id,session_key,received_at,duration,upload,download,event,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(event_id) DO NOTHING", event.ID, id, session, event.Received, u64(event.Duration), u64(event.Upload), u64(event.Download), body, reason)
@@ -135,7 +140,7 @@ func processLocked(ctx context.Context, tx pgx.Tx, key []byte, maxAge time.Durat
 				}
 			}
 			ident, _ := json.Marshal(next.Identity)
-			_, err = tx.Exec(ctx, "UPDATE ledger.sessions SET initialized=$2,duration=$3,upload=$4,download=$5,bits=$6,marked=$7,stopped=$8,last_seen=$9,identity=$10 WHERE session_key=$1", session, next.Initialized, u64(next.Duration), u64(next.Upload), u64(next.Download), next.Bits, next.Marked, next.Stopped, next.LastSeen, ident)
+			_, err = tx.Exec(ctx, "UPDATE ledger.sessions SET initialized=$2,duration=$3,upload=$4,download=$5,bits=$6,marked=$7,stopped=$8,last_seen=$9,identity=$10,native_baseline_required=$11 WHERE session_key=$1", session, next.Initialized, u64(next.Duration), u64(next.Upload), u64(next.Download), next.Bits, next.Marked, next.Stopped, next.LastSeen, ident, baselineRequired)
 			if err != nil {
 				return result, err
 			}

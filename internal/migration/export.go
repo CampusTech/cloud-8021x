@@ -120,20 +120,22 @@ func DecodeNodeState(raw []byte) (NodeState, error) {
 // instruction. New work stays in its original ledger schema beside compatible
 // legacy files until exact terminal evidence permits a chosen recovery action.
 type RollbackExport struct {
-	Version        int                        `json:"version"`
-	Transition     string                     `json:"transition"`
-	Legacy         map[string]json.RawMessage `json:"legacy"`
-	Current        map[string]json.RawMessage `json:"current"`
-	Usage          json.RawMessage            `json:"usage,omitempty"`
-	UsageAbsent    bool                       `json:"usage_absent"`
-	Ledger         LedgerExport               `json:"ledger"`
-	Original       map[string]json.RawMessage `json:"original"`
-	WorkersBlocked bool                       `json:"workers_blocked"`
+	Version             int                        `json:"version"`
+	Transition          string                     `json:"transition"`
+	Legacy              map[string]json.RawMessage `json:"legacy"`
+	Current             map[string]json.RawMessage `json:"current"`
+	Usage               json.RawMessage            `json:"usage,omitempty"`
+	LegacyUsageRecovery string                     `json:"legacy_usage_recovery,omitempty"`
+	UsageAbsent         bool                       `json:"usage_absent"`
+	Ledger              LedgerExport               `json:"ledger"`
+	Original            map[string]json.RawMessage `json:"original"`
+	WorkersBlocked      bool                       `json:"workers_blocked"`
 }
 type LedgerExport struct {
 	OperatorRecoveries       []json.RawMessage `json:"operator_recoveries"`
 	OperatorRecoveryOutcomes []json.RawMessage `json:"operator_recovery_outcomes"`
 	AuthQuarantine           []json.RawMessage `json:"auth_quarantine"`
+	LegacyUsageFloor         []json.RawMessage `json:"legacy_usage_floor"`
 	SchemaVersion            int               `json:"schema_version"`
 	Work                     []json.RawMessage `json:"work"`
 	Attempts                 []json.RawMessage `json:"attempts"`

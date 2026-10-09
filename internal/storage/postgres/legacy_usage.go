@@ -90,6 +90,12 @@ func (s *Store) ExportLegacyUsage(ctx context.Context, id string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
+	// A native receipt cannot prove completion of missing historical DD windows.
+	// Keep the original incomplete checkpoint byte-exact; current sessions and
+	// outcomes are retained separately in the full cold rollback archive.
+	if checkpoint.Version == 2 {
+		return original, nil
+	}
 	prior := map[string]migration.LegacySession{}
 	for _, session := range checkpoint.Tracker.Sessions {
 		prior[accounting.SessionKey(session.Key)] = session
@@ -179,6 +185,11 @@ func decodeSessionKey(input string) ([4]string, error) {
 }
 
 func importLegacyUsageTx(ctx context.Context, tx pgx.Tx, id string, data []byte, hosts []string, checkpoint migration.UsageCheckpoint) error {
+	if checkpoint.Version == 2 {
+		if _, err := tx.Exec(ctx, `INSERT INTO ledger.legacy_usage_floor(singleton,transition,credit_start) VALUES(true,$1,$2)`, id, string(checkpoint.CreditStart)); err != nil {
+			return err
+		}
+	}
 	for _, session := range checkpoint.Tracker.Sessions {
 		seen, err := migration.ReceiptTime([]byte(session.LastSeen))
 		if err != nil {

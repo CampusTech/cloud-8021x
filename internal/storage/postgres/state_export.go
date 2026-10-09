@@ -136,6 +136,7 @@ func (s *Store) ExportState(ctx context.Context, id string) ([]byte, error) {
 		query  string
 		target *[]json.RawMessage
 	}{
+		{`SELECT row_to_json(t) FROM ledger.legacy_usage_floor t ORDER BY singleton LIMIT 2`, &out.Ledger.LegacyUsageFloor},
 		{`SELECT row_to_json(t) FROM bootstrap_private.operator_recovery t ORDER BY request_id LIMIT 100001`, &out.Ledger.OperatorRecoveries},
 		{`SELECT row_to_json(t) FROM bootstrap_private.operator_recovery_outcomes t ORDER BY request_id LIMIT 100001`, &out.Ledger.OperatorRecoveryOutcomes},
 		{`SELECT row_to_json(t) FROM bootstrap_private.auth_quarantine t ORDER BY source,start_offset LIMIT 100001`, &out.Ledger.AuthQuarantine},
@@ -170,6 +171,13 @@ func (s *Store) ExportState(ctx context.Context, id string) ([]byte, error) {
 		out.Usage, e = s.ExportLegacyUsage(ctx, id)
 		if e != nil {
 			return nil, e
+		}
+		checkpoint, e := migration.DecodeUsage(out.Usage, []string{"radius-primary", "radius-secondary"})
+		if e != nil {
+			return nil, e
+		}
+		if checkpoint.Version == 2 {
+			out.LegacyUsageRecovery = "incomplete_history_manual_reconciliation"
 		}
 	}
 	data, e := json.Marshal(out)

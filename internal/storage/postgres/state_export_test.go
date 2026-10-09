@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,9 +12,17 @@ import (
 )
 
 func TestPostgresColdExportRetainsCurrentStateAndUnknownNewWork(t *testing.T) {
+	for _, baseline := range []bool{false, true} {
+		t.Run(fmt.Sprint("incomplete_baseline=", baseline), func(t *testing.T) {
+			testColdExport(t, baseline)
+		})
+	}
+}
+
+func testColdExport(t *testing.T, baseline bool) {
 	s, _ := integration(t)
 	ctx := context.Background()
-	if _, e := s.pool.Exec(ctx, "TRUNCATE bootstrap_private.maintenance,bootstrap_private.transitions,ledger.sessions,ledger.work,ledger.import_markers,ledger.auth_cursors CASCADE"); e != nil {
+	if _, e := s.pool.Exec(ctx, "TRUNCATE ledger.legacy_usage_floor,bootstrap_private.maintenance,bootstrap_private.transitions,ledger.sessions,ledger.work,ledger.import_markers,ledger.auth_cursors CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	id, hash := strings.Repeat("7", 64), strings.Repeat("a", 64)
@@ -24,12 +33,21 @@ func TestPostgresColdExportRetainsCurrentStateAndUnknownNewWork(t *testing.T) {
 		}
 	}
 	usage := json.RawMessage(`{"version":1,"tracker":{"version":1,"sessions":[{"key":["192.0.2.1","10.0.0.1","aabbccddeeff","session"],"duration":42,"upload":18446744073709551615,"download":3,"stopped":true,"display":{"host":"radius-primary"},"identity":null,"last_seen":1728000000.123456789}]},"through":1728000001.25,"pending":[],"uncertain":false,"seeded":true,"preview_id":null}`)
+	if baseline {
+		usage = bytes.Replace(usage, []byte(`"version":1,`), []byte(`"version":2,"phase":"baseline","credit_start":1728000100,`), 1)
+		usage = bytes.Replace(usage, []byte(`"seeded":true`), []byte(`"seeded":false`), 1)
+	}
 	original := json.RawMessage(`{"version":2,"updated_at":1791453600.123456789,"identities":{"ambiguous":null},"certificates":{},"hardware_serials":{}}`)
 	current := bytes.Replace(original, []byte("1791453600.123456789"), []byte("1791453700.999999999"), 1)
 	for _, node := range []string{"radius-primary", "radius-secondary"} {
 		b := migration.Bundle{Version: 1, Node: node, Policy: original, ClassKeySHA256: hash, Usage: usage, SQL: migration.LegacySQL{Status: "absent"}, FingerprintEnforced: true}
 		raw, _ := json.Marshal(b)
 		if e := gate.With(ctx, "fixture-import", func(ctx context.Context) error { _, e := s.ImportLegacyBundle(ctx, id, raw); return e }); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if baseline {
+		if _, e := s.pool.Exec(ctx, `UPDATE ledger.sessions SET upload=777,native_baseline_required=false`); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -63,6 +81,15 @@ func TestPostgresColdExportRetainsCurrentStateAndUnknownNewWork(t *testing.T) {
 	var out migration.RollbackExport
 	if json.Unmarshal(data, &out) != nil || len(out.Current) != 2 || !out.WorkersBlocked || out.UsageAbsent || len(out.Ledger.Work) != 1 || len(out.Ledger.Attempts) != 1 || len(out.Ledger.AuthCursors) != 1 {
 		t.Fatal("incomplete cold export")
+	}
+	if baseline {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) != nil || string(fields["legacy_usage_recovery"]) != `"incomplete_history_manual_reconciliation"` {
+			t.Fatal("missing explicit incomplete history recovery prerequisite")
+		}
+		if !bytes.Equal(out.Usage, usage) || len(out.Ledger.Sessions) != 1 || !bytes.Contains(out.Ledger.Sessions[0], []byte(`"upload":777`)) {
+			t.Fatal("original checkpoint/current ledger separation lost")
+		}
 	}
 	if !bytes.Contains(out.Usage, []byte("18446744073709551615")) || !bytes.Contains(out.Usage, []byte("1728000000.123456789")) {
 		t.Fatal("lost exact original counters or times")
