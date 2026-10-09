@@ -32,6 +32,7 @@ type Request struct {
 	Pins
 	Node             string   `json:"node,omitempty"`
 	Sessions         []string `json:"sessions,omitempty"`
+	Authority        string   `json:"authority,omitempty"`
 	SelectionSHA256  string   `json:"selection_sha256,omitempty"`
 	IssuanceSequence int      `json:"issuance_sequence,omitempty"`
 }
@@ -78,6 +79,12 @@ func bodyKind(action string) string {
 		return ""
 	}
 }
+
+// This selector identifies an earlier protected result; the controller must
+// independently verify genuine prior issuance and exact selection bytes.
+func (r Request) requiresCASelection() bool {
+	return r.Action == "read-ca-issued" || (r.Authority == "rsa" && (r.Action == "nas-ca-adopted" || r.Action == "nas-ca-passive"))
+}
 func (r Request) Validate() error {
 	if r.Schema != 1 || !attemptPattern.MatchString(r.AttemptID) || r.Sequence < 1 || r.Sequence > MaxSequence || bodyKind(r.Action) == "" {
 		return errors.New("closed scenario envelope required")
@@ -106,7 +113,14 @@ func (r Request) Validate() error {
 			return errors.New("irrelevant node/session selector refused")
 		}
 	}
-	if r.Action == "read-ca-issued" {
+	if bodyKind(r.Action) == "ca" {
+		if r.Authority != "ec" && r.Authority != "rsa" {
+			return errors.New("explicit fixed CA authority required")
+		}
+	} else if r.Authority != "" {
+		return errors.New("irrelevant CA authority refused")
+	}
+	if r.requiresCASelection() {
 		if !hashPattern.MatchString(r.SelectionSHA256) || r.IssuanceSequence < 1 || r.IssuanceSequence >= r.Sequence {
 			return errors.New("independent earlier issued-result selection required")
 		}
@@ -135,11 +149,14 @@ func DecodeRequest(raw []byte) (Request, error) {
 	if bodyKind(r.Action) == "lifecycle" {
 		allowed["node"] = true
 	}
-	if r.Action == "read-ca-issued" {
+	if bodyKind(r.Action) == "ca" {
+		allowed["authority"] = true
+	}
+	if r.requiresCASelection() {
 		allowed["selection_sha256"] = true
 		allowed["issuance_sequence"] = true
 	}
-	for _, key := range []string{"node", "sessions", "selection_sha256", "issuance_sequence"} {
+	for _, key := range []string{"node", "sessions", "authority", "selection_sha256", "issuance_sequence"} {
 		if _, present := fields[key]; present && !allowed[key] {
 			return r, errors.New("irrelevant selector presence refused")
 		}

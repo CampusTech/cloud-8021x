@@ -76,6 +76,9 @@ func (v Result) Validate(r Request, requestSHA string) error {
 	case "nas":
 		return validateNAS(*v.NAS)
 	case "ca":
+		if v.CA.Authority != r.Authority {
+			return errors.New("observed CA authority differs from explicit request")
+		}
 		return validateCAResult(*v.CA, r.Action)
 	case "ca_issued":
 		return validateCAObservation(*v.CAIssued, r)

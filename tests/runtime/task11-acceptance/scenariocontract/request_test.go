@@ -8,7 +8,11 @@ import (
 
 func validRequest(action string) Request {
 	p := strings.Repeat("a", 64)
-	return Request{Schema: 1, AttemptID: "task11-" + strings.Repeat("b", 32), Sequence: 1, Action: action, Pins: Pins{p, p, p, p, p}}
+	r := Request{Schema: 1, AttemptID: "task11-" + strings.Repeat("b", 32), Sequence: 1, Action: action, Pins: Pins{p, p, p, p, p}}
+	if bodyKind(action) == "ca" {
+		r.Authority = "ec"
+	}
+	return r
 }
 func encodeRequest(t *testing.T, r Request) []byte {
 	t.Helper()
