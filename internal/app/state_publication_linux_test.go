@@ -123,7 +123,7 @@ func TestInstalledProtectedMigrationRepeatLeavesMaintenanceUsable(t *testing.T) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer inspect.Close(ctx)
+	defer func() { _ = inspect.Close(ctx) }()
 	count := func() int {
 		t.Helper()
 		var n int

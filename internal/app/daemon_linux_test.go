@@ -237,7 +237,7 @@ func TestInstalledAssembledDaemonLedgerOutageAndCancellation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	var cut atomic.Bool
 	var mu sync.Mutex
 	connections := []net.Conn{}
@@ -385,7 +385,7 @@ func TestInstalledAssembledDaemonLedgerOutageAndCancellation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer inspect.Close(ctx)
+	defer func() { _ = inspect.Close(ctx) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var succeeded int
