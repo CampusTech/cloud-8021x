@@ -131,6 +131,13 @@ func protectedBootstrap(ctx context.Context, cfg config.Config, o RunOptions, re
 	if o.DryRun {
 		return bootstrapPlan(cfg, o, renew)
 	}
+	// Fence-only preparation must remain available on the old OS before its
+	// separately approved upgrade. It cannot install or activate new packages.
+	if !o.FenceOnly && !renew {
+		if e = host.CheckShippingPlatform(); e != nil {
+			return e
+		}
+	}
 	var manifest host.Manifest
 	var packagePlan host.PackagePlan
 	var incoming []host.File

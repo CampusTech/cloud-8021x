@@ -197,6 +197,9 @@ func InstallArtifacts(ctx context.Context, m Manifest) error {
 	if os.Geteuid() != 0 {
 		return errors.New("artifact installation requires root")
 	}
+	if e := CheckShippingPlatform(); e != nil {
+		return e
+	}
 	if e := VerifyArtifacts(ctx, m); e != nil {
 		return e
 	}

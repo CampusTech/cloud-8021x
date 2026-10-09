@@ -207,6 +207,13 @@ locals {
 }
 
 resource "google_compute_instance" "radius" {
+  # Existing disks require a separately approved staged in-place OS upgrade.
+  # An image-family edit must never recreate both stateful RADIUS nodes.
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [boot_disk[0].initialize_params[0].image]
+  }
+
   project      = google_project.this.project_id
   name         = "radius-primary"
   machine_type = var.machine_type
@@ -215,7 +222,7 @@ resource "google_compute_instance" "radius" {
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
+      image = "debian-cloud/debian-13"
       size  = var.disk_size_gb
       type  = "pd-balanced"
     }
@@ -297,6 +304,13 @@ resource "google_compute_instance" "radius" {
 }
 
 resource "google_compute_instance" "radius_secondary" {
+  # Existing disks require a separately approved staged in-place OS upgrade.
+  # An image-family edit must never recreate both stateful RADIUS nodes.
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [boot_disk[0].initialize_params[0].image]
+  }
+
   project      = google_project.this.project_id
   name         = "radius-secondary"
   machine_type = var.machine_type
@@ -305,7 +319,7 @@ resource "google_compute_instance" "radius_secondary" {
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
+      image = "debian-cloud/debian-13"
       size  = var.disk_size_gb
       type  = "pd-balanced"
     }

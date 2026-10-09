@@ -1,5 +1,10 @@
 # Protected Go bootstrap and recovery contract
 
+Shipping activation requires Debian 13; existing Debian 12 nodes first need the
+[separately approved staged OS upgrade](../debian13-rollout.md). Incoming fence-only
+preparation remains available on the old OS. Terraform image drift does not
+upgrade an existing disk and cannot authorize its replacement.
+
 The Go helper owns installation, CA adoption, certificate renewal, native
 activation, rollback and root source application. The unprivileged daemon owns
 policy, discovery and durable work coordination. Root operations reopen
