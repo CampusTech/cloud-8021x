@@ -56,10 +56,14 @@ func (b *RadiusBackend) nativeProducer(ctx context.Context) (writerPID, error) {
 	if e != nil {
 		return writerPID{}, e
 	}
+	return selectNativeProducer(pid, processes)
+}
+
+func selectNativeProducer(pid int, processes []writerProcess) (writerPID, error) {
 	for _, p := range processes {
 		if p.PID == pid {
 			args := strings.Split(strings.TrimSuffix(p.Args, "\x00"), "\x00")
-			if len(args) != 2 || args[0] != "/usr/sbin/freeradius" || args[1] != "-f" {
+			if len(args) != 4 || args[0] != "/usr/sbin/freeradius" || args[1] != "-d" || args[2] != radiusDirectory || args[3] != "-f" {
 				return writerPID{}, errors.New("native process does not match fixed protected unit")
 			}
 			return writerPID{p.PID, p.Start}, nil
