@@ -1,6 +1,7 @@
 {
   "description": "RADIUS authentication, assigned VLANs, devices, accounting, and infrastructure. The VLAN filter applies to the VLAN Assignments section; other sections retain unassigned and rejected events.",
   "layout_type": "ordered",
+  "reflow_type": "fixed",
   "template_variables": [
     {
       "available_values": [],
@@ -20,8 +21,8 @@
     },
     {
       "available_values": [
-        "radius-primary.us-east4-a.c.campus-cloud-8021x-42e6.internal",
-        "radius-secondary.us-east4-c.c.campus-cloud-8021x-42e6.internal"
+        "radius-primary",
+        "radius-secondary"
       ],
       "defaults": [
         "*"
@@ -46,35 +47,48 @@
                 {
                   "conditional_formats": [
                     {
+                      "comparator": "<",
+                      "palette": "white_on_red",
+                      "value": 1
+                    },
+                    {
+                      "comparator": "=",
+                      "palette": "white_on_yellow",
+                      "value": 1
+                    },
+                    {
                       "comparator": ">=",
                       "palette": "white_on_green",
-                      "value": 1
+                      "value": 2
                     }
                   ],
                   "formulas": [
                     {
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "formula": "count_nonzero(online)"
                     }
                   ],
                   "queries": [
                     {
                       "aggregator": "last",
                       "data_source": "metrics",
-                      "name": "a",
-                      "query": "min:freeradius.up{$host}"
-                    },
-                    {
-                      "aggregator": "last",
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "min:freeradius.freeradius_up{$host}"
+                      "name": "online",
+                      "query": "max:freeradius.up{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.fill(last,60)"
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Server Status",
+              "time": {
+                "live_span": "5m"
+              },
+              "title": "RADIUS servers online",
               "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 2,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -93,13 +107,13 @@
                       "aggregator": "avg",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_access_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "aggregator": "avg",
                       "data_source": "metrics",
                       "name": "b",
-                      "query": "sum:freeradius.freeradius_total_access_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "scalar"
@@ -107,6 +121,12 @@
               ],
               "title": "Auth Requests / min",
               "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 3,
+              "x": 2,
+              "y": 0
             }
           },
           {
@@ -135,7 +155,7 @@
                       "data_source": "logs",
                       "name": "a",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     }
                   ],
@@ -144,6 +164,12 @@
               ],
               "title": "Accepts",
               "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 2,
+              "x": 5,
+              "y": 0
             }
           },
           {
@@ -172,7 +198,7 @@
                       "data_source": "logs",
                       "name": "a",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     }
                   ],
@@ -181,6 +207,12 @@
               ],
               "title": "Rejects",
               "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 2,
+              "x": 7,
+              "y": 0
             }
           },
           {
@@ -220,7 +252,7 @@
                       "data_source": "logs",
                       "name": "a",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     },
                     {
@@ -230,7 +262,7 @@
                       "data_source": "logs",
                       "name": "c",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     }
                   ],
@@ -239,9 +271,21 @@
               ],
               "title": "Auth Success Rate",
               "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 3,
+              "x": 9,
+              "y": 0
             }
           }
         ]
+      },
+      "layout": {
+        "height": 1,
+        "width": 12,
+        "x": 0,
+        "y": 0
       }
     },
     {
@@ -269,7 +313,7 @@
                       "data_source": "logs",
                       "name": "a",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     }
                   ],
@@ -294,7 +338,7 @@
                       "data_source": "logs",
                       "name": "c",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Reject host:$host.value @site_name:$site.value"
+                        "query": "service:radius-auth @event:Access-Reject host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
                       }
                     }
                   ],
@@ -315,12 +359,12 @@
                     {
                       "data_source": "metrics",
                       "name": "e",
-                      "query": "sum:freeradius.total_access_challenges.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "f",
-                      "query": "sum:freeradius.freeradius_total_access_challenges.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -332,12 +376,18 @@
               "show_legend": true,
               "title": "Accepts vs Rejects",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "@event",
                 "@device_id",
                 "@serial",
@@ -354,13 +404,19 @@
                 "*"
               ],
               "message_display": "inline",
-              "query": "service:radius-auth host:$host.value @site_name:$site.value",
+              "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "Recent Auth Events",
               "type": "log_stream"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -382,6 +438,7 @@
                         {
                           "facet": "@reject_reason",
                           "limit": 10,
+                          "should_exclude_missing": false,
                           "sort": {
                             "aggregation": "count",
                             "order": "desc"
@@ -393,18 +450,317 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Reject"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Reject"
                       }
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Reject Reasons",
+              "title": "Reject Reasons (blank = reason not recorded)",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
             }
           }
         ]
+      },
+      "layout": {
+        "height": 2,
+        "width": 12,
+        "x": 0,
+        "y": 2
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Auth Diagnostics",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "background_color": "white",
+              "content": "Reject attempts include retries; affected clients count station addresses per source/site, excluding missing addresses. Private addresses may change, and blank site labels can split buckets. Open an affected-client row\u2019s \u2018View latest successful authentication\u2019 link for successes, newest first; widen the Logs window for older events. Claimed identity is unverified. Owner/device details require verified enrichment.",
+              "font_size": "14",
+              "show_tick": false,
+              "text_align": "left",
+              "type": "note"
+            },
+            "layout": {
+              "height": 1,
+              "width": 12,
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "has_search_bar": "always",
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Reject attempts",
+                      "cell_display_mode": "number",
+                      "formula": "rejects"
+                    },
+                    {
+                      "alias": "Distinct affected clients",
+                      "cell_display_mode": "number",
+                      "formula": "clients"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@src_ip",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "rejects",
+                      "search": {
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Reject"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "cardinality",
+                        "metric": "@calling_station"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@src_ip",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "clients",
+                      "search": {
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Reject @src_ip:* -@src_ip:\"\" @calling_station:* -@calling_station:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 100,
+                    "order_by": [
+                      {
+                        "index": 0,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "title": "Reject attempts vs affected clients by RADIUS source / site",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 3,
+              "width": 6,
+              "x": 0,
+              "y": 1
+            }
+          },
+          {
+            "definition": {
+              "custom_links": [
+                {
+                  "label": "View latest successful authentication",
+                  "link": "/logs?query=service:radius-auth (host:radius-primary OR host:radius-secondary) @event:Access-Accept {{@src_ip}} {{@calling_station}}&stream_sort=time%2Cdesc&viz=stream&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}&live=false"
+                }
+              ],
+              "has_search_bar": "always",
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Reject attempts",
+                      "cell_display_mode": "number",
+                      "formula": "rejects"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@src_ip",
+                          "limit": 10,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@calling_station",
+                          "limit": 50,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "rejects",
+                      "search": {
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Reject @src_ip:* -@src_ip:\"\" @calling_station:* -@calling_station:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 100,
+                    "order_by": [
+                      {
+                        "index": 0,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "title": "Affected clients \u2014 reject attempts (open row for latest successful auth)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 3,
+              "width": 6,
+              "x": 6,
+              "y": 1
+            }
+          },
+          {
+            "definition": {
+              "columns": [
+                "timestamp",
+                "@src_ip",
+                "@calling_station",
+                "@site_name",
+                "@ap_name",
+                "@reject_reason",
+                "@raw_identity"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "message_display": "inline",
+              "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Reject",
+              "sort": {
+                "column": "timestamp",
+                "order": "desc"
+              },
+              "title": "Recent rejected clients \u2014 claimed identity is unverified",
+              "type": "log_stream"
+            },
+            "layout": {
+              "height": 3,
+              "width": 6,
+              "x": 0,
+              "y": 4
+            }
+          },
+          {
+            "definition": {
+              "columns": [
+                "timestamp",
+                "@src_ip",
+                "@calling_station",
+                "@site_name",
+                "@ap_name",
+                "@identity_verified",
+                "@device_owner",
+                "@device_name",
+                "@device_id"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "message_display": "inline",
+              "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept",
+              "sort": {
+                "column": "timestamp",
+                "order": "desc"
+              },
+              "title": "Successful authentications \u2014 newest first (verified details when available)",
+              "type": "log_stream"
+            },
+            "layout": {
+              "height": 3,
+              "width": 6,
+              "x": 6,
+              "y": 4
+            }
+          }
+        ]
+      },
+      "layout": {
+        "height": 7,
+        "width": 12,
+        "x": 0,
+        "y": 5
       }
     },
     {
@@ -416,11 +772,17 @@
           {
             "definition": {
               "background_color": "white",
-              "content": "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview.",
+              "content": "The VLAN filter applies only to this section. Counts cover the selected time range, not currently connected sessions. VLAN IDs are local to each location: use the site filter or RADIUS source IP to distinguish sites. A blank VLAN means no dynamic assignment was recorded; this is expected for opted-out sites and does not identify the AP or switch default VLAN. Rejected events remain visible in Overview. VLAN labels use the name recorded on each event. Older unnamed events are retained; the same device can appear in named and unnamed buckets, so device counts across VLAN/name buckets are not additive.",
               "font_size": "14",
               "show_tick": false,
               "text_align": "left",
               "type": "note"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -447,6 +809,15 @@
                             "aggregation": "count",
                             "order": "desc"
                           }
+                        },
+                        {
+                          "facet": "@vlan_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
                         }
                       ],
                       "indexes": [
@@ -454,7 +825,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                       }
                     }
                   ],
@@ -463,6 +834,12 @@
               ],
               "title": "Accepted Authentications by VLAN",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -490,6 +867,16 @@
                             "metric": "@device_id",
                             "order": "desc"
                           }
+                        },
+                        {
+                          "facet": "@vlan_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "cardinality",
+                            "metric": "@device_id",
+                            "order": "desc"
+                          }
                         }
                       ],
                       "indexes": [
@@ -497,7 +884,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
+                        "query": "service:(radius-auth OR radius-acct) host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\" @identity_verified:true"
                       }
                     }
                   ],
@@ -506,6 +893,12 @@
               ],
               "title": "Verified Devices Seen by VLAN",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
             }
           },
           {
@@ -539,6 +932,15 @@
                             "aggregation": "count",
                             "order": "desc"
                           }
+                        },
+                        {
+                          "facet": "@vlan_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
                         }
                       ],
                       "indexes": [
@@ -546,7 +948,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth @event:Access-Accept host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
+                        "query": "service:radius-auth @event:Access-Accept host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\""
                       }
                     }
                   ],
@@ -555,12 +957,18 @@
               ],
               "title": "Assignments by RADIUS Source / VLAN",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 0
             }
           },
           {
             "definition": {
               "columns": [
-                "@timestamp",
+                "timestamp",
                 "@event",
                 "@vlan_id",
                 "@vlan_name",
@@ -577,16 +985,28 @@
                 "*"
               ],
               "message_display": "inline",
-              "query": "service:(radius-auth OR radius-acct) host:$host.value @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\"",
+              "query": "service:(radius-auth OR radius-acct) host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @vlan_id:$vlan.value -@vlan_id:\"\"",
               "sort": {
-                "column": "@timestamp",
+                "column": "timestamp",
                 "order": "desc"
               },
               "title": "Recent VLAN Authentication and Accounting",
               "type": "log_stream"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 2
             }
           }
         ]
+      },
+      "layout": {
+        "height": 4,
+        "width": 12,
+        "x": 0,
+        "y": 13
       }
     },
     {
@@ -625,7 +1045,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -634,6 +1054,12 @@
               ],
               "title": "Top Devices by Auth Count",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -666,7 +1092,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -675,6 +1101,12 @@
               ],
               "title": "Device Model Distribution",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -696,6 +1128,7 @@
                         {
                           "facet": "@device_owner",
                           "limit": 20,
+                          "should_exclude_missing": false,
                           "sort": {
                             "aggregation": "count",
                             "order": "desc"
@@ -707,7 +1140,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -716,9 +1149,21 @@
               ],
               "title": "Device Owners by Auth Count",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
             }
           }
         ]
+      },
+      "layout": {
+        "height": 2,
+        "width": 12,
+        "x": 0,
+        "y": 18
       }
     },
     {
@@ -758,7 +1203,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -768,6 +1213,12 @@
               "show_legend": true,
               "title": "Auth Events by Site",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -808,7 +1259,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -817,6 +1268,12 @@
               ],
               "title": "Top Access Points",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -857,7 +1314,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-auth host:$host.value @site_name:$site.value @event:Access-Accept"
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
                       }
                     }
                   ],
@@ -866,9 +1323,1210 @@
               ],
               "title": "Auth by SSID",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "description": "Successful authentications, not unique clients, grouped by site and AP name. Missing site or AP names are unresolved events; they remain visible in the chart.",
+              "hide_total": false,
+              "legend": {
+                "type": "table"
+              },
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "authenticators"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@ap_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "authenticators",
+                      "search": {
+                        "query": "service:radius-auth host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Access-Accept"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Top authenticators \u2014 successful auth",
+              "type": "sunburst"
+            },
+            "layout": {
+              "height": 3,
+              "width": 12,
+              "x": 0,
+              "y": 2
             }
           }
         ]
+      },
+      "layout": {
+        "height": 5,
+        "width": 12,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "definition": {
+        "layout_type": "ordered",
+        "title": "Network Data Usage",
+        "type": "group",
+        "widgets": [
+          {
+            "definition": {
+              "background_color": "white",
+              "content": "**Usage:** Upload/download are from the device\u2019s perspective. Totals include ongoing sessions and deduplicate reports. Totals follow the network\u2019s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. Usage requires an enabled collector.",
+              "font_size": "14",
+              "show_tick": false,
+              "text_align": "left",
+              "type": "note"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "GiB",
+              "precision": 2,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Upload (GiB)",
+                      "formula": "upload / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Observed traffic \u2014 Upload (GiB)",
+              "type": "query_value"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "GiB",
+              "precision": 2,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Download (GiB)",
+                      "formula": "download / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Observed traffic \u2014 Download (GiB)",
+              "type": "query_value"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "custom_unit": "GiB",
+              "precision": 2,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Total (GiB)",
+                      "formula": "(upload + download) / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "title": "Observed traffic \u2014 Total (GiB)",
+              "type": "query_value"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 0
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "precision": 0,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "default_zero(events)"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "events",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "time": {
+                "live_span": "1h"
+              },
+              "title": "All sites \u2014 Accounting events (1h)",
+              "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 12,
+              "x": 0,
+              "y": 2
+            }
+          },
+          {
+            "definition": {
+              "autoscale": false,
+              "precision": 0,
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "formula": "default_zero(events)"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "events",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "time": {
+                "live_span": "1h"
+              },
+              "title": "All sites \u2014 Usage intervals (1h)",
+              "type": "query_value"
+            },
+            "layout": {
+              "height": 1,
+              "width": 12,
+              "x": 0,
+              "y": 3
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Reporting clients",
+                      "cell_display_mode": "number",
+                      "formula": "reporting"
+                    },
+                    {
+                      "alias": "Measured clients",
+                      "cell_display_mode": "number",
+                      "formula": "measured"
+                    },
+                    {
+                      "alias": "Coverage (%)",
+                      "cell_display_mode": "bar",
+                      "formula": "measured / reporting * 100"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "cardinality",
+                        "metric": "@calling_station"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "cardinality",
+                            "metric": "@calling_station",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "reporting",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value (@event:Acct-Update OR @event:Acct-Stop) -@calling_station:\"\""
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "cardinality",
+                        "metric": "@calling_station"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 20,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "cardinality",
+                            "metric": "@calling_station",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "measured",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage -@calling_station:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 20,
+                    "order_by": [
+                      {
+                        "index": 0,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "time": {
+                "live_span": "30m"
+              },
+              "title": "Measured client coverage \u2014 last 30m",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 4
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "alias": "Upload (GiB)",
+                      "formula": "upload / 1073741824"
+                    },
+                    {
+                      "alias": "Download (GiB)",
+                      "formula": "download / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "show_legend": true,
+              "title": "Observed traffic increments by report time (GiB)",
+              "type": "timeseries",
+              "yaxis": {
+                "include_zero": true,
+                "min": "0"
+              }
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 4
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Upload (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "upload / 1073741824"
+                    },
+                    {
+                      "alias": "Download (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "download / 1073741824"
+                    },
+                    {
+                      "alias": "Total (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "(upload + download) / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 10,
+                    "order_by": [
+                      {
+                        "index": 2,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "title": "Observed usage by site (GiB)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 4
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Upload (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "upload / 1073741824"
+                    },
+                    {
+                      "alias": "Download (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "download / 1073741824"
+                    },
+                    {
+                      "alias": "Total (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "(upload + download) / 1073741824"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@device_owner",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@device_name",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@device_id",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage @identity_verified:true -@device_id:\"\""
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@device_owner",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@device_name",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@device_id",
+                          "limit": 15,
+                          "should_exclude_missing": false,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage @identity_verified:true -@device_id:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 30,
+                    "order_by": [
+                      {
+                        "index": 2,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "title": "Observed usage by verified owner / device (GiB)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 4
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Upload (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "upload / 1073741824"
+                    },
+                    {
+                      "alias": "Download (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "download / 1073741824"
+                    },
+                    {
+                      "alias": "Total (GiB)",
+                      "cell_display_mode": "bar",
+                      "formula": "(upload + download) / 1073741824"
+                    },
+                    {
+                      "alias": "Session age (hours)",
+                      "cell_display_mode": "number",
+                      "formula": "duration / 3600",
+                      "number_format": {
+                        "unit": {
+                          "label": "hours",
+                          "type": "custom_unit_label"
+                        }
+                      }
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "max",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@nas_ip",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@session_id",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@src_ip",
+                          "limit": 5,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Update -@session_id:\"\" -@calling_station:\"\""
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "max",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@nas_ip",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@session_id",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@src_ip",
+                          "limit": 5,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Update -@session_id:\"\" -@calling_station:\"\""
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "max",
+                        "metric": "@session_time"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@nas_ip",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@session_id",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@src_ip",
+                          "limit": 5,
+                          "sort": {
+                            "aggregation": "max",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "duration",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Update -@session_id:\"\" -@calling_station:\"\""
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 50,
+                    "order_by": [
+                      {
+                        "index": 2,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "time": {
+                "live_span": "30m"
+              },
+              "title": "Cumulative session counters \u2014 reported in last 30m (GiB)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 6
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "Upload (Mbps)",
+                      "cell_display_mode": "bar",
+                      "formula": "upload * 8 / elapsed / 1000000"
+                    },
+                    {
+                      "alias": "Download (Mbps)",
+                      "cell_display_mode": "bar",
+                      "formula": "download * 8 / elapsed / 1000000"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@output_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 100,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "download",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@input_bytes"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 100,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "upload",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    },
+                    {
+                      "compute": {
+                        "aggregation": "sum",
+                        "metric": "@session_time"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@calling_station",
+                          "limit": 100,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        },
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "sum",
+                            "metric": "@output_bytes",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "elapsed",
+                      "search": {
+                        "query": "service:radius-usage host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Usage"
+                      }
+                    }
+                  ],
+                  "response_format": "scalar",
+                  "sort": {
+                    "count": 30,
+                    "order_by": [
+                      {
+                        "index": 1,
+                        "order": "desc",
+                        "type": "formula"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "time": {
+                "live_span": "30m"
+              },
+              "title": "Reported interval throughput by client \u2014 last 30m (Mbps)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 6
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "display_type": "bars",
+                  "formulas": [
+                    {
+                      "alias": "Updates received",
+                      "formula": "updates"
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "compute": {
+                        "aggregation": "count"
+                      },
+                      "data_source": "logs",
+                      "group_by": [
+                        {
+                          "facet": "@site_name",
+                          "limit": 10,
+                          "sort": {
+                            "aggregation": "count",
+                            "order": "desc"
+                          }
+                        }
+                      ],
+                      "indexes": [
+                        "*"
+                      ],
+                      "name": "updates",
+                      "search": {
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Update"
+                      }
+                    }
+                  ],
+                  "response_format": "timeseries"
+                }
+              ],
+              "title": "Interim accounting updates by site",
+              "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 6
+            }
+          },
+          {
+            "definition": {
+              "columns": [
+                "timestamp",
+                "@event",
+                "@site_name",
+                "@ap_name",
+                "@ssid",
+                "@device_owner",
+                "@device_name",
+                "@calling_station",
+                "@session_id",
+                "@input_bytes",
+                "@output_bytes",
+                "@session_time",
+                "@identity_verified"
+              ],
+              "indexes": [
+                "*"
+              ],
+              "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value (@event:Acct-Update OR @event:Acct-Stop)",
+              "sort": {
+                "column": "timestamp",
+                "order": "desc"
+              },
+              "title": "Recent session counters and device details",
+              "type": "log_stream"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 6
+            }
+          }
+        ]
+      },
+      "layout": {
+        "height": 8,
+        "width": 12,
+        "x": 0,
+        "y": 27
       }
     },
     {
@@ -892,12 +2550,12 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_acct_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "b",
-                      "query": "sum:freeradius.freeradius_total_acct_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -917,12 +2575,12 @@
                     {
                       "data_source": "metrics",
                       "name": "c",
-                      "query": "sum:freeradius.total_acct_responses.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "d",
-                      "query": "sum:freeradius.freeradius_total_acct_responses.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -934,6 +2592,12 @@
               "show_legend": true,
               "title": "Accounting Requests",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -958,7 +2622,7 @@
                       ],
                       "name": "starts",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Start"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Start"
                       }
                     }
                   ],
@@ -986,7 +2650,7 @@
                       ],
                       "name": "stops",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Stop"
                       }
                     }
                   ],
@@ -999,6 +2663,12 @@
               "show_legend": true,
               "title": "Session Events",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -1021,6 +2691,7 @@
                         {
                           "facet": "@device_owner",
                           "limit": 20,
+                          "should_exclude_missing": false,
                           "sort": {
                             "aggregation": "avg",
                             "metric": "@session_time",
@@ -1033,7 +2704,7 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Stop"
                       }
                     }
                   ],
@@ -1042,6 +2713,12 @@
               ],
               "title": "Avg Session Duration by User (min)",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
             }
           },
           {
@@ -1063,6 +2740,7 @@
                         {
                           "facet": "@terminate_cause",
                           "limit": 10,
+                          "should_exclude_missing": false,
                           "sort": {
                             "aggregation": "count",
                             "order": "desc"
@@ -1074,15 +2752,21 @@
                       ],
                       "name": "query1",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Stop"
                       }
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Session Termination Causes",
+              "title": "Session Termination Causes (blank = cause not recorded)",
               "type": "toplist"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 0
             }
           },
           {
@@ -1108,7 +2792,7 @@
                       ],
                       "name": "input",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Stop"
                       }
                     }
                   ],
@@ -1137,7 +2821,7 @@
                       ],
                       "name": "output",
                       "search": {
-                        "query": "service:radius-acct host:$host.value @site_name:$site.value @event:Acct-Stop"
+                        "query": "service:radius-acct host:$host.value (host:radius-primary OR host:radius-secondary) @site_name:$site.value @event:Acct-Stop"
                       }
                     }
                   ],
@@ -1148,11 +2832,23 @@
                 }
               ],
               "show_legend": true,
-              "title": "Bandwidth (Acct-Stop)",
+              "title": "Completed session counters (bytes, at stop)",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 2
             }
           }
         ]
+      },
+      "layout": {
+        "height": 4,
+        "width": 12,
+        "x": 0,
+        "y": 36
       }
     },
     {
@@ -1168,20 +2864,15 @@
                   "display_type": "line",
                   "formulas": [
                     {
-                      "alias": "Auth",
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "alias": "Acct",
+                      "formula": "depth"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
-                      "name": "a",
-                      "query": "avg:freeradius.queue_len_auth{$host}"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "avg:freeradius.freeradius_queue_len_auth{$host}"
+                      "name": "depth",
+                      "query": "max:freeradius.queue_len_acct{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1190,20 +2881,15 @@
                   "display_type": "line",
                   "formulas": [
                     {
-                      "alias": "Acct",
-                      "formula": "default_zero(c) + default_zero(d)"
+                      "alias": "Auth",
+                      "formula": "depth"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
-                      "name": "c",
-                      "query": "avg:freeradius.queue_len_acct{$host}"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "avg:freeradius.freeradius_queue_len_acct{$host}"
+                      "name": "depth",
+                      "query": "max:freeradius.queue_len_auth{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1213,19 +2899,14 @@
                   "formulas": [
                     {
                       "alias": "Internal",
-                      "formula": "default_zero(e) + default_zero(f)"
+                      "formula": "depth"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
-                      "name": "e",
-                      "query": "avg:freeradius.queue_len_internal{$host}"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "f",
-                      "query": "avg:freeradius.freeradius_queue_len_internal{$host}"
+                      "name": "depth",
+                      "query": "max:freeradius.queue_len_internal{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1234,6 +2915,12 @@
               "show_legend": true,
               "title": "Queue Depths",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 0
             }
           },
           {
@@ -1243,56 +2930,46 @@
                   "display_type": "line",
                   "formulas": [
                     {
-                      "alias": "PPS In",
-                      "formula": "default_zero(a) + default_zero(b)"
+                      "alias": "Access requests / sec",
+                      "formula": "requests"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
-                      "name": "a",
-                      "query": "avg:freeradius.queue_pps_in{$host}"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "b",
-                      "query": "avg:freeradius.freeradius_queue_pps_in{$host}"
+                      "name": "requests",
+                      "query": "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
                     }
                   ],
-                  "response_format": "timeseries",
-                  "style": {
-                    "palette": "blue"
-                  }
+                  "response_format": "timeseries"
                 },
                 {
                   "display_type": "line",
                   "formulas": [
                     {
-                      "alias": "PPS Out",
-                      "formula": "default_zero(c) + default_zero(d)"
+                      "alias": "Accounting requests / sec",
+                      "formula": "requests"
                     }
                   ],
                   "queries": [
                     {
                       "data_source": "metrics",
-                      "name": "c",
-                      "query": "avg:freeradius.queue_pps_out{$host}"
-                    },
-                    {
-                      "data_source": "metrics",
-                      "name": "d",
-                      "query": "avg:freeradius.freeradius_queue_pps_out{$host}"
+                      "name": "requests",
+                      "query": "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
                     }
                   ],
-                  "response_format": "timeseries",
-                  "style": {
-                    "palette": "green"
-                  }
+                  "response_format": "timeseries"
                 }
               ],
               "show_legend": true,
-              "title": "Packets Per Second",
+              "title": "Incoming RADIUS requests / sec",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 0
             }
           },
           {
@@ -1310,12 +2987,12 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:freeradius.total_auth_malformed_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "b",
-                      "query": "sum:freeradius.freeradius_total_auth_malformed_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1335,12 +3012,12 @@
                     {
                       "data_source": "metrics",
                       "name": "c",
-                      "query": "sum:freeradius.total_auth_invalid_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "d",
-                      "query": "sum:freeradius.freeradius_total_auth_invalid_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1360,12 +3037,12 @@
                     {
                       "data_source": "metrics",
                       "name": "e",
-                      "query": "sum:freeradius.total_auth_dropped_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "f",
-                      "query": "sum:freeradius.freeradius_total_auth_dropped_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1385,12 +3062,12 @@
                     {
                       "data_source": "metrics",
                       "name": "g",
-                      "query": "sum:freeradius.total_auth_duplicate_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     },
                     {
                       "data_source": "metrics",
                       "name": "h",
-                      "query": "sum:freeradius.freeradius_total_auth_duplicate_requests.count{$host}.as_rate()"
+                      "query": "sum:freeradius.freeradius_total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1402,6 +3079,12 @@
               "show_legend": true,
               "title": "Auth Errors",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 0
             }
           },
           {
@@ -1418,7 +3101,7 @@
                     {
                       "data_source": "metrics",
                       "name": "cpu",
-                      "query": "avg:system.cpu.user{$host} by {host}"
+                      "query": "avg:system.cpu.user{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1427,6 +3110,12 @@
               "show_legend": true,
               "title": "CPU Usage",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 0
             }
           },
           {
@@ -1443,12 +3132,12 @@
                     {
                       "data_source": "metrics",
                       "name": "used",
-                      "query": "avg:system.mem.used{$host} by {host}"
+                      "query": "avg:system.mem.used{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     },
                     {
                       "data_source": "metrics",
                       "name": "total",
-                      "query": "avg:system.mem.total{$host} by {host}"
+                      "query": "avg:system.mem.total{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1461,33 +3150,94 @@
                 "max": "100",
                 "min": "0"
               }
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 2
             }
           },
           {
             "definition": {
-              "autoscale": false,
-              "custom_unit": "days",
-              "precision": 1,
               "requests": [
                 {
                   "formulas": [
                     {
-                      "formula": "a / 86400"
+                      "alias": "FreeRADIUS uptime (hours)",
+                      "cell_display_mode": "number",
+                      "formula": "uptime / 3600",
+                      "number_format": {
+                        "unit": {
+                          "label": "hours",
+                          "type": "custom_unit_label"
+                        }
+                      }
                     }
                   ],
                   "queries": [
                     {
                       "aggregator": "last",
                       "data_source": "metrics",
-                      "name": "a",
-                      "query": "min:system.uptime{$host}"
+                      "name": "uptime",
+                      "query": "min:system.processes.run_time.max{$host AND (host:radius-primary OR host:radius-secondary) AND process_name:freeradius} by {host}"
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "System Uptime (days)",
-              "type": "query_value"
+              "time": {
+                "live_span": "5m"
+              },
+              "title": "FreeRADIUS process uptime by server (hours)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 3,
+              "y": 2
+            }
+          },
+          {
+            "definition": {
+              "requests": [
+                {
+                  "formulas": [
+                    {
+                      "alias": "VM uptime (hours)",
+                      "cell_display_mode": "number",
+                      "formula": "uptime / 3600",
+                      "number_format": {
+                        "unit": {
+                          "label": "hours",
+                          "type": "custom_unit_label"
+                        }
+                      }
+                    }
+                  ],
+                  "queries": [
+                    {
+                      "aggregator": "last",
+                      "data_source": "metrics",
+                      "name": "uptime",
+                      "query": "min:system.uptime{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                    }
+                  ],
+                  "response_format": "scalar"
+                }
+              ],
+              "time": {
+                "live_span": "5m"
+              },
+              "title": "VM uptime by server (hours)",
+              "type": "query_table"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 6,
+              "y": 2
             }
           },
           {
@@ -1504,7 +3254,7 @@
                     {
                       "data_source": "metrics",
                       "name": "rx",
-                      "query": "avg:system.net.bytes_rcvd{$host} by {host}"
+                      "query": "avg:system.net.bytes_rcvd{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1523,7 +3273,7 @@
                     {
                       "data_source": "metrics",
                       "name": "tx",
-                      "query": "avg:system.net.bytes_sent{$host} by {host}"
+                      "query": "avg:system.net.bytes_sent{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries",
@@ -1535,6 +3285,12 @@
               "show_legend": true,
               "title": "Network I/O",
               "type": "timeseries"
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 9,
+              "y": 2
             }
           },
           {
@@ -1551,7 +3307,7 @@
                     {
                       "data_source": "metrics",
                       "name": "disk",
-                      "query": "max:system.disk.in_use{$host} by {host}"
+                      "query": "max:system.disk.in_use{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -1564,9 +3320,21 @@
                 "max": "100",
                 "min": "0"
               }
+            },
+            "layout": {
+              "height": 2,
+              "width": 3,
+              "x": 0,
+              "y": 4
             }
           }
         ]
+      },
+      "layout": {
+        "height": 6,
+        "width": 12,
+        "x": 0,
+        "y": 41
       }
     }
   ]

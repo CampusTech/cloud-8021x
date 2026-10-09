@@ -74,9 +74,9 @@ terraform output        # Show outputs (IP, SSH command, etc.)
 
 - Defined in `datadog.tf` using `datadog_dashboard_json` resource, gated by `count = local.datadog_enabled ? 1 : 0`
 - Dashboard JSON is built from `local.dashboard_json` (HCL map) then encoded via `jsonencode()`
-- Static exports — regenerate after editing the HCL dashboard locals (run `grep '^"'` to skip any console warnings):
-  - FreeRADIUS: `echo 'jsonencode(local.dashboard_json)' | terraform console 2>/dev/null | grep '^"' | head -1 | python3 -c 'import sys,json; data=json.loads(json.loads(sys.stdin.read().strip())); print(json.dumps(data, indent=2))' > datadog-dashboard.json`
-  - Smallstep CA: `echo 'jsonencode(local.smallstep_dashboard_json)' | terraform console 2>/dev/null | grep '^"' | head -1 | python3 -c 'import sys,json; data=json.loads(json.loads(sys.stdin.read().strip())); print(json.dumps(data, indent=2))' > datadog-smallstep-dashboard.json`
+- Regenerate both static JSON exports and the native HCL companion after editing dashboard locals: `cd tools/dashboard && go run . sync --root ../..`. Verify with `go run . sync --root ../.. --check`; CI checks drift too.
+- The sync tool evaluates only dashboard locals in an isolated temporary module, without deployment credentials, backend, provider API calls, or apply.
+- `docs/generated/datadog-dashboard-v2.tf` is a generated companion, not a root-module resource. Provider 4.25.0 cannot represent explicit missing-facet inclusion for log groupings. Keep the JSON managed resources until upstream DataDog/terraform-provider-datadog PR #4225 is released and lossless migration is verified. The generated loss report makes this gap explicit; do not remove missing-bucket flags to force parity.
 - Template variables: `$site` (site log facet), `$host` (metrics/logs), and `$vlan` (VLAN Assignments section only; do not globally hide rejects or opted-out sites)
 - Metric queries use `{$host}` filter; FreeRADIUS counter metrics need `.count` suffix (Datadog OpenMetrics appends it automatically to Prometheus counters)
 - Log queries filter with `host:$host.value @site_name:$site.value`

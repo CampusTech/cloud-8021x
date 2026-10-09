@@ -3150,6 +3150,12 @@ def accounting(p):
                 except Exception as e:
                     radiusd.radlog(radiusd.L_ERR, f"Device cache read in accounting failed: {e}")
 
+        # SSID is network metadata, available even without a verified device.
+        if called_station:
+            ssid = _ssid_from_called_station(called_station)
+            if ssid:
+                reply_attrs.append(("Login-LAT-Port", ssid))
+
         # AP lookup (UniFi or Meraki, by Called-Station-Id BSSID)
         if called_station:
             try:
@@ -3518,13 +3524,16 @@ DD_API_KEY=$(gcloud secrets versions access latest \
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DATADOG_SITE" \
     bash -c "$(curl -fsSL https://install.datadoghq.com/scripts/install_script_agent7.sh)"
 
-# Set hostname to GCE instance name (ensures host tag matches dashboard queries)
-INSTANCE_NAME=$(curl -sS -H "Metadata-Flavor: Google" \
+# Give parallel deployments distinct Datadog identities. Explicit empty suffix
+# preserves historical production hostnames during an upgrade.
+INSTANCE_NAME=$(curl -fsS -H "Metadata-Flavor: Google" \
     http://metadata.google.internal/computeMetadata/v1/instance/name)
-sed -i "s/^# hostname:.*$/hostname: $INSTANCE_NAME/" /etc/datadog-agent/datadog.yaml
-if ! grep -q "^hostname:" /etc/datadog-agent/datadog.yaml; then
-    echo "hostname: $INSTANCE_NAME" >> /etc/datadog-agent/datadog.yaml
-fi
+DATADOG_HOSTNAME_SUFFIX='${datadog_hostname_suffix}'
+printf '%s' '${datadog_hostname_module_b64}' | base64 -d > /usr/local/sbin/radius-datadog-hostname.py
+chmod 755 /usr/local/sbin/radius-datadog-hostname.py
+python3 /usr/local/sbin/radius-datadog-hostname.py \
+    --config /etc/datadog-agent/datadog.yaml --instance "$INSTANCE_NAME" \
+    --project "$PROJECT_ID" --suffix "$DATADOG_HOSTNAME_SUFFIX"
 
 # Enable log collection
 sed -i 's/^# logs_enabled: false/logs_enabled: true/' /etc/datadog-agent/datadog.yaml
@@ -3658,6 +3667,21 @@ instances:
       - freeradius_hup_time: hup_time
       - freeradius_up: up
 DDMETRICSEOF
+
+# Match the exact executable name, so freeradius_exporter is excluded.
+# Keep this separate from the step-ca check and enable it in every deployment.
+mkdir -p /etc/datadog-agent/conf.d/process.d
+cat > /etc/datadog-agent/conf.d/process.d/freeradius.yaml << 'DDRADIUSPROCEOF'
+instances:
+  - name: freeradius
+    search_string:
+      - freeradius
+    exact_match: true
+    collect_children: false
+    service: radius
+    thresholds:
+      critical: [1, 1]
+DDRADIUSPROCEOF
 
 %{ if smallstep_enabled ~}
 # ---------------------------------------------------------------------------
@@ -3904,6 +3928,40 @@ systemctl enable --now stepca-dd-metrics.timer
 systemctl daemon-reload
 systemctl enable --now radius-source-refresh.timer
 systemctl start radius-source-refresh.service || echo "Source discovery unavailable; dynamic sources remain closed until a successful refresh."
+%{ endif ~}
+
+# Usage collection is independent of authentication. Only the primary installs it.
+%{ if radius_usage_collector_enabled ~}
+if [ "$INSTANCE_NAME" = "radius-primary" ]; then
+    USAGE_STAGE=$(mktemp -d)
+    chmod 700 "$USAGE_STAGE"
+    printf '%s' '${radius_usage_module_b64}' | base64 -d > "$USAGE_STAGE/radius_usage.py"
+    printf '%s' '${radius_usage_collector_module_b64}' | base64 -d > "$USAGE_STAGE/radius_usage_collector.py"
+    printf '%s' '${radius_usage_service_module_b64}' | base64 -d > "$USAGE_STAGE/radius_usage_service.py"
+    USAGE_PRIMARY="radius-primary"
+    USAGE_SECONDARY="radius-secondary"
+    if [ -n "$DATADOG_HOSTNAME_SUFFIX" ]; then
+        USAGE_PRIMARY="$USAGE_PRIMARY-$DATADOG_HOSTNAME_SUFFIX"
+        USAGE_SECONDARY="$USAGE_SECONDARY-$DATADOG_HOSTNAME_SUFFIX"
+    fi
+    USAGE_EXTRA=()
+%{ if radius_usage_preview_id != "" ~}
+    USAGE_EXTRA=(--preview-id '${radius_usage_preview_id}')
+%{ endif ~}
+    python3 "$USAGE_STAGE/radius_usage_service.py" install \
+        --secret "projects/$PROJECT_ID/secrets/${radius_usage_credentials_secret}/versions/latest" \
+        --site "$DATADOG_SITE" --primary-host radius-primary --collector-id "$USAGE_PRIMARY" \
+        --source-hosts "$USAGE_PRIMARY" "$USAGE_SECONDARY" --source-dir "$USAGE_STAGE" "$${USAGE_EXTRA[@]}"
+    rm -rf "$USAGE_STAGE"
+fi
+%{ else ~}
+# Keep durable checkpoints and installed code for an explicit later re-enable.
+# Only stop our own unit; an identically named administrator unit is untouched.
+if [ -f /etc/systemd/system/radius-usage-collector.service ] && \
+   [ ! -L /etc/systemd/system/radius-usage-collector.service ] && \
+   grep -Fxq '# Managed radius usage monitor; does not control FreeRADIUS.' /etc/systemd/system/radius-usage-collector.service; then
+    systemctl disable --now radius-usage-collector.service
+fi
 %{ endif ~}
 
 # Restart Datadog Agent to pick up all new config

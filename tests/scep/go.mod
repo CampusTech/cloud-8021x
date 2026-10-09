@@ -1,6 +1,6 @@
 module github.com/CampusTech/cloud-8021x/webhook/integration/scep
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/CampusTech/cloud-8021x/webhook v0.0.0

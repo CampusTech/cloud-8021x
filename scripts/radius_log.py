@@ -10,11 +10,19 @@ def attributes(request, name):
     return dict(request.get(name, ()))
 
 
+def nonnegative_integer(value):
+    try:
+        return max(0, int(value))
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
 def record(request, enrichment, accounting=False):
     incoming = attributes(request, 'request')
     control = attributes(request, 'config')
     # Identity fields come ONLY from verified enrichment, not earlier reply attrs.
     reply = dict(enrichment)
+    owner = reply.get('Reply-Message')
     event = control.get('Tmp-String-5', 'Access-Reject')
     if accounting:
         event = {'Start': 'Acct-Start', 'Stop': 'Acct-Stop', 'Interim-Update': 'Acct-Update',
@@ -26,7 +34,7 @@ def record(request, enrichment, accounting=False):
               'identity_verified': bool(reply.get('Tmp-String-2')),
               'serial': reply.get('Login-LAT-Service', ''),
               'raw_identity': incoming.get('User-Name', ''),
-              'device_owner': reply.get('Reply-Message', ''),
+              'device_owner': owner if isinstance(owner, str) and owner.strip() else 'N/A',
               'device_name': reply.get('Filter-Id', ''),
               'device_model': reply.get('Login-LAT-Node', ''),
               'vlan_id': reply.get('Tunnel-Private-Group-Id', ''),
@@ -46,14 +54,15 @@ def record(request, enrichment, accounting=False):
     if event == 'Access-Reject':
         result['reject_reason'] = incoming.get('Module-Failure-Message', control.get('Module-Failure-Message', ''))
     if accounting:
+        result['counter_bits'] = 64
         result['username'] = incoming.get('User-Name', '')
         result['terminate_cause'] = incoming.get('Acct-Terminate-Cause', '')
-        for key, attr in {'session_time': 'Acct-Session-Time', 'input_bytes': 'Acct-Input-Octets',
-                          'output_bytes': 'Acct-Output-Octets'}.items():
-            try:
-                result[key] = max(0, int(incoming.get(attr, 0)))
-            except (ValueError, TypeError):
-                result[key] = 0
+        result['session_time'] = nonnegative_integer(incoming.get('Acct-Session-Time', 0))
+        for key, direction in {'input_bytes': 'Input', 'output_bytes': 'Output'}.items():
+            octets = nonnegative_integer(incoming.get(f'Acct-{direction}-Octets', 0))
+            gigawords = nonnegative_integer(incoming.get(f'Acct-{direction}-Gigawords', 0))
+            # Gigawords count 32-bit Octets counter wraps, not GiB units.
+            result[key] = (gigawords << 32) + octets
     return json.dumps(result, separators=(',', ':'), ensure_ascii=True)
 
 

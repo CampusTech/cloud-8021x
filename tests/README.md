@@ -23,10 +23,10 @@ go test ./...
 golangci-lint run
 ```
 
-Both Go modules require Go 1.27.1 or newer. The `go-security` workflow tests
-and scans imported packages, including test dependencies, on PRs and in the
-merge queue. To run the same vulnerability check locally, run this command in
-both `webhook/` and `tests/scep/`:
+All three Go modules require Go 1.27.2 or newer. The `go-security` workflow
+tests and scans imported packages, including test dependencies, on PRs and in
+the merge queue. To run the same vulnerability check locally, run this command
+in `webhook/`, `tests/scep/`, and `tools/dashboard/`:
 
 ```sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...

@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [webhook, tests/scep]
+        module: [webhook, tests/scep, tools/dashboard]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -30,6 +30,7 @@ jobs:
           cache-dependency-path: |
             webhook/go.sum
             tests/scep/go.sum
+            tools/dashboard/go.sum
       - name: Verify dependencies
         run: go mod download && go mod verify
       - name: Test
