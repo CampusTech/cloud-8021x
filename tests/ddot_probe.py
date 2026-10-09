@@ -55,6 +55,66 @@ def wait(check, seconds=30):
         time.sleep(.1)
     raise AssertionError('bounded wait expired')
 
+def capture_command(command, evidence, name, timeout):
+    """Retain exact subprocess diagnostics before propagating failure; never retry."""
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        (evidence / (name + '.stdout')).write_bytes(error.stdout or b'')
+        (evidence / (name + '.stderr')).write_bytes(error.stderr or b'')
+        (evidence / (name + '.result.json')).write_text(json.dumps(
+            {'returncode': None, 'timed_out': True, 'timeout_seconds': timeout}))
+        raise
+    (evidence / (name + '.stdout')).write_bytes(result.stdout)
+    (evidence / (name + '.stderr')).write_bytes(result.stderr)
+    (evidence / (name + '.result.json')).write_text(json.dumps(
+        {'returncode': result.returncode, 'timed_out': False, 'timeout_seconds': timeout}))
+    result.check_returncode()
+    return result
+
+def core_api_status(token, certificate, timeout):
+    # Agent 7.84.2: server_cmd.go mounts /agent with IPC auth; internal/agent/
+    # agent.go exposes GET /status/health using health.GetReady(). IPC generation
+    # publishes token BEFORE cert (comp/core/ipc/impl/ipc.go); token alone races
+    # the check command's ModuleReadOnly / single-attempt FetchIPCCert.
+    context = ssl.create_default_context(cafile=str(certificate))
+    request = urllib.request.Request('https://127.0.0.1:5001/agent/status/health',
+                                     headers={'Authorization': 'Bearer ' + token.read_text().strip()})
+    with urllib.request.urlopen(request, context=context, timeout=timeout) as response:
+        assert response.status == 200, 'core API did not return success'
+        return json.load(response)
+
+
+def wait_core_api(process, token, certificate, evidence, seconds=30, probe=core_api_status):
+    """Bounded authenticated readiness; report failures without exposing IPC secrets."""
+    deadline = time.monotonic() + seconds
+    report = {'outcome': 'waiting', 'attempts': []}
+    try:
+        while time.monotonic() < deadline:
+            state = {'returncode': process.poll(), 'token_exists': token.exists(),
+                     'certificate_exists': certificate.exists()}
+            report['attempts'].append(state)
+            if state['returncode'] is not None:
+                report['outcome'] = 'exited'
+                raise AssertionError('core Agent exited before readiness; see core.log/core-readiness.json')
+            try:
+                health = probe(token, certificate, timeout=min(1, max(.001, deadline - time.monotonic())))
+                # pkg/status/health.Status serializes Healthy/Unhealthy arrays;
+                # the handler returns 200 even when some components are unhealthy.
+                state['health'] = health
+                if (isinstance(health, dict) and isinstance(health.get('Healthy'), list)
+                        and health['Healthy'] and 'Unhealthy' in health
+                        and health['Unhealthy'] in (None, [])):
+                    report['outcome'] = 'ready'
+                    return
+            except (OSError, ValueError) as error:
+                state['error'] = type(error).__name__
+            time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        report['outcome'] = 'timeout'
+        raise AssertionError('core Agent readiness deadline expired; see core.log/core-readiness.json')
+    finally:
+        (evidence / 'core-readiness.json').write_text(json.dumps(report, indent=2))
+
 def post(body):
     req = urllib.request.Request('http://127.0.0.1:4319/v1/logs', data=body,
                                  headers={'Content-Type': 'application/json'})
@@ -82,14 +142,16 @@ def start():
 
 core_log = open(EVIDENCE / 'core.log', 'ab', buffering=0)
 core = subprocess.Popen(['/opt/datadog-agent/bin/agent/agent', 'run', '-c', '/task7/core.yaml'], stdout=core_log, stderr=subprocess.STDOUT)
-wait(lambda: (pathlib.Path('/opt/datadog-agent/run/auth_token')).exists() and core.poll() is None)
-for check in ['cpu', 'disk', 'io', 'load', 'memory', 'network', 'uptime']:
-    checked = subprocess.run(['/opt/datadog-agent/bin/agent/agent', 'check', check, '--check-rate', '--json', '-c', '/task7/core.yaml'], capture_output=True, text=True, check=True)
-    payload = json.loads(checked.stdout)
-    (EVIDENCE / ('host-check-' + check + '.json')).write_text(checked.stdout)
-    assert payload and payload[0].get('aggregator', {}).get('metrics'), (check, payload)
-process = start()
+process = None
 try:
+    wait_core_api(core, pathlib.Path('/opt/datadog-agent/run/auth_token'),
+                  pathlib.Path('/opt/datadog-agent/run/ipc_cert.pem'), EVIDENCE)
+    for check in ['cpu', 'disk', 'io', 'load', 'memory', 'network', 'uptime']:
+        checked = capture_command(['/opt/datadog-agent/bin/agent/agent', 'check', check, '--check-rate', '--json', '-c', '/task7/core.yaml'], EVIDENCE, 'host-check-' + check, timeout=60)
+        payload = json.loads(checked.stdout)
+        (EVIDENCE / ('host-check-' + check + '.json')).write_bytes(checked.stdout)
+        assert payload and payload[0].get('aggregator', {}).get('metrics'), (check, payload)
+    process = start()
     headers = {}
     token = pathlib.Path('/opt/datadog-agent/run/auth_token')
     if token.exists():
@@ -155,7 +217,7 @@ try:
     (EVIDENCE / 'result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps(result))
 finally:
-    if process.poll() is None:
+    if process is not None and process.poll() is None:
         process.kill()
         process.wait(timeout=5)
     server.shutdown()

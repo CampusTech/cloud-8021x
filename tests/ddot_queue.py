@@ -18,6 +18,23 @@ VERSION = '1:7.84.2-1+campus1'
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
+def capture_command(command, evidence, name, timeout):
+    """Retain exact subprocess diagnostics before propagating failure; never retry."""
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        (evidence / (name + '.stdout')).write_bytes(error.stdout or b'')
+        (evidence / (name + '.stderr')).write_bytes(error.stderr or b'')
+        (evidence / (name + '.result.json')).write_text(json.dumps(
+            {'returncode': None, 'timed_out': True, 'timeout_seconds': timeout}))
+        raise
+    (evidence / (name + '.stdout')).write_bytes(result.stdout)
+    (evidence / (name + '.stderr')).write_bytes(result.stderr)
+    (evidence / (name + '.result.json')).write_text(json.dumps(
+        {'returncode': result.returncode, 'timed_out': False, 'timeout_seconds': timeout}))
+    result.check_returncode()
+    return result
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--evidence', required=True)
 parser.add_argument('--packages', required=True, help='actual rebuilt package directory with mandatory SHA256SUMS')
@@ -80,9 +97,9 @@ with tempfile.TemporaryDirectory(prefix='cloud8021x-ddot-task7-') as tmp:
         run('docker', 'exec', name, 'chown', '-R', 'dd-agent:dd-agent', '/task7/evidence', '/task7/queue', '/opt/datadog-agent/run')
         run('docker', 'exec', name, 'chmod', '0700', '/opt/datadog-agent/run')
         run('docker', 'exec', name, 'chmod', '0644', '/task7/input.json')
-        result = run('docker', 'exec', '--user', 'dd-agent', name, '/opt/datadog-agent/embedded/bin/python',
-                     '/task7/probe.py', *(['--storage-full'] if args.storage_full else []), capture_output=True)
-        print(result.stdout)
+        result = capture_command(['docker', 'exec', '--user', 'dd-agent', name, '/opt/datadog-agent/embedded/bin/python',
+                     '/task7/probe.py', *(['--storage-full'] if args.storage_full else [])], evidence, 'probe', timeout=900)
+        print(result.stdout.decode(errors="replace"))
         run('docker', 'cp', name + ':/task7/evidence/.', str(evidence))
         effective = json.loads((evidence / 'effective.json').read_text())
         runtime = yaml.safe_load(effective['full_configuration'])
@@ -100,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='cloud8021x-ddot-task7-') as tmp:
         if not args.storage_full:
             run('go', 'test', './internal/adapters/otlp', '-run', '^TestDDOTWire$', cwd=ROOT,
                 env={**os.environ, 'C8021X_DDOT_EVIDENCE': str(evidence)})
-    except subprocess.CalledProcessError as error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(error.stdout or '', error.stderr or '')
         run('docker', 'cp', name + ':/task7/evidence/.', str(evidence))
         raise

@@ -120,6 +120,7 @@ jobs:
           python3 -m venv .fixture-venv
           .fixture-venv/bin/pip install PyYAML==6.0.3
           .fixture-venv/bin/python -m unittest discover -s tests -p test_artifact_transport.py
+          .fixture-venv/bin/python -m unittest discover -s tests -p test_ddot_probe.py
       - name: Verify complete input manifests and assemble finite closure
         env:
           BUILD_ARCH: ${{ matrix.architecture }}
