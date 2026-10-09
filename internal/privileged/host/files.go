@@ -24,7 +24,7 @@ var fixedFiles = map[string]bool{
 	transactionRoot + "/current.json":       true,
 	legacyClassKey:                          true, "/etc/systemd/system/freeradius.service.d/accounting-key.conf": true,
 	credentialCachePath:               true,
-	"/etc/datadog-agent/datadog.yaml": true, "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml": true, "/etc/systemd/system/datadog-agent-ddot.service": true, "/etc/systemd/system/datadog-agent.service.d/cloud-8021x.conf": true, "/etc/systemd/system/var-lib-cloud8021x-collector.mount": true,
+	"/etc/datadog-agent/datadog.yaml": true, "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml": true, "/etc/systemd/system/datadog-agent-ddot.service": true, "/etc/systemd/system/datadog-agent.service": true, "/etc/systemd/system/datadog-agent.service.d/cloud-8021x.conf": true, "/etc/systemd/system/var-lib-cloud8021x-collector.mount": true,
 	"/usr/local/bin/cloud-8021x": true, "/etc/cloud-8021x/config.yaml": true,
 	"/etc/acme-authz-webhook/server.crt": true, "/etc/acme-authz-webhook/server.key": true,
 	"/etc/cloud-8021x/ec-intermediate.pem": true, "/etc/cloud-8021x/rsa-intermediate.pem": true,

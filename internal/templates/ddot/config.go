@@ -44,7 +44,13 @@ func Render(o Options) ([]byte, error) {
 // AgentFragment must be merged into the existing Agent config by the installer,
 // not substituted for its host/integration configuration. Restrict converter
 // features so automatic host enrichment cannot overwrite original producers.
-const AgentFragment = `otelcollector:
+const AgentFragment = `auth_token_file_path: /opt/datadog-agent/run/auth_token
+ipc_cert_file_path: /opt/datadog-agent/run/ipc_cert.pem
+disable_file_logging: true
+log_to_console: true
+remote_configuration:
+  enabled: false
+otelcollector:
   enabled: true
   converter:
     features: [ddflare]

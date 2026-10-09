@@ -217,3 +217,21 @@ reporters would double-count. Local auth/spool/source/inventory gauges stay per
 host. Missing samples remain unavailable. Auth file thresholds are 2048 soft,
 3584 critical, and 4096 reader bound: capacity is not an instruction to discard
 files or restart native authentication.
+
+### Protected host Agent lifecycle
+
+The protected installer now writes the core `datadog-agent.service` as well as
+its credential drop-in and the separate DDOT unit. Minimal rebuilt packages have
+no maintainer-script service activation; a fresh node therefore does not depend
+on a previously installed vendor unit. The core Agent runs as `dd-agent` with
+read-only system paths, no capabilities, and its existing private
+`/opt/datadog-agent/run` directory as the writable IPC location. Core Agent and
+DDOT share the token and IPC certificate paths there. Their diagnostics go to
+stdout/journald instead of assuming a writable vendor log directory. Remote
+configuration is disabled so it cannot change the reviewed local pipeline.
+Ordinary host check configuration, host identity and tags remain preserved.
+
+The unit and configuration regressions pass with the minimal artifact interface;
+actual final-package service/ownership acceptance is still a separate shipping
+gate. The historical 7.82 fixture evidence above is not a security approval for
+shipping that old binary.

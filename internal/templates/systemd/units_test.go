@@ -78,3 +78,16 @@ func TestDDOTEmbeddedTraceComponentCannotInheritDisabledCoreSetting(t *testing.T
 		t.Fatal("full DDOT exits when it inherits an ordinary core Agent's disabled APM setting")
 	}
 }
+
+func TestMinimalAgentPackageHasProtectedStandaloneBaseUnit(t *testing.T) {
+	files, err := Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := string(files["/etc/systemd/system/datadog-agent.service"])
+	for _, required := range []string{"User=dd-agent\n", "Group=dd-agent\n", "ExecStart=/opt/datadog-agent/bin/agent/agent run -c /etc/datadog-agent/datadog.yaml\n", "NoNewPrivileges=true\n", "ProtectSystem=strict\n", "ReadWritePaths=/opt/datadog-agent/run\n", "Requires=cloud-8021x-credentials.service\n"} {
+		if !strings.Contains(agent, required) {
+			t.Fatalf("fresh inert monitoring package lacks protected standalone Agent lifecycle: %s", required)
+		}
+	}
+}

@@ -156,6 +156,39 @@ Options=loop,nodev,nosuid,noexec
 [Install]
 WantedBy=multi-user.target
 `)
+	files["/etc/systemd/system/datadog-agent.service"] = []byte(`[Unit]
+Description=Protected Datadog host Agent
+After=network-online.target cloud-8021x-credentials.service
+Wants=network-online.target
+Requires=cloud-8021x-credentials.service
+[Service]
+User=dd-agent
+Group=dd-agent
+ExecStart=/opt/datadog-agent/bin/agent/agent run -c /etc/datadog-agent/datadog.yaml
+EnvironmentFile=/run/cloud-8021x-collector/datadog.env
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/opt/datadog-agent/run
+InaccessiblePaths=/etc/step-ca /etc/step-ca-rsa /run/cloud-8021x-root /run/cloud-8021x/credentials /var/lib/cloud-8021x-bootstrap
+MemoryMax=768M
+TasksMax=128
+TimeoutStopSec=30
+[Install]
+WantedBy=multi-user.target
+`)
 	files["/etc/systemd/system/datadog-agent.service.d/cloud-8021x.conf"] = []byte(`[Unit]
 After=cloud-8021x-credentials.service
 Requires=cloud-8021x-credentials.service
