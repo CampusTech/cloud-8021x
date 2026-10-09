@@ -61,24 +61,23 @@ why the deployed service uses certificate authentication.
 
 ## Build & run
 
-Requires Go 1.27.2 or newer. The release workflow reads this minimum from
-`go.mod` and scans the compiled Linux binary with `govulncheck` before publishing.
-PR and merge-queue checks scan imported packages in both Go modules, including
-test dependencies. Updating source does not patch an already deployed binary;
-deploy the new `webhook_release_version` after its release assets are available.
+Use the root module and its exact Go1.27.2 toolchain. Run from the repository root:
 
 ```bash
-go test ./...
-go build -o acme-authz-webhook .
+go test ./internal/webhook/...
+go build -o acme-authz-webhook ./cmd/cloud-8021x
 # serve additionally requires the TLS files and trusted CA identities above.
 WEBHOOK_CLIENT_DNS_NAMES=ca.example.com,scep.example.com \
   FLEET_API_BASE_URL=https://fleet.example FLEET_API_TOKEN=... ./acme-authz-webhook serve
 ```
 
-The release workflow produces a static Linux/amd64 executable.
-Runs as a systemd service on each RADIUS VM. Authorization is loopback-only;
-optional inventory mode adds the HTTPS broker listener. `webhook.tf` manages
-its secrets, IAM, and broker backend (gated by `enable_acme_webhook`).
+The release workflow produces static Linux amd64 and arm64 binaries. Webhook
+assets are identical copies of the unified executable; the alias name selects
+this legacy environment contract. The enabled unified daemon embeds webhook and
+broker listeners in its YAML configuration. Do not enable the legacy service
+alongside it. Root, SCEP and dashboard modules have separate test/security gates;
+actual release binaries are also scanned. Updating source does not patch an
+already deployed binary. See [release builds](../docs/releasing.md).
 
 ## Legacy identity-bound SCEP (v2.0.0)
 
@@ -138,3 +137,6 @@ MDM or Fleet agent inventory. Terraform wires and validates these prerequisites.
 identity-bound tokens continue to work in their separate legacy mode.
 
 See [deployment, shared profile, and rollout checks](../docs/scep-identity-binding.md).
+
+The compatibility executable is a copy/name alias of the root application, using
+root `VERSION` and `go.mod`. See [release builds](../docs/releasing.md).

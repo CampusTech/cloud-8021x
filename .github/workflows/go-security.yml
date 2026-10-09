@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [webhook, tests/scep, tools/dashboard]
+        module: [., tests/scep, tools/dashboard]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -28,12 +28,14 @@ jobs:
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache-dependency-path: |
-            webhook/go.sum
+            go.sum
             tests/scep/go.sum
             tools/dashboard/go.sum
       - name: Verify dependencies
         run: go mod download && go mod verify
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
       - name: Scan imported packages, including tests
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
+      - name: Lint with the Go 1.27.2-compatible pinned linter
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
