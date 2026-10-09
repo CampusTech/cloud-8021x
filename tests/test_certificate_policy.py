@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """SCEP cannot fall back to CN; attested identities need a verified TLS binding."""
 import hashlib
 import importlib.util
@@ -12,7 +13,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import device_policy
 import radius_identity

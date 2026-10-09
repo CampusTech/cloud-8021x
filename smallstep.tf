@@ -151,7 +151,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_db_password" {
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_db_password[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -246,7 +246,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_ca_cert_accessor" 
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_ca_cert[0].secret_id
   # Lets the VM (and Terraform via data source) read the CA cert back.
-  role   = "roles/secretmanager.secretAccessor"
+  role   = google_project_iam_custom_role.runtime_secret_reader.name
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -279,7 +279,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_intermediate_cert_
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_intermediate_cert[0].secret_id
   # Lets the VM (and Terraform via data source) read the intermediate cert back.
-  role   = "roles/secretmanager.secretAccessor"
+  role   = google_project_iam_custom_role.runtime_secret_reader.name
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -312,7 +312,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_cer
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_scep_decrypter_cert[0].secret_id
   # Lets the VM (and Terraform via data source) read the decrypter cert back.
-  role   = "roles/secretmanager.secretAccessor"
+  role   = google_project_iam_custom_role.runtime_secret_reader.name
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -349,7 +349,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_scep_decrypter_key
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_scep_decrypter_key[0].secret_id
   # Lets both HA nodes read the shared decrypter key back at boot.
-  role   = "roles/secretmanager.secretAccessor"
+  role   = google_project_iam_custom_role.runtime_secret_reader.name
   member = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -384,7 +384,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_rsa_root_cert_acce
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_rsa_root_cert[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -409,7 +409,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_rsa_intermediate_c
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_rsa_intermediate_cert[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -434,7 +434,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_cert[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -459,7 +459,7 @@ resource "google_secret_manager_secret_iam_member" "smallstep_rsa_scep_decrypter
   count     = local.smallstep_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.smallstep_rsa_scep_decrypter_key[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 

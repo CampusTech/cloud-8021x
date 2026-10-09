@@ -1,10 +1,12 @@
 locals {
-  runtime_limit = 2 * var.runtime_connections_per_node
+  application_database = var.deployment_id == "" ? "cloud8021x" : "cloud8021x_${replace(var.deployment_id, "-", "_")}"
+  runtime_limit        = 2 * var.runtime_connections_per_node
   # The reviewed native SQL template has two connections per node.
   native_limit = 4
   # Protected migration uses the same configured pool maximum on each node.
   migration_limit = local.runtime_limit
   prerequisite = {
+    deployment_id        = var.deployment_id
     host                 = var.host
     port                 = var.port
     administrator        = var.administrator
@@ -20,9 +22,9 @@ locals {
     approved_ca_access   = var.approved_ca_access
   }
   identities = {
-    runtime   = { name = "cloud8021x_runtime", connections = local.runtime_limit }
-    native    = { name = "cloud8021x_native", connections = local.native_limit }
-    migration = { name = "cloud8021x_migrate", connections = local.migration_limit }
+    runtime   = { name = "${local.application_database}_runtime", connections = local.runtime_limit }
+    native    = { name = "${local.application_database}_native", connections = local.native_limit }
+    migration = { name = "${local.application_database}_migrate", connections = local.migration_limit }
   }
 }
 
@@ -59,7 +61,7 @@ resource "postgresql_role" "application" {
 }
 
 resource "postgresql_database" "application" {
-  name              = "cloud8021x"
+  name              = local.application_database
   owner             = postgresql_role.application["migration"].name
   template          = "template0"
   encoding          = "UTF8"

@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Meraki RADIUS Called-Station-Id can use a hardware MAC, not a BSSID."""
 import json
 from pathlib import Path
@@ -54,7 +55,7 @@ class MerakiLookupTests(unittest.TestCase):
 
 def builder_module():
     import types
-    source = (ROOT / 'scripts/startup.sh').read_text().split("<< 'MERAKICACHEEOF'\n", 1)[1].split('\nMERAKICACHEEOF', 1)[0]
+    source = (ROOT / 'tests/legacy/scripts/startup.sh').read_text().split("<< 'MERAKICACHEEOF'\n", 1)[1].split('\nMERAKICACHEEOF', 1)[0]
     source = source.split("<< 'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
     module = types.ModuleType('meraki_cache_fixture')
     exec(compile(source, 'meraki_cache.py', 'exec'), module.__dict__)
@@ -208,7 +209,7 @@ class MerakiBuilderTests(unittest.TestCase):
     def test_generated_worker_subprocess_preserves_cache_on_failure(self):
         import subprocess
         import sys
-        source = (ROOT / 'scripts/startup.sh').read_text().split("<< 'MERAKICACHEEOF'\n", 1)[1].split('\nMERAKICACHEEOF', 1)[0]
+        source = (ROOT / 'tests/legacy/scripts/startup.sh').read_text().split("<< 'MERAKICACHEEOF'\n", 1)[1].split('\nMERAKICACHEEOF', 1)[0]
         source = source.split("<< 'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
         fixture = """
 from io import BytesIO

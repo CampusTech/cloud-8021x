@@ -2,7 +2,7 @@
 
 Goal: Deliver issue #30 completely in PR #39, replacing server-side Bash/Python with one Go executable while retaining FreeRADIUS, step-ca, and Datadog.
 Architecture: An unprivileged daemon uses immutable policy/inventory snapshots, pluggable device/network providers, synchronous local RADIUS authorization, shared HA PostgreSQL accounting/state, and OTLP export. Privileged subcommands manage fixed templates, CA adoption/renewal, and activation. Native FreeRADIUS detail replay writes accounting into PostgreSQL.
-Tech Stack: Go 1.27.1, Cobra, logrus, YAML, pgx, OpenTelemetry, FreeRADIUS 3, step-ca, PostgreSQL 16, Terraform, DDOT.
+Tech Stack: Go 1.27.2, Cobra, logrus, YAML, pgx, OpenTelemetry, FreeRADIUS 3, step-ca, PostgreSQL 16, Terraform, DDOT.
 Spec: docs/superpowers/specs/2026-10-08-unified-go-daemon-design.md
 Review Focus: Authentication trust boundaries, freshness, Class/counter parity, cross-server concurrency, safe CA adoption, durable export uncertainty, executable/config migration.
 
@@ -128,3 +128,12 @@ Files: tests, docs, all task-owned paths as required for fixes; PR body.
 - [ ] Check final runtime for Bash/Python/Datadog-readback/Okta/Jamf remnants, module/release pinning and complete commands.
 - [ ] Separate whole-branch spec/security/code review, address findings with tests and re-review. Document genuinely unavailable environment-dependent checks without claiming completion.
 - [ ] Push final verified branch, update PR description around implemented behavior/tests/limits and request review. No merge or production deploy.
+
+
+## Task 10 parallel-deployment amendment (2026-10-08)
+
+The latest user direction supersedes the required in-place OS-upgrade path and accounting-history import prerequisite **only for parallel deployment**. The default entrypoint/state is `terraform/green`: distinct Debian 13 compute and scoped IAM/artifacts, exact read-only existing foundation dependencies, and no shared resource ownership or automatic backend switch. `terraform/private-green` separately owns new app DB/roles/credentials through the private administrator gate. Never apply the root legacy-retirement configuration to blue for this rollout.
+
+Green must adopt the exact existing CA state and trust (including signers, decrypters, CA DBs, server identity, provisioners, Class/challenge/broker secrets). It starts accounting at an explicit fresh epoch and the first ongoing-session report is a baseline. Certificate freshness and pending/uncertain external command ownership still require authenticated source handoff; passive preparation does not authorize submissions, renewal, production export or shared network updates. Later activation coordinates single worker authority, NAS auth/accounting, and exactly EC/RSA/broker group replacements by the existing frontdoor owner, preserving stable routes/IPs/certificates and blue rollback.
+
+The thin loader stages authenticated immutable-generation artifacts with independent application/manifest/provenance/config/SQL-CA pins and root ownership; Go performs protected publication/rollback. Actual package/OS/native/two-node acceptance is distinct from synthetic Terraform and loader tests. See [ordered deployment contract](../../deployment/parallel-green.md) and [historical validation index](../../validation/README.md). Historical retired Python/startup/Terraform inputs live only under `tests/legacy` and do not validate the shipping runtime.

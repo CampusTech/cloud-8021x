@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Controller names are cached per trusted office and never affect assignment."""
 import importlib.util
 import json
@@ -8,7 +9,7 @@ import unittest
 from urllib.error import HTTPError
 from unittest.mock import patch
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 

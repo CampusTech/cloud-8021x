@@ -63,3 +63,13 @@ variable "approved_ca_access" {
   description = "Explicit existing legitimate CA clients requiring CONNECT/TEMP after PUBLIC hardening."
   type        = map(list(object({ role = string, connect = bool, temporary = bool })))
 }
+
+variable "deployment_id" {
+  type        = string
+  default     = ""
+  description = "Empty retains the original dedicated app authority; green uses its exact separate deployment ID."
+  validation {
+    condition     = var.deployment_id == "" || (can(regex("^[a-z][a-z0-9-]{0,24}[a-z0-9]$", var.deployment_id)) && var.deployment_id != "stepca")
+    error_message = "Use the exact 2-26 character green deployment ID."
+  }
+}

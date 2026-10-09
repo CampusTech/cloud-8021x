@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Exercise policy decisions, including the RADIUS reply contract UniFi consumes."""
 import importlib.util
 import json
@@ -8,7 +9,7 @@ import time
 import types
 import unittest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'
 sys.path.insert(0, str(SCRIPTS))
 sys.modules['radiusd'] = types.SimpleNamespace(
     RLM_MODULE_REJECT=0, RLM_MODULE_FAIL=1, RLM_MODULE_OK=2,

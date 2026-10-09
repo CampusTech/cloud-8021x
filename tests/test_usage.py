@@ -1,10 +1,11 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Traffic is a counter increase, not the sum of completed-session snapshots."""
 from pathlib import Path
 import sys
 import json
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'))
 import radius_usage
 
 

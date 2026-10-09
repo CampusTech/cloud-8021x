@@ -138,45 +138,13 @@ variable "armor_trusted_cidrs" {
 }
 
 variable "server_cert_cn" {
-  description = "Common Name for the RADIUS server certificate (must match Jamf WiFi profile 'Trusted Server Certificate Names')"
+  description = "Common Name for the RADIUS server certificate (must match managed WiFi Trusted Server Certificate Names)"
   type        = string
 }
 
 variable "server_cert_org" {
   description = "Organization name for the RADIUS server CA certificate subject (e.g. 'Acme Corp')"
   type        = string
-}
-
-variable "okta_ca_cert_pem" {
-  description = "Okta Intermediate CA certificate in PEM format (the trust anchor for SCEP client certs)"
-  type        = string
-  sensitive   = true
-}
-
-variable "okta_root_ca_cert_pem" {
-  description = "Okta Root CA certificate in PEM format (optional — enables full chain validation)"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "jamf_url" {
-  description = "Jamf Pro URL (e.g. https://yourorg.jamfcloud.com) — enables device owner lookup in RADIUS auth logs"
-  type        = string
-  default     = ""
-}
-
-variable "jamf_client_id" {
-  description = "Jamf Pro API Client ID (requires Read Computers privilege)"
-  type        = string
-  default     = ""
-}
-
-variable "jamf_client_secret" {
-  description = "Jamf Pro API Client Secret"
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 variable "unifi_api_key" {
@@ -201,41 +169,6 @@ variable "meraki_org_id" {
   validation {
     condition     = var.meraki_api_key == "" || trimspace(var.meraki_org_id) != ""
     error_message = "meraki_org_id must be set when meraki_api_key is provided (the cache builder queries a specific organization)."
-  }
-}
-
-variable "rewrite_username" {
-  description = "Rewrite reply:User-Name to 'email - serial' in Access-Accept (requires Jamf lookup). Shown as 802.1X Identity in UniFi."
-  type        = bool
-  default     = false
-}
-
-variable "rewrite_username_separator" {
-  description = "Separator between email and serial in the rewritten User-Name (default: ' - ')"
-  type        = string
-  default     = " - "
-}
-
-variable "tls_session_cache" {
-  description = "Enable TLS session caching for faster EAP-TLS re-authentication"
-  type        = bool
-  default     = true
-}
-
-variable "tls_session_cache_lifetime" {
-  description = "TLS session cache lifetime in hours (default: 24)"
-  type        = number
-  default     = 24
-}
-
-variable "tls_max_version" {
-  description = "Maximum TLS version for EAP-TLS (1.2 or 1.3). Use 1.2 for disk-based session cache persistence across restarts."
-  type        = string
-  default     = "1.2"
-
-  validation {
-    condition     = contains(["1.2", "1.3"], var.tls_max_version)
-    error_message = "tls_max_version must be \"1.2\" or \"1.3\"."
   }
 }
 
@@ -275,24 +208,6 @@ variable "enable_smallstep_ca" {
   validation {
     condition     = !try(var.radius_vlan_policy.attested_acme, false) || var.enable_smallstep_ca
     error_message = "Attested ACME authorization requires the built-in Smallstep CA."
-  }
-}
-
-variable "radius_trust_mode" {
-  description = "Which CA(s) FreeRADIUS trusts for client certs. 'okta' = existing okta-ca.pem only. 'both' = transitional dual-trust (Okta + Smallstep intermediates concatenated) so devices can migrate without a flag-day cutover. 'smallstep' = Smallstep CA only (the cutover end state). Decoupled from enable_smallstep_ca so the CA can run while RADIUS still trusts Okta during pre-stage. Requires enable_smallstep_ca=true to select 'both' or 'smallstep'."
-  type        = string
-  default     = "okta"
-  validation {
-    condition     = !try(var.radius_vlan_policy.attested_acme, false) || var.radius_trust_mode != "okta"
-    error_message = "Attested ACME authorization requires Smallstep client trust (smallstep or both)."
-  }
-  validation {
-    condition     = contains(["okta", "both", "smallstep"], var.radius_trust_mode)
-    error_message = "radius_trust_mode must be one of \"okta\", \"both\", or \"smallstep\"."
-  }
-  validation {
-    condition     = var.radius_trust_mode == "okta" || var.enable_smallstep_ca
-    error_message = "radius_trust_mode \"both\" or \"smallstep\" requires enable_smallstep_ca = true (RADIUS can't trust a Smallstep CA that isn't deployed)."
   }
 }
 
@@ -389,14 +304,10 @@ variable "fleet_api_base_url" {
 }
 
 variable "enable_fleet_lookup" {
-  description = "Resolve serial -> assigned-user email, device name, and model from Fleet (the Jamf-lookup counterpart for Fleet-managed fleets). Requires fleet_api_base_url and the out-of-band fleet-api-token secret. Mutually exclusive with jamf_url — set one MDM source, not both."
+  description = "Resolve serial -> assigned-user email, device name, and model from Fleet. Requires fleet_api_base_url and the out-of-band fleet-api-token secret."
   type        = bool
   default     = false
 
-  validation {
-    condition     = !(var.enable_fleet_lookup && var.jamf_url != "")
-    error_message = "enable_fleet_lookup and jamf_url are mutually exclusive — both populate the same device-owner enrichment fields. Pick the MDM that manages this fleet."
-  }
 }
 
 # NOTE: the Fleet API token is NOT a Terraform variable — it is a standing
@@ -408,12 +319,6 @@ variable "webhook_allow_label" {
   description = "Optional Fleet label a host must carry for the webhook to allow issuance (e.g. test-pilots for a scoped pilot). Empty = any enrolled host is allowed."
   type        = string
   default     = ""
-}
-
-variable "webhook_release_version" {
-  description = "Version of the ACME webhook binary to download from GitHub Releases (asset of tag webhook-v<version>, built by the webhook-release Action). Must match webhook/VERSION at the release commit."
-  type        = string
-  default     = "2.0.1"
 }
 
 variable "webhook_port" {
@@ -557,5 +462,20 @@ variable "radius_vlan_policy" {
   validation {
     condition     = var.radius_vlan_policy == null ? true : startswith(var.radius_vlan_policy.cache_file, "/")
     error_message = "cache_file must be an absolute path to a trusted inventory snapshot."
+  }
+}
+
+# Fresh-install root only. Existing production stays owned by its reviewed old
+# configuration; the supported parallel deployment uses terraform/green.
+variable "runtime_artifact_bucket" {
+  type        = string
+  description = "Reviewed private bucket containing immutable generation-pinned app/config/manifest/PEM/packages/provenance."
+}
+variable "runtime_artifacts" {
+  type        = map(list(object({ name = string, sha256 = string, url = string })))
+  description = "Complete independently pinned per-node incoming bundles. No credentials or inline application code."
+  validation {
+    condition     = toset(keys(var.runtime_artifacts)) == toset(["primary", "secondary"]) && alltrue([for artifacts in values(var.runtime_artifacts) : length(artifacts) >= 15 && length(artifacts) <= 69 && alltrue([for name in ["cloud-8021x", "config.yaml", "manifest.json", "postgres-ca.pem", "provenance.json"] : contains([for a in artifacts : a.name], name)]) && alltrue([for a in artifacts : can(regex("^[a-f0-9]{64}$", a.sha256)) && can(regex("^(cloud-8021x|config.yaml|manifest.json|postgres-ca.pem|provenance.json|[a-z0-9][a-z0-9+.-]*_[0-9A-Za-z.+:~-]+_(amd64|arm64|all)[.]deb)$", a.name)) && can(regex("^https://storage.googleapis.com/${var.runtime_artifact_bucket}/sha256/${a.sha256}/[^/?]+[?]generation=[0-9]+$", a.url))])])
+    error_message = "Require both exact node bundles, fixed names, reviewed hashes, immutable private-bucket generations and bounded package closures."
   }
 }

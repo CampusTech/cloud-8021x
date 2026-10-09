@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Backlogs retain committed progress and the original baseline credit boundary."""
 import json
 from pathlib import Path
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'))
 import radius_usage_collector as collector_module
 
 

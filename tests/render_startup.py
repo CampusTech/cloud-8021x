@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Render the actual Terraform template with public test fixtures; no cloud/state access."""
 import base64
 import json
@@ -6,7 +7,7 @@ import re
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] / 'tests/legacy'
 
 
 def render(enabled=True, smallstep=False, webhook=False, certificate_inventory=False, source_discovery=False):

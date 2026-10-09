@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """The CA startup probe must inspect this start, not months of old logs."""
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CAStartProbeTests(unittest.TestCase):
     def run_probe(self, current_failure=False):
-        script = (ROOT / 'scripts/startup.sh').read_text().split("<<'PROBE'\n", 1)[1].split('\nPROBE', 1)[0]
+        script = (ROOT / 'tests/legacy/scripts/startup.sh').read_text().split("<<'PROBE'\n", 1)[1].split('\nPROBE', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             commands = {

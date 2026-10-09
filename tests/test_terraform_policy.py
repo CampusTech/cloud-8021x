@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 import json
 import re
 from pathlib import Path
@@ -10,7 +11,7 @@ import unittest
 @unittest.skipUnless(shutil.which('terraform'), 'Terraform is required for configuration validation')
 class TerraformPolicyTests(unittest.TestCase):
     def test_vlan_name_api_sources_require_office_provider_and_credentials(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         declaration = re.search(r'variable "radius_vlan_name_sources" \{.*?\n\}', source, re.S)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -39,7 +40,7 @@ class TerraformPolicyTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
 
     def test_vlan_names_are_preserved_and_validated_for_global_and_site_policy(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         declaration = 'variable "radius_vlan_policy"' + source.split('variable "radius_vlan_policy"', 1)[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -68,7 +69,7 @@ class TerraformPolicyTests(unittest.TestCase):
                             self.assertEqual(parsed.get('vlan_names'), names)
 
     def test_attested_identity_and_polling_exclusions_require_trusted_auth_path(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         names = ('enable_smallstep_ca', 'radius_trust_mode', 'enable_fleet_certificate_inventory',
                  'fleet_acme_profile_uuids', 'radius_vlan_policy')
         declarations = '\n'.join(re.search(r'variable "' + name + r'" \{.*?\n\}', source, re.S)[0] for name in names)
@@ -95,7 +96,7 @@ class TerraformPolicyTests(unittest.TestCase):
                     self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
 
     def test_broker_rate_limit_is_configurable_and_positive(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         match = re.search(r'variable "scep_broker_requests_per_minute" \{.*?\n\}', source, re.S)
         self.assertIsNotNone(match, 'Fleet needs a separate configurable broker rate limit')
         with tempfile.TemporaryDirectory() as directory:
@@ -113,7 +114,7 @@ class TerraformPolicyTests(unittest.TestCase):
                         self.assertRegex(result.stdout, r'limit\s*=\s*1000')
 
     def test_broker_does_not_share_ca_ban_policy(self):
-        source = (Path(__file__).resolve().parents[1] / 'webhook.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/webhook.tf').read_text()
         backend = re.search(r'resource "google_compute_backend_service" "scep_broker" \{.*?\n\}', source, re.S)[0]
         self.assertRegex(backend, r'security_policy\s*=\s*google_compute_security_policy\.scep_broker\[0\]\.id')
         policy = re.search(r'resource "google_compute_security_policy" "scep_broker" \{.*?\n\}', source, re.S)
@@ -127,7 +128,7 @@ class TerraformPolicyTests(unittest.TestCase):
         self.assertNotIn('rate_based_ban', policy[0])
 
     def test_webhook_requires_smallstep_for_all_enablement_combinations(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         declarations = '\n'.join(re.search(r'variable "' + name + r'" \{.*?\n\}', source, re.S)[0]
                                  for name in ('enable_smallstep_ca', 'enable_acme_webhook'))
         with tempfile.TemporaryDirectory() as directory:
@@ -146,7 +147,7 @@ class TerraformPolicyTests(unittest.TestCase):
                             self.assertIn('enable_acme_webhook requires enable_smallstep_ca', result.stdout + result.stderr)
 
     def test_policy_validation_and_disabled_default(self):
-        source = (Path(__file__).resolve().parents[1] / 'variables.tf').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'tests/legacy/variables.tf').read_text()
         declaration = 'variable "radius_vlan_policy"' + source.split('variable "radius_vlan_policy"', 1)[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

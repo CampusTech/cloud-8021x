@@ -63,12 +63,10 @@ Leave other `$FLEET_VAR_*` values intact in Fleet templates. Apple uses
 
 ## Choose the correct trust root
 
-Client issuance and RADIUS server trust are separate. With the standard bootstrap:
-
-| RADIUS trust mode | Server trust root secret | Presented server leaf secret |
-| --- | --- | --- |
-| `okta` | `radius-server-ca-cert` | `radius-server-cert` |
-| `smallstep` or `both` | `smallstep-ca-cert` (EC root) | `radius-smallstep-server-cert` |
+Client issuance and RADIUS server trust are separate. The supported Smallstep
+runtime preserves `smallstep-ca-cert` (EC root) as server trust and presents the
+existing `radius-smallstep-server-cert` leaf. Parallel green adoption does not
+replace either identity or require a profile change.
 
 RSA SCEP clients chain to `smallstep-rsa-root-cert`, but RADIUS normally presents
 an **EC-rooted** server certificate even to those Windows/BYOD clients. Do not
@@ -76,20 +74,18 @@ put the RSA client root into the server trust payload just because SCEP used it.
 For a migration or custom deployment, verify the certificate actually presented
 by both RADIUS nodes before selecting the root.
 
-Fetch the chosen **public** certificate and encode it, for example in Smallstep mode:
+Fetch the chosen **public** certificate and encode it, for example from the reviewed existing project:
 
 ```sh
 gcloud secrets versions access latest \
-  --project="$(terraform output -raw project_id)" \
+  --project=YOUR-REVIEWED-EXISTING-PROJECT \
   --secret=smallstep-ca-cert > /tmp/radius-server-root.pem
 openssl x509 -in /tmp/radius-server-root.pem -outform DER | openssl base64 -A
 openssl x509 -in /tmp/radius-server-root.pem -noout -fingerprint -sha1
 ```
 
-`fetch-outputs.sh` currently exports the **legacy** `radius-server-ca-cert` and
-`radius-server-cert`, even in Smallstep mode. Its exported root is not the
-Smallstep server trust anchor. A `.cer` extension alone does not tell you
-whether a file is PEM or DER.
+A `.cer` extension alone does not distinguish PEM from DER. Use the exact
+verified public certificate, and preserve managed profile UUIDs through cutover.
 
 ## Rendering and validation
 
@@ -113,3 +109,10 @@ choice. BYOD templates leave it enabled by default.
 Parse rendered profiles, check all identity/root UUID references and certificate
 thumbprints, and verify installation, connection, VLAN/DHCP, and renewal on a
 pilot device before broad delivery. Do not commit rendered challenges or keys.
+
+## Server configuration
+
+`cloud-8021x.yaml` documents the strict nonsecret schema. Use
+[`cloud-8021x-green.yaml`](cloud-8021x-green.yaml) as the base for the complete
+parallel deployment, including the existing HTTPS broker on port 9081 and local
+OTLP delivery. Follow the [ordered private provisioning and green compute guide](../docs/deployment/parallel-green.md).

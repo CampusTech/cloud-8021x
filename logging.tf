@@ -25,6 +25,6 @@ resource "google_secret_manager_secret_iam_member" "radius_accounting_key" {
   count     = try(var.radius_vlan_policy.certificate_inventory, false) ? 1 : 0
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.radius_accounting_key[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }

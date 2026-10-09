@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Persistent monitoring is isolated from authentication and its credentials."""
 import contextlib
 import base64
@@ -12,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from unittest.mock import Mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'))
 import radius_usage_service
 
 

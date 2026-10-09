@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Reboots and parallel deployments must not reuse another VM's monitoring identity."""
 import json
 import os
@@ -10,8 +11,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'scripts/datadog_hostname.py'
-sys.path.insert(0, str(ROOT / 'scripts'))
+SCRIPT = ROOT / 'tests/legacy/scripts/datadog_hostname.py'
+sys.path.insert(0, str(ROOT / 'tests/legacy/scripts'))
 import datadog_hostname
 
 

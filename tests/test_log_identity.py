@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Serial-free logging must not infer owners from client-selected usernames."""
 from pathlib import Path
 import json
@@ -9,13 +10,13 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'scripts'))
+sys.path.insert(0, str(ROOT / 'tests/legacy/scripts'))
 import radius_identity
 import radius_log
 
 
 def lookup_module():
-    source = (ROOT / 'scripts/startup.sh').read_text().split("<< 'PYMODEOF'\n", 1)[1].split('\nPYMODEOF', 1)[0]
+    source = (ROOT / 'tests/legacy/scripts/startup.sh').read_text().split("<< 'PYMODEOF'\n", 1)[1].split('\nPYMODEOF', 1)[0]
     module = types.ModuleType('lookup_fixture')
     radiusd = types.SimpleNamespace(RLM_MODULE_OK=2, RLM_MODULE_UPDATED=8, RLM_MODULE_NOOP=7,
                                     RLM_MODULE_FAIL=1, L_ERR=3, L_INFO=1, radlog=lambda *a: None)

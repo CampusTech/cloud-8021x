@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 type Config struct {
+	DeploymentID        string                 `json:"deployment_id"`
 	Host                string                 `json:"host"`
 	Port                uint16                 `json:"port"`
 	Administrator       string                 `json:"administrator"`
@@ -47,7 +49,21 @@ func Decode(data []byte) (Config, error) {
 	}
 	return c, c.validate()
 }
+func (c Config) applicationIdentity() (string, [3]string, error) {
+	name := "cloud8021x"
+	if c.DeploymentID != "" {
+		if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,24}[a-z0-9]$`).MatchString(c.DeploymentID) || c.DeploymentID == "stepca" {
+			return "", [3]string{}, errors.New("invalid isolated application deployment identity")
+		}
+		name += "_" + strings.ReplaceAll(c.DeploymentID, "-", "_")
+	}
+	return name, [3]string{name + "_runtime", name + "_native", name + "_migrate"}, nil
+}
 func (c Config) validate() error {
+	if _, _, e := c.applicationIdentity(); e != nil {
+		return e
+	}
+
 	ip := net.ParseIP(c.Host)
 	if (c.Host != "localhost" && (ip == nil || (!ip.IsPrivate() && !ip.IsLoopback()))) || c.Port == 0 || c.Administrator == "" || strings.HasPrefix(c.Administrator, "cloud8021x_") {
 		return errors.New("private administrator connection required")

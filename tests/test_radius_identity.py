@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Logging accepts only server-issued bindings from the correct packet context."""
 import importlib.util
 import json
@@ -7,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 

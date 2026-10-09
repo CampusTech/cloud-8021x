@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Authenticated Fleet result fixtures exercise persisted asynchronous collection."""
 import base64
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests/legacy/scripts'))
 
 
 class CollectorTests(unittest.TestCase):

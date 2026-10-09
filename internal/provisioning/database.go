@@ -94,8 +94,12 @@ func Check(ctx context.Context, c Config) (map[string]string, error) {
 	if maximum-reserved < required {
 		return nil, errors.New("insufficient reserved CA and two-node application connection capacity")
 	}
+	database, roles, identityErr := c.applicationIdentity()
+	if identityErr != nil {
+		return nil, identityErr
+	}
 	var unsafe int
-	if tx.QueryRow(ctx, `SELECT count(*) FROM pg_roles r WHERE rolname IN ('cloud8021x_runtime','cloud8021x_native','cloud8021x_migrate') AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR has_database_privilege(r.oid,'stepca','CONNECT,TEMP') OR has_database_privilege(r.oid,'stepca_rsa','CONNECT,TEMP') OR EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid) OR EXISTS(SELECT 1 FROM pg_database WHERE datdba=r.oid AND (r.rolname<>'cloud8021x_migrate' OR datname<>'cloud8021x')))`).Scan(&unsafe) != nil || unsafe != 0 {
+	if tx.QueryRow(ctx, `SELECT count(*) FROM pg_roles r WHERE rolname = ANY($1) AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls OR has_database_privilege(r.oid,'stepca','CONNECT,TEMP') OR has_database_privilege(r.oid,'stepca_rsa','CONNECT,TEMP') OR EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid) OR EXISTS(SELECT 1 FROM pg_database WHERE datdba=r.oid AND (r.rolname<>$2 OR datname<>$3)))`, roles[:], roles[2], database).Scan(&unsafe) != nil || unsafe != 0 {
 		return nil, errors.New("existing application role exceeds approved privileges")
 	}
 	if tx.Commit(ctx) != nil {

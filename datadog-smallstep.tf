@@ -550,7 +550,7 @@ resource "datadog_monitor" "radius_no_accepts" {
 # is the party doing the rejecting.
 #
 # Only meaningful when RADIUS presents a Smallstep-chained cert; under
-# radius_trust_mode = "okta" the legacy self-signed cert is used and
+# Retired legacy self-signed deployments used a different certificate and
 # radius-cert-renew.sh (which emits this gauge) is never installed.
 #
 # Thresholds sit BELOW the renewal threshold on purpose: radius-cert-renew.sh
@@ -569,7 +569,7 @@ resource "datadog_monitor" "radius_no_accepts" {
 # better than days here, which is why the timer is hourly.) The 4h window still
 # tolerates a few consecutive missed runs before crying no-data.
 resource "datadog_monitor" "radius_server_cert_expiry" {
-  count   = local.smallstep_datadog_enabled && var.radius_trust_mode != "okta" ? 1 : 0
+  count   = local.smallstep_datadog_enabled ? 1 : 0
   name    = "FreeRADIUS server certificate nearing expiry"
   type    = "metric alert"
   query   = "min(last_4h):min:radius.server_cert.days_until_expiry{service:freeradius} by {host} < 14"
@@ -616,7 +616,7 @@ resource "datadog_monitor" "radius_server_cert_expiry" {
 # can't pin the "expiring" monitor above zero forever. Being permanently red is
 # how a monitor gets muted and stops being a monitor.
 resource "datadog_monitor" "radius_client_cert_expiring" {
-  count = local.smallstep_datadog_enabled && var.radius_trust_mode != "okta" ? 1 : 0
+  count = local.smallstep_datadog_enabled ? 1 : 0
   name  = "EAP-TLS client certificates nearing expiry"
   type  = "metric alert"
 

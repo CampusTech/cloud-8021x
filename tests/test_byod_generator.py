@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 """Exercise private per-device profile delivery through the real issuer CLI."""
 import base64
 import importlib.util
@@ -6,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import shlex
 import ssl
 import subprocess
 import sys
@@ -15,7 +17,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/byod_profile.py"
+SCRIPT = ROOT / "tests/legacy/scripts/byod_profile.py"
 
 
 @unittest.skipUnless(shutil.which("go") and shutil.which("openssl"), "requires Go and OpenSSL")
@@ -24,13 +26,17 @@ class BYODGeneratorTests(unittest.TestCase):
     def setUpClass(cls):
         cls.shared = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.shared.cleanup)
-        cls.binary = Path(cls.shared.name) / "webhook"
+        cls.binary = Path(cls.shared.name) / "issuer"
+        executable = Path(cls.shared.name) / "cloud-8021x"
         result = subprocess.run(
-            ["go", "build", "-o", str(cls.binary), "."], cwd=ROOT / "webhook",
+            ["go", "build", "-o", str(executable), "./cmd/cloud-8021x"], cwd=ROOT,
             capture_output=True, text=True,
         )
         if result.returncode:
             raise RuntimeError(result.stderr)
+        # Current Go issuer exercises the preserved legacy profile format.
+        cls.binary.write_text("#!/bin/sh\nexec " + shlex.quote(str(executable)) + " --config " + shlex.quote(str(ROOT / "examples/cloud-8021x.yaml")) + ' "$@"\n')
+        cls.binary.chmod(0o700)
         cls.cert = Path(cls.shared.name) / "ca.pem"
         result = subprocess.run([
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",

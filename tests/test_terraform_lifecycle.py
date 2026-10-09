@@ -1,3 +1,4 @@
+# Historical parity fixture only; current deployment is tested by test_green_deployment.py.
 #!/usr/bin/env python3
 """Offline Google-provider plans over synthetic state; never applies or refreshes."""
 import json
@@ -8,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] / 'tests/legacy'
 
 
 class InstanceLifecycle(unittest.TestCase):

@@ -13,3 +13,9 @@ tfplan
 .claude/
 
 __pycache__/
+
+# Reviewed provider locks; provider caches and state remain excluded.
+!/.terraform.lock.hcl
+!/terraform/green/.terraform.lock.hcl
+!/terraform/private-green/.terraform.lock.hcl
+!/terraform/postgres/.terraform.lock.hcl
