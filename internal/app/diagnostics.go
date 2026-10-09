@@ -20,8 +20,12 @@ import (
 )
 
 type diagnosticObservation struct {
-	Components   map[string]string  `json:"components"`
-	Measurements map[string]float64 `json:"measurements"`
+	NativeStatistics map[string]uint32   `json:"native_statistics,omitempty"`
+	Certificates     []certificateExpiry `json:"certificates"`
+	ClientExpiring   *int                `json:"client_expiring_48h,omitempty"`
+	SCEPReady        bool                `json:"scep_decrypter_ready"`
+	Components       map[string]string   `json:"components"`
+	Measurements     map[string]float64  `json:"measurements"`
 }
 
 // Observations are bounded read-only probes. Unavailable dependencies never
@@ -30,12 +34,17 @@ func observeInstalled(ctx context.Context, cfg config.Config) diagnosticObservat
 	result := diagnosticObservation{Components: map[string]string{}, Measurements: map[string]float64{}}
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	result.Certificates = observeCertificateFiles(time.Now(), readInventoryFile)
+	result.SCEPReady = observeSCEP(bounded, cfg)
 	for _, component := range []string{"freeradius", "step-ca", "postgres", "collector"} {
 		result.Components[component] = "unavailable"
 	}
 	secret, err := readInventoryFile(cfg.Bootstrap.HealthSecret.File, true, 4096)
 	if err == nil && native.ProbeStatus(bounded, net.JoinHostPort(cfg.Bootstrap.LocalAddress, "18121"), bytes.TrimSpace(secret)) == nil {
 		result.Components["freeradius"] = "ready"
+	}
+	if err == nil {
+		result.NativeStatistics, _ = native.ObserveStatistics(bounded, net.JoinHostPort(cfg.Bootstrap.LocalAddress, "18121"), bytes.TrimSpace(secret))
 	}
 	if len(cfg.CA.RootFiles) == 1 {
 		trust, err := readInventoryFile(cfg.CA.RootFiles[0], false, 1<<20)
@@ -68,9 +77,13 @@ func observeInstalled(ctx context.Context, cfg config.Config) diagnosticObservat
 	}
 	dsn, err := readInventoryFile(cfg.Database.RuntimeDSN.File, true, 64<<10)
 	if err == nil {
-		store, err := postgres.New(bounded, strings.TrimSpace(string(dsn)), cfg.Database)
+		store, err := postgres.NewRuntime(bounded, strings.TrimSpace(string(dsn)), cfg.Database, config.PoolObservation)
 		if err == nil {
 			observation, err := store.ObserveDelivery(bounded)
+
+			if n, e := store.ObserveClientExpiry(bounded, time.Now()); e == nil {
+				result.ClientExpiring = &n
+			}
 			store.Close()
 			if err == nil {
 				result.Components["postgres"] = "ready"
@@ -115,18 +128,15 @@ func diagnostics(ctx context.Context, op Operation, cfg config.Config, o RunOpti
 		o.Logger.WithContext(ctx).WithField("operation", string(op)).Debug("bounded diagnostics observed")
 	}
 	if op == OperationMetricsEmit {
-		sdk, err := telemetry.Initialize(ctx, cfg.Telemetry, telemetry.Identity{Version: o.Version, Instance: cfg.InstanceID, Environment: cfg.Environment, Host: cfg.Hostname}, io.Discard)
+		instance := cfg.InstanceID
+		if cfg.Parallel() {
+			instance = cfg.Deployment.Instance
+		}
+		sdk, err := telemetry.Initialize(ctx, cfg.Telemetry, telemetry.Identity{Version: o.Version, Instance: instance, Environment: cfg.Environment, Host: cfg.Hostname}, io.Discard)
 		if err != nil {
 			return err
 		}
-		for name, state := range observations.Components {
-			if state == "ready" || state == "running" {
-				sdk.Metrics.ObserveComponent(ctx, "backend.up", name, 1)
-			}
-		}
-		for name, value := range observations.Measurements {
-			sdk.Metrics.ObserveCluster(ctx, name, cfg.StateTransition, value)
-		}
+		emitObservations(ctx, sdk.Metrics, cfg, observations)
 		if err = sdk.Shutdown(context.WithoutCancel(ctx)); err != nil {
 			return err
 		}

@@ -442,7 +442,7 @@ func (c Config) Validate() error {
 	default:
 		return errors.New("database requires verify-full TLS or explicit pinned cloudsql-instance-ca TLS")
 	}
-	if c.Database.MinConnections < 0 || c.Database.MaxConnections < 1 || c.Database.MaxConnections > 64 || c.Database.MinConnections > c.Database.MaxConnections || !duration(c.Database.ConnectTimeout, time.Minute) || !duration(c.Database.QueryTimeout, time.Minute) {
+	if c.Database.MinConnections != 0 || c.Database.MaxConnections < 8 || c.Database.MaxConnections > 64 || c.Database.MinConnections > c.Database.MaxConnections || !duration(c.Database.ConnectTimeout, time.Minute) || !duration(c.Database.QueryTimeout, time.Minute) {
 		return errors.New("database pool or timeout out of bounds")
 	}
 	p := c.Listeners.Policy

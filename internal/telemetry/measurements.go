@@ -15,6 +15,7 @@ import (
 // Measurements accepts fixed metric names and bounded categories; missing native
 // status is omitted, never represented as a fabricated successful delivery.
 type Measurements struct {
+	native   *nativeMeasurements
 	gauges   map[string]metric.Float64Gauge
 	duration metric.Float64Histogram
 	active   metric.Int64UpDownCounter
@@ -26,6 +27,10 @@ func newMeasurements(m metric.Meter, failures *atomic.Uint64) *Measurements {
 	for _, n := range []string{"backend.up", "backend.uptime", "auth.files", "auth.capacity", "spool.files", "spool.bytes", "spool.oldest_age", "spool.free_bytes", "native.write_failures", "native.replay_failures", "inventory.age", "source.age", "ledger.sessions", "ledger.intake", "ledger.quarantine", "outbox.depth", "outbox.oldest_age", "usage.age", "job.age", "claim.errors", "export.errors"} {
 		x.gauges[n], _ = m.Float64Gauge("cloud8021x." + n)
 	}
+	for name, unit := range map[string]string{"certificate.days_until_expiry": "d", "client_certificate.expiring_soon": "{certificate}", "scep.decrypter_ready": "1"} {
+		x.gauges[name], _ = m.Float64Gauge("cloud8021x."+name, metric.WithUnit(unit))
+	}
+	x.initNative(m)
 	x.duration, _ = m.Float64Histogram("cloud8021x.operation.duration", metric.WithUnit("s"))
 	x.active, _ = m.Int64UpDownCounter("cloud8021x.operation.active")
 	x.retries, _ = m.Int64Counter("cloud8021x.api.retries")
@@ -48,7 +53,7 @@ func newMeasurements(m metric.Meter, failures *atomic.Uint64) *Measurements {
 	return x
 }
 func (x *Measurements) Observe(ctx context.Context, name string, value float64) {
-	if name == "backend.up" || name == "backend.uptime" || name == "job.age" {
+	if name == "backend.up" || name == "backend.uptime" || name == "job.age" || name == "certificate.days_until_expiry" || name == "client_certificate.expiring_soon" || name == "scep.decrypter_ready" {
 		return
 	}
 	if g := x.gauges[name]; g != nil && value >= 0 && !math.IsInf(value, 0) {

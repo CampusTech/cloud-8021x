@@ -152,7 +152,7 @@ func requireRuntimeTransition(ctx context.Context, cfg config.Config) error {
 	if e != nil {
 		return e
 	}
-	s, e := postgres.New(ctx, strings.TrimSpace(string(dsn)), cfg.Database)
+	s, e := postgres.NewRuntime(ctx, strings.TrimSpace(string(dsn)), cfg.Database, config.PoolObservation)
 	if e != nil {
 		return e
 	}

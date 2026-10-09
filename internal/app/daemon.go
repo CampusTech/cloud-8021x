@@ -112,23 +112,23 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 		return fail(err)
 	}
 	// Distinct pools prevent telemetry/worker pressure exhausting certificate jobs.
-	pool := func() (*postgres.Store, error) {
-		s, e := postgres.New(ctx, strings.TrimSpace(string(dsn)), cfg.Database)
+	pool := func(class config.RuntimePool) (*postgres.Store, error) {
+		s, e := postgres.NewRuntime(ctx, strings.TrimSpace(string(dsn)), cfg.Database, class)
 		if e == nil {
 			cleanups = append(cleanups, s.Close)
 			s = s.ForTransition(cfg.StateTransition)
 		}
 		return s, e
 	}
-	accountingStore, err := pool()
+	accountingStore, err := pool(config.PoolAccounting)
 	if err != nil {
 		return fail(err)
 	}
-	exportStore, err := pool()
+	exportStore, err := pool(config.PoolExport)
 	if err != nil {
 		return fail(err)
 	}
-	authStore, err := pool()
+	authStore, err := pool(config.PoolAuth)
 	if err != nil {
 		return fail(err)
 	}
@@ -228,7 +228,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	reader, e := auth.New(auth.Options{Directory: cfg.Paths.AuthLogDir, Host: cfg.Hostname, ProducerUID: producerUID, EventGID: eventGID, Store: authStore, Capacity: func(n, level int) {
 		sdk.Metrics.Observe(ctx, "auth.files", float64(n))
 		sdk.Metrics.Observe(ctx, "auth.capacity", float64(level))
-	}, Enrich: auth.Enricher(cfg, key, local.Snapshots(), metadata)})
+	}, Enrich: auth.WithCertificateExpiry(auth.Enricher(cfg, key, local.Snapshots(), metadata), clientCertificateIssuers())})
 	if e != nil {
 		return fail(e)
 	}
@@ -307,14 +307,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, o RunOptions) (lifecycl
 	observations := diagnosticObservation{Components: map[string]string{}, Measurements: map[string]float64{}}
 	add("metrics", cfg.Schedules.Metrics, 15*time.Second, func(ctx context.Context) error {
 		next := observeInstalled(ctx, cfg)
-		for name, state := range next.Components {
-			if state == "ready" || state == "running" {
-				sdk.Metrics.ObserveComponent(ctx, "backend.up", name, 1)
-			}
-		}
-		for name, value := range next.Measurements {
-			sdk.Metrics.ObserveCluster(ctx, name, cfg.StateTransition, value)
-		}
+		emitObservations(ctx, sdk.Metrics, cfg, next)
 		observationsMu.Lock()
 		observations = next
 		observationsMu.Unlock()

@@ -45,4 +45,4 @@ done
 if [ "$fixture_ready" != true ]; then echo 'Owned TLS PostgreSQL did not become ready' >&2; exit 1; fi
 docker exec -e C8021X_PG_TEST_DSN=postgres://postgres:disposable-migration@localhost/cloud8021x \
   -e C8021X_PG_TEST_CA=/fixture/ca.pem "$runtime_fixture_name" \
-  /fixture/postgres.test -test.v -test.run 'TestPostgresParallel|TestPostgresWholeBundleAtomicPublicationAndPendingGuards' -test.count=1 -test.timeout=180s
+  /fixture/postgres.test -test.v -test.run 'TestPostgresParallel|TestPostgresRuntimeAggregate|TestPostgresClientExpiryObservation|TestPostgresWholeBundleAtomicPublicationAndPendingGuards' -test.count=1 -test.timeout=180s

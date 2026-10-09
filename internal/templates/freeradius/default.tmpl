@@ -93,6 +93,8 @@ server default {
  }
 }
 {{define "final-auth-context"}}update reply {
+   C8021X-Cert-Expiration := "%{request:TLS-Client-Cert-Expiration}"
+   C8021X-Cert-Issuer := "%{request:TLS-Client-Cert-Issuer}"
    C8021X-Client := &control:C8021X-Client
    C8021X-Location := &control:C8021X-Location
    C8021X-Source := &control:C8021X-Source

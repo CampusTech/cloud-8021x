@@ -21,6 +21,15 @@ func TestSignedAuthorizationHandoffRejectsWrongAuthorityAndReplay(t *testing.T) 
 	if _, err = Verify(raw, pub, b, now); err != nil {
 		t.Fatal(err)
 	}
+	alias := b
+	alias.CollectionEpoch = b.CollectionEpoch.In(time.FixedZone("UTC alias", 0))
+	if _, err = Verify(raw, pub, alias, now); err != nil {
+		t.Fatal("same signed epoch instant differs by location identity", err)
+	}
+	alias.CollectionEpoch = alias.CollectionEpoch.Add(time.Second)
+	if _, err = Verify(raw, pub, alias, now); err == nil {
+		t.Fatal("different epoch instant accepted")
+	}
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
 	if _, err = Verify(raw, other, b, now); err == nil {
 		t.Fatal("untrusted source key")

@@ -74,7 +74,7 @@ func InventoryServiceFromConfig(ctx context.Context, cfg config.Config, store *d
 	if err != nil {
 		return nil, nil, err
 	}
-	repository, err := postgres.New(ctx, strings.TrimSpace(string(dsn)), cfg.Database)
+	repository, err := postgres.NewRuntime(ctx, strings.TrimSpace(string(dsn)), cfg.Database, config.PoolCertificates)
 	if err != nil {
 		return nil, nil, err
 	}

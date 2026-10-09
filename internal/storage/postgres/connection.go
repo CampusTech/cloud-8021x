@@ -25,6 +25,7 @@ var ErrUncertain = errors.New("database commit outcome uncertain; resolve using 
 var instanceRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]:[a-z]+-[a-z]+[0-9]:[a-z][a-z0-9-]{0,97}$`)
 
 type Store struct {
+	releasePool     func()
 	databaseName    string
 	pool            *pgxpool.Pool
 	timeout         time.Duration
@@ -155,7 +156,12 @@ func newStore(ctx context.Context, dsn string, c config.Database, privileged boo
 	return &Store{pool: pool, timeout: c.QueryTimeout, databaseName: databaseName(c)}, nil
 }
 func durationMS(d time.Duration) string { return fmtInt(max(1, d.Milliseconds())) }
-func (s *Store) Close()                 { s.pool.Close() }
+func (s *Store) Close() {
+	s.pool.Close()
+	if s.releasePool != nil {
+		s.releasePool()
+	}
+}
 func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, s.timeout)
 }

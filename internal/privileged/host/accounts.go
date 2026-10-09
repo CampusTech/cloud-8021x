@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+
+	"golang.org/x/sys/unix"
 )
 
 type Accounts struct{ RuntimeUID, RuntimeGID, NativeUID, NativeGID, EventsGID, SpoolGID, CollectorUID, CollectorGID int }
@@ -126,7 +128,7 @@ func PrepareDirectories(a Accounts) error {
 	}{
 		{"/opt/datadog-agent/run", a.CollectorUID, a.CollectorGID, 0700}, {"/etc/cloud-8021x", 0, 0, 0755}, {"/etc/cloud-8021x/sources", 0, 0, 0700},
 		{"/etc/step-ca", 0, 0, 0700}, {"/etc/step-ca-rsa", 0, 0, 0700},
-		{"/run/cloud-8021x", 0, 0, 0755}, {"/run/cloud-8021x/credentials", a.RuntimeUID, a.RuntimeGID, 0700},
+		{"/run/cloud-8021x", 0, 0, 0755}, {"/run/cloud-8021x/database-pools", 0, a.RuntimeGID, 0750}, {"/run/cloud-8021x/credentials", a.RuntimeUID, a.RuntimeGID, 0700},
 		{"/run/cloud-8021x-root", 0, 0, 0700}, {"/run/cloud-8021x-collector", a.CollectorUID, a.CollectorGID, 0700},
 		{"/run/radius-verified-leaves", a.NativeUID, a.NativeGID, 0700}, {"/run/radius-certificate-bindings", a.RuntimeUID, a.RuntimeGID, 0700},
 		{"/run/freeradius", a.NativeUID, a.NativeGID, 0755}, {"/var/lib/cloud-8021x", a.RuntimeUID, a.RuntimeGID, 0700},
@@ -140,5 +142,26 @@ func PrepareDirectories(a Accounts) error {
 			return e
 		}
 	}
+	for _, class := range []string{"accounting", "export", "auth", "certificates", "observation"} {
+		path := "/run/cloud-8021x/database-pools/" + class + ".lock"
+		fd, err := unix.Open(path, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0660)
+		if err == nil {
+			err = unix.Fchown(fd, 0, a.RuntimeGID)
+			if err == nil {
+				err = unix.Fchmod(fd, 0660)
+			}
+			_ = unix.Close(fd)
+			if err != nil {
+				return err
+			}
+		} else if !errors.Is(err, unix.EEXIST) {
+			return err
+		}
+		var st unix.Stat_t
+		if unix.Lstat(path, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 || st.Uid != 0 || int(st.Gid) != a.RuntimeGID || st.Mode&0777 != 0660 {
+			return errors.New("runtime database pool slot identity differs")
+		}
+	}
+
 	return nil
 }

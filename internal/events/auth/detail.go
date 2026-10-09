@@ -21,6 +21,7 @@ var allowed = map[string]bool{
 	"Packet-Type": true, "Timestamp": true, "Response-Packet-Type": true,
 	"C8021X-Receipt": true, "C8021X-Client": true, "C8021X-Location": true, "C8021X-Source": true,
 	"C8021X-Station": true, "C8021X-Called": true, "C8021X-Port-Type": true, "C8021X-Reason": true,
+	"C8021X-Cert-Expiration": true, "C8021X-Cert-Issuer": true,
 	"C8021X-Port-Count": true, "C8021X-Station-Count": true,
 	"Class": true, "Tunnel-Type": true, "Tunnel-Medium-Type": true, "Tunnel-Private-Group-Id": true,
 }

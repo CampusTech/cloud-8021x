@@ -25,28 +25,29 @@ type Store interface {
 	AuthEvent(context.Context, string, string, string, string, json.RawMessage) error
 }
 type Event struct {
-	Serial           string    `json:"serial"`
-	ID               string    `json:"event_id"`
-	Event            string    `json:"event"`
-	Host             string    `json:"host"`
-	Received         time.Time `json:"received_at"`
-	Client           string    `json:"client_id"`
-	Location         string    `json:"location_id"`
-	Source           string    `json:"src_ip"`
-	Station          string    `json:"calling_station_id"`
-	Called           string    `json:"called_station_id"`
-	NASPortTypes     []string  `json:"nas_port_types"`
-	NASPortTypeCount int       `json:"nas_port_type_count"`
-	Reason           string    `json:"reason"`
-	DeviceID         string    `json:"device_id"`
-	DeviceOwner      string    `json:"device_owner"`
-	DeviceName       string    `json:"device_name"`
-	DeviceModel      string    `json:"device_model"`
-	Fingerprint      string    `json:"certificate_fingerprint"`
-	VLANID           string    `json:"vlan_id"`
-	APName           string    `json:"ap_name"`
-	SiteName         string    `json:"site_name"`
-	VLANName         string    `json:"vlan_name"`
+	CertificateObservation *CertificateObservation `json:"certificate_observation,omitempty"`
+	Serial                 string                  `json:"serial"`
+	ID                     string                  `json:"event_id"`
+	Event                  string                  `json:"event"`
+	Host                   string                  `json:"host"`
+	Received               time.Time               `json:"received_at"`
+	Client                 string                  `json:"client_id"`
+	Location               string                  `json:"location_id"`
+	Source                 string                  `json:"src_ip"`
+	Station                string                  `json:"calling_station_id"`
+	Called                 string                  `json:"called_station_id"`
+	NASPortTypes           []string                `json:"nas_port_types"`
+	NASPortTypeCount       int                     `json:"nas_port_type_count"`
+	Reason                 string                  `json:"reason"`
+	DeviceID               string                  `json:"device_id"`
+	DeviceOwner            string                  `json:"device_owner"`
+	DeviceName             string                  `json:"device_name"`
+	DeviceModel            string                  `json:"device_model"`
+	Fingerprint            string                  `json:"certificate_fingerprint"`
+	VLANID                 string                  `json:"vlan_id"`
+	APName                 string                  `json:"ap_name"`
+	SiteName               string                  `json:"site_name"`
+	VLANName               string                  `json:"vlan_name"`
 }
 type Options struct {
 	Directory, Host       string

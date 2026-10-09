@@ -18,6 +18,8 @@ import (
 )
 
 var fixedFiles = map[string]bool{
+	"/etc/datadog-agent/conf.d/openmetrics.d/stepca.yaml": true, "/etc/datadog-agent/conf.d/openmetrics.d/stepca-rsa.yaml": true, "/etc/datadog-agent/conf.d/http_check.d/cloud-8021x.yaml": true, "/etc/datadog-agent/conf.d/process.d/cloud-8021x.yaml": true,
+	"/etc/cloud-8021x/ec-decrypter.pem": true, "/etc/cloud-8021x/rsa-decrypter.pem": true,
 	parallelPrepareFile: true, parallelActivationHelperFile: true, ParallelActiveFile: true, ParallelPublicActivationFile: true,
 	transactionRoot + "/rollback-radius-primary.json": true, transactionRoot + "/rollback-radius-secondary.json": true, transactionRoot + "/parallel-radius-primary.json": true, transactionRoot + "/parallel-radius-secondary.json": true,
 	legacyDowngradeGuard:                   true,

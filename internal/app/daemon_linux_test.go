@@ -59,6 +59,9 @@ func TestInstalledAssembledDaemonLedgerOutageAndCancellation(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	for _, class := range []string{"accounting", "export", "auth", "certificates", "observation"} {
+		write(filepath.Join(postgres.RuntimePoolDirectory, class+".lock"), nil, 0600)
+	}
 	cfg := configuredFixture(t)
 	cfg.InstanceID = "radius-primary"
 	cfg.Hostname = "radius-primary"

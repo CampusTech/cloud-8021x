@@ -71,7 +71,7 @@ func newSDK(_ context.Context, c config.Telemetry, id Identity, ex Exporters, lo
 	if c.QueueSize < 1 || c.Timeout <= 0 || c.ShutdownTimeout <= 0 || c.TraceSampleRatio < 0 || c.TraceSampleRatio > 1 || local == nil {
 		return nil, errors.New("invalid telemetry bounds")
 	}
-	res := resource.NewWithAttributes("", attribute.String("service.name", "cloud-8021x"), attribute.String("service.version", id.Version), attribute.String("service.instance.id", id.Instance), attribute.String("deployment.environment.name", id.Environment), attribute.String("host.name", id.Host))
+	res := telemetryResource(id)
 	s := &SDK{timeout: c.ShutdownTimeout}
 	lo := []sdklog.LoggerProviderOption{sdklog.WithResource(res), sdklog.WithAttributeCountLimit(16), sdklog.WithAttributeValueLengthLimit(128)}
 	if c.Enabled && c.Logs && ex.Logs != nil {
@@ -140,4 +140,8 @@ func ErrorClass(err error) string {
 	default:
 		return "unavailable"
 	}
+}
+
+func telemetryResource(id Identity) *resource.Resource {
+	return resource.NewWithAttributes("", attribute.String("service.name", "cloud-8021x"), attribute.String("service.version", id.Version), attribute.String("service.instance.id", id.Instance), attribute.String("deployment.environment.name", id.Environment), attribute.String("host.name", id.Host))
 }

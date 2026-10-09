@@ -45,11 +45,14 @@ func CollectorEnvironment(key []byte, a Accounts) (File, error) {
 	return File{Path: "/run/cloud-8021x-collector/datadog.env", Data: []byte("DD_API_KEY=" + value + "\n"), UID: a.CollectorUID, GID: a.CollectorGID, Mode: 0600}, nil
 }
 func CollectorFiles(c config.Config, key []byte, a Accounts) ([]File, error) {
+	return collectorFiles(c, key, a, Snapshot)
+}
+func collectorFiles(c config.Config, key []byte, a Accounts, snapshot func(File) (SavedFile, error)) ([]File, error) {
 	env, err := CollectorEnvironment(key, a)
 	if err != nil {
 		return nil, err
 	}
-	original, err := Snapshot(File{Path: "/etc/datadog-agent/datadog.yaml", UID: a.CollectorUID})
+	original, err := snapshot(File{Path: "/etc/datadog-agent/datadog.yaml", UID: a.CollectorUID})
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +68,7 @@ func CollectorFiles(c config.Config, key []byte, a Accounts) ([]File, error) {
 		return nil, err
 	}
 	files := []File{env, {Path: "/etc/datadog-agent/datadog.yaml", Data: merged, GID: a.CollectorGID, Mode: 0640, adoptUID: a.CollectorUID}, {Path: "/etc/cloud-8021x/ddot.yaml", Data: collector, GID: a.CollectorGID, Mode: 0640}}
-	legacy, err := Snapshot(File{Path: "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml", UID: a.CollectorUID})
+	legacy, err := snapshot(File{Path: "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml", UID: a.CollectorUID})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +99,11 @@ func CollectorFiles(c config.Config, key []byte, a Accounts) ([]File, error) {
 		}
 		files = append(files, File{Path: "/etc/datadog-agent/conf.d/freeradius.d/conf.yaml", Data: data, GID: a.CollectorGID, Mode: 0640, adoptUID: a.CollectorUID})
 	}
-	return files, nil
+	nativeFiles, err := NativeCollectorFiles(c, a)
+	if err != nil {
+		return nil, err
+	}
+	return append(files, nativeFiles...), nil
 }
 func VerifyCollector(m Manifest) error {
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(m.CollectorSHA256) {

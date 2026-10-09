@@ -89,7 +89,11 @@ func Verify(raw []byte, key ed25519.PublicKey, expected Binding, now time.Time) 
 	if domain.DecodeJSONStrict(envelope.Document, &a) != nil {
 		return a, errors.New("invalid typed authorization handoff")
 	}
-	if a.Binding != expected {
+	// JSON preserves the epoch instant, not time.Location pointer identity.
+	actual, wanted := a.Binding, expected
+	actual.CollectionEpoch = actual.CollectionEpoch.UTC()
+	wanted.CollectionEpoch = wanted.CollectionEpoch.UTC()
+	if actual != wanted {
 		return a, errors.New("source handoff destination/config/release differs")
 	}
 	if a.CapturedAt.After(now) || now.Sub(a.CapturedAt) > MaxCaptureAge {

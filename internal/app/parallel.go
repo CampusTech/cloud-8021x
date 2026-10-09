@@ -314,7 +314,7 @@ func prepareParallel(ctx context.Context, cfg config.Config, o RunOptions, manif
 		for path, data := range caFiles {
 			files = append(files, host.File{Path: path, Data: data, Mode: 0600})
 		}
-		for path, data := range map[string][]byte{"/etc/cloud-8021x/client-cas.pem": trust, "/etc/cloud-8021x/radius-server.pem": server.Chain, "/etc/cloud-8021x/ec-intermediate.pem": ec.Intermediate, "/etc/cloud-8021x/rsa-intermediate.pem": rsa.Intermediate, "/etc/cloud-8021x/webhook.crt": original.WebhookCertificate, "/usr/local/share/ca-certificates/acme-webhook.crt": original.WebhookCertificate, "/etc/acme-authz-webhook/server.crt": original.WebhookCertificate} {
+		for path, data := range map[string][]byte{"/etc/cloud-8021x/client-cas.pem": trust, "/etc/cloud-8021x/radius-server.pem": server.Chain, "/etc/cloud-8021x/ec-decrypter.pem": ec.DecrypterCert, "/etc/cloud-8021x/rsa-decrypter.pem": rsa.DecrypterCert, "/etc/cloud-8021x/ec-intermediate.pem": ec.Intermediate, "/etc/cloud-8021x/rsa-intermediate.pem": rsa.Intermediate, "/etc/cloud-8021x/webhook.crt": original.WebhookCertificate, "/usr/local/share/ca-certificates/acme-webhook.crt": original.WebhookCertificate, "/etc/acme-authz-webhook/server.crt": original.WebhookCertificate} {
 			files = append(files, host.File{Path: path, Data: data, Mode: 0644})
 		}
 		files = append(files, host.File{Path: "/etc/acme-authz-webhook/server.key", Data: original.WebhookKey, Mode: 0600}, host.File{Path: "/run/cloud-8021x/credentials/webhook.key", Data: original.WebhookKey, UID: accounts.RuntimeUID, GID: accounts.RuntimeGID, Mode: 0600})
