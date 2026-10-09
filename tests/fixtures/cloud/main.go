@@ -62,18 +62,19 @@ type seed struct {
 	Routes        []route                      `json:"routes"`
 }
 type fixture struct {
-	config       seed
-	keys         map[string]crypto.Signer
-	phase        string
-	journal      io.Writer
-	journalBytes int64
-	mu           sync.Mutex
-	remote       *remoteState
-	seedSHA256   string
-	stateRoot    string
-	observation  json.RawMessage
-	callerIP     string
-	callerRole   string
+	config             seed
+	keys               map[string]crypto.Signer
+	phase              string
+	journal            io.Writer
+	journalBytes       int64
+	mu                 sync.Mutex
+	remote             *remoteState
+	seedSHA256         string
+	stateRoot          string
+	observation        json.RawMessage
+	callerIP           string
+	callerRole         string
+	incompleteEvidence bool
 }
 
 func crc(data []byte) uint64       { return uint64(crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))) }
@@ -149,11 +150,14 @@ func (f *fixture) sign(resource string, digest []byte, checksum string) ([]byte,
 	}
 	return key.Sign(rand.Reader, digest, crypto.SHA256)
 }
-func (f *fixture) dispatch(r *http.Request, body []byte) (int, any, string) {
-	host := r.Host
+func normalizedAuthority(host string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+		return h
 	}
+	return host
+}
+func (f *fixture) dispatch(r *http.Request, body []byte) (int, any, string) {
+	host := normalizedAuthority(r.Host)
 	if host == "169.254.169.254" || host == "metadata.google.internal" {
 		if r.Method != "GET" || r.Header.Get("Metadata-Flavor") != "Google" {
 			return 403, map[string]string{"error": "metadata flavor required"}, "application/json"
@@ -242,22 +246,29 @@ func (f *fixture) dispatch(r *http.Request, body []byte) (int, any, string) {
 func (f *fixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-	if err != nil || len(body) > maxBody {
-		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
-		return
-	}
 	release, err := f.openRemote()
 	if err != nil {
 		http.Error(w, "persistent remote state unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer release()
+	complete, err := f.beginTransportEvidence()
+	if err != nil {
+		http.Error(w, "transport evidence unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	if err != nil || len(body) > maxBody {
+		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	phase := f.phase
 	defer func() { f.phase = phase }()
 	if err := f.observedPeer(r.RemoteAddr); err != nil {
 		f.observation = nil
-		_ = f.record("http", r.Method, r.Host+r.URL.RequestURI(), body, 403)
+		if err := f.record("http", r.Method, r.Host+r.URL.RequestURI(), body, 403); err == nil {
+			_ = complete()
+		}
 		http.Error(w, "unrecognized remote peer", http.StatusForbidden)
 		return
 	}
@@ -265,6 +276,10 @@ func (f *fixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.observeResponse(r, payload)
 	if err := f.record("http", r.Method, r.Host+r.URL.RequestURI(), body, code); err != nil {
 		http.Error(w, "journal unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := complete(); err != nil {
+		http.Error(w, "transport evidence incomplete", http.StatusServiceUnavailable)
 		return
 	}
 	if kind == "drop" {
@@ -411,6 +426,10 @@ func (f *fixture) grpcHandler(_ any, stream grpc.ServerStream) error {
 	peerErr := f.observedPeer(address)
 	method, _ := grpc.MethodFromServerStream(stream)
 	md, _ := metadata.FromIncomingContext(stream.Context())
+	complete, err := f.beginTransportEvidence()
+	if err != nil {
+		return status.Error(codes.Unavailable, "transport evidence unavailable")
+	}
 	var input wire
 	if err := stream.RecvMsg(&input); err != nil {
 		return err
@@ -428,6 +447,9 @@ func (f *fixture) grpcHandler(_ any, stream grpc.ServerStream) error {
 	}
 	if err := f.record("grpc", "POST", method, input, int(code)); err != nil {
 		return status.Error(codes.ResourceExhausted, "fixture journal unavailable")
+	}
+	if err := complete(); err != nil {
+		return status.Error(codes.Unavailable, "transport evidence incomplete")
 	}
 	if code != codes.OK {
 		return status.Error(code, "fixture request denied")
@@ -537,7 +559,7 @@ func main() {
 	var root, address, phase string
 	var meta bool
 	cmd := &cobra.Command{Use: "cloud-fixture", SilenceUsage: true, RunE: func(_ *cobra.Command, _ []string) error { return serve(root, address, phase, meta) }}
-	cmd.AddCommand(verifyCommand(), scenarioCommand())
+	cmd.AddCommand(verifyCommand(), scenarioCommand(), passiveAuditCommand())
 	cmd.Flags().StringVar(&root, "fixture-root", "", "owned synthetic input directory")
 	cmd.Flags().StringVar(&address, "listen", "10.203.11.10:443", "fixture-internal TLS address")
 	cmd.Flags().StringVar(&phase, "phase", "passive", "passive or active")

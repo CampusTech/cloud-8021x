@@ -100,6 +100,9 @@ func privateRead(path string) ([]byte, error) {
 }
 func (f *fixture) openRemote() (func(), error) {
 	f.initializeRemote()
+	if f.incompleteEvidence {
+		return nil, errors.New("transport evidence incomplete")
+	}
 	if f.stateRoot == "" || f.config.Contract == nil {
 		return func() {}, nil
 	}
@@ -116,6 +119,10 @@ func (f *fixture) openRemote() (func(), error) {
 		return nil, err
 	}
 	release := func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN); _ = lock.Close() }
+	if _, err := os.Lstat(filepath.Join(f.stateRoot, incompleteEvidenceFile)); !os.IsNotExist(err) {
+		release()
+		return nil, errors.New("persisted transport evidence incomplete")
+	}
 	data, err := privateRead(filepath.Join(f.stateRoot, "remote-state.json"))
 	if err == nil {
 		var state remoteState
@@ -333,4 +340,75 @@ func (f *fixture) observeResponse(r *http.Request, payload any) {
 			f.observation, _ = json.Marshal(out)
 		}
 	}
+}
+
+// A transport must establish this durable latch before decoding or dispatching.
+// A refused/incomplete receive, crash or exhausted journal never clears it. Any
+// sentinel (including empty or malformed) blocks every subsequent locked reader.
+// Only the creating operation may remove its exact inode after durable recording.
+const incompleteEvidenceFile = "transport-incomplete"
+
+func (f *fixture) beginTransportEvidence() (func() error, error) {
+	if f.config.Contract == nil {
+		return func() error { return nil }, nil
+	}
+	if f.incompleteEvidence {
+		return nil, errors.New("transport evidence already incomplete")
+	}
+	f.incompleteEvidence = true
+	if f.stateRoot == "" {
+		return func() error { f.incompleteEvidence = false; return nil }, nil
+	}
+	path := filepath.Join(f.stateRoot, incompleteEvidenceFile)
+	file, err := privateFile(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err == nil {
+		_, err = file.Write([]byte("incomplete-transport-v1\n" + f.seedSHA256 + "\n"))
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	parent, err := privateParent(path)
+	if err != nil {
+		return nil, err
+	}
+	err = unix.Fsync(parent)
+	_ = unix.Close(parent)
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		current, err := privateFile(path, unix.O_RDONLY)
+		if err != nil {
+			return err
+		}
+		currentInfo, err := current.Stat()
+		_ = current.Close()
+		if err != nil || !os.SameFile(info, currentInfo) {
+			return errors.New("transport sentinel ownership changed")
+		}
+		parent, err := privateParent(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = unix.Close(parent) }()
+		if err = unix.Unlinkat(parent, incompleteEvidenceFile, 0); err != nil {
+			return err
+		}
+		if err = unix.Fsync(parent); err != nil {
+			return err
+		}
+		f.incompleteEvidence = false
+		return nil
+	}, nil
 }

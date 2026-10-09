@@ -124,6 +124,75 @@ changing permission. Installed verification requires actual reads from both
 greens while passive and rejects even denied mutation attempts during passive
 periods. Deliberate primitive denial tests belong in separate evidence roots.
 
+## Passive peer audit
+
+The separately pinned development helper also exposes a read-only audit of one
+installed green peer's actual remote API journal. It always uses
+`/var/lib/cloud8021x-task11/control/original-seed/api`, requires the existing
+Linux-root guest guard, and accepts no gate or filesystem path override:
+
+```sh
+/usr/local/libexec/task11-cloud-contract passive-audit baseline \
+  --seed-sha256 SEED_FILE_SHA256 --peer 10.203.11.21
+/usr/local/libexec/task11-cloud-contract passive-audit final \
+  --seed-sha256 SEED_FILE_SHA256 --peer 10.203.11.21 \
+  --after-sequence BASELINE_TO_SEQUENCE --baseline-sha256 BASELINE_SHA256
+```
+
+The controller must retain the actual baseline result before the independently
+verified preparation or deactivation/reboot operation. The prefix hash binds the
+exact seed bytes, seeded green IP/role, actual journal sequence and full prefix.
+It is a consistency check, not an authorization token or product lifecycle
+receipt. Only the seeded `.21` and `.22` greens are accepted. An original caller
+or a different peer's baseline cannot substitute for the selected green.
+
+Both commands reopen the private state under its existing lock and verify
+journal/state consistency. The audit replays the complete policy and controller
+history, checks seeded and subsequently observed command identities and legal
+scenario transitions, and compares replayed policy/control state to persisted
+state. Unknown protocols, methods, transport peers or controls refuse the audit.
+The selected peer must be passive at the baseline, throughout the final window
+and currently. Every selected-peer mutation attempt in the window fails,
+including refused HTTP requests and denied KMS signing. Known original-node
+activity remains separate evidence. Historical active work before a newly
+recorded passive baseline is permitted; an earlier prepared baseline cannot be
+reused across that active interval.
+
+Success returns bounded nonsecret JSON: `schema:1`, `kind:passive-peer-audit`,
+`mode:baseline|final`, `seed_sha256`, `peer`, `role`, `policy:passive`,
+`from_sequence`, `to_sequence`, `baseline_sha256`, `evidence_sha256`, `events`,
+`read_attempts`, `successful_reads`, `http_requests`, `grpc_requests`,
+`control_events`, `other_peer_events`, and `mutation_attempts:0`. Hashes are
+64 lowercase hexadecimal characters. The maximum history is 8192 events and the
+result is bounded to 2048 bytes. Baseline has equal sequence boundaries and zero
+window counts. Final counts the interval `(from_sequence, to_sequence]`:
+`events` counts the selected peer's HTTP/gRPC requests, `control_events` counts
+controller scenarios, and `other_peer_events` counts other seeded callers.
+Successful reads are actual HTTP 2xx or gRPC OK reads. No reads are required:
+a passive boot with no external requests legitimately produces zero counts.
+Failure emits no success result. Auditing does not write state or journal.
+
+Before either HTTP body decoding or gRPC RecvMsg, serving exclusively creates and
+syncs a fixed private `transport-incomplete` sentinel under the existing state
+lock. Only that request may remove its exact file after journal and state are
+durably committed; directory creation/removal is synced too. Oversized or broken
+receives, exhausted evidence bounds, interrupted processing and failed persistence
+leave the sentinel in place. Any existing sentinel, even empty or malformed,
+blocks subsequent serving, scenarios and verification after reopening. It is an
+incomplete-evidence failure marker, never a success receipt; no automatic reset
+or cleanup command is provided. A run with incomplete evidence cannot be reused
+as acceptance proof. Journal/request limits are unchanged. Static GET mutation
+classification uses the dispatcher's identical authority normalization and exact
+method/path/query match, including explicit ports.
+
+This result proves only the bounded remote history. It does not establish that
+preparation, deactivation, a reboot or product activation occurred, nor that
+local sockets or services were passive. The controller's actual CLI/PID1/boot
+and node-observer evidence must establish those separate facts and delimit the
+window. Rebuilding and enrolling this reviewed helper/source/seed identity is
+required before controller integration; the frozen R108 executable has no audit
+execution proof.
+
 ## Projection and verifier result
 
 The fixed root0600 `expected.json` must be produced from actual durable SQL work
