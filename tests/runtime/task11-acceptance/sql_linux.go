@@ -13,7 +13,6 @@ import (
 	networkjob "github.com/CampusTech/cloud-8021x/internal/jobs/network"
 
 	"github.com/CampusTech/cloud-8021x/internal/adoption"
-	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/privileged/host"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
@@ -33,11 +32,9 @@ func observeSQL(ctx context.Context, project bool) (out sqlObservation, err erro
 	if cfg.Deployment.ID != "task11-green" || cfg.Database.Name != "cloud8021x_task11_green" || !neutralNetworkScope(cfg) {
 		return out, errors.New("fixed synthetic database and no changing network enrichment required")
 	}
-	installed, err := readPrivate("/etc/cloud-8021x/config.yaml", config.MaxConfigBytes, 0)
-	if err != nil || adoption.Digest(installed) != manifest.ConfigSHA256 {
-		return out, errors.New("installed and enrolled configuration differ")
+	if err := observeSQLConfig(manifest.ConfigSHA256, host.Snapshot); err != nil {
+		return out, err
 	}
-	clear(installed)
 	out.ConfigSHA256 = manifest.ConfigSHA256
 	unlock, err := host.AcquireWriterOperation()
 	if err != nil {
