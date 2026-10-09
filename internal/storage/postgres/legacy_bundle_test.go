@@ -132,6 +132,15 @@ func TestPostgresResumeStatePublicationUsesExactCommittedOriginal(t *testing.T) 
 	if e := s.ResumeStatePublication(ctx, attempt, identity, resume); e != nil || !called {
 		t.Fatal("exact continuation failed", e)
 	}
+	if enabled, e := s.CompletedStatePublication(ctx, attempt, identity); e != nil || enabled {
+		t.Fatal("completed exact resumed publication unavailable", enabled, e)
+	}
+	if _, e := s.CompletedStatePublication(ctx, attempt+1, identity); e == nil {
+		t.Fatal("different completed attempt accepted")
+	}
+	if _, e := s.CompletedStatePublication(ctx, attempt, wrong); e == nil {
+		t.Fatal("different completed bundle accepted")
+	}
 	var n int
 	if e := s.pool.QueryRow(ctx, `SELECT count(*) FROM bootstrap_private.maintenance_recoveries WHERE attempt=$1 AND operation=$2`, attempt, operation).Scan(&n); e != nil || n != 1 {
 		t.Fatal("recovery evidence missing", n, e)

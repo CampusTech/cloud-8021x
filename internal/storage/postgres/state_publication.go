@@ -124,3 +124,25 @@ func (s *Store) EnableIfPublished(ctx context.Context, id string) (bool, error) 
 	}
 	return ready, nil
 }
+
+// CompletedStatePublication is a read-only check of the original successful
+// maintenance attempt and its exact committed, locally acknowledged bundle.
+func (s *Store) CompletedStatePublication(ctx context.Context, id int64, i StatePublicationIdentity) (bool, error) {
+	op, e := i.Operation()
+	if e != nil || id <= 0 {
+		return false, errors.New("exact completed publication identity required")
+	}
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	var enabled bool
+	e = s.pool.QueryRow(ctx, `SELECT t.enabled AND NOT t.blocked
+ FROM bootstrap_private.legacy_bundles b
+ JOIN ledger.import_markers m ON m.id='state:'||b.transition||':'||b.node AND m.checksum=b.checksum
+ JOIN bootstrap_private.transitions t ON t.id=b.transition
+ JOIN bootstrap_private.maintenance a ON a.id=$4 AND a.operation=$5 AND a.outcome='complete'
+ WHERE b.transition=$1 AND b.node=$2 AND b.checksum=$3 AND b.published`, i.Transition, i.Node, i.BundleSHA256, id, op).Scan(&enabled)
+	if e != nil {
+		return false, errors.New("exact completed publication and committed marker unavailable")
+	}
+	return enabled, nil
+}

@@ -42,4 +42,4 @@ export C8021X_PG_TEST_TLS_KEY="$fixture/server.key"
 arch=$(docker version --format '{{.Server.Arch}}')
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go test -c -o "$fixture/app.test" ./internal/app
 docker exec -u root "$container" sh -c 'useradd --system freerad; groupadd --system cloud8021x-events'
-docker exec -u root -e C8021X_DAEMON_FIXTURE=task9 -e C8021X_PG_TEST_DSN=postgres://postgres:disposable-migration@localhost:5432/cloud8021x -e C8021X_PG_TEST_CA=/certs/ca.pem "$container" /certs/app.test -test.run '^TestInstalledAssembledDaemonLedgerOutageAndCancellation$' -test.v
+docker exec -u root -e C8021X_DAEMON_FIXTURE=task9 -e C8021X_PG_TEST_DSN=postgres://postgres:disposable-migration@localhost:5432/cloud8021x -e C8021X_PG_TEST_CA=/certs/ca.pem "$container" /certs/app.test -test.run "${C8021X_APP_TEST_PATTERN:-^TestInstalledAssembledDaemonLedgerOutageAndCancellation$}" -test.v

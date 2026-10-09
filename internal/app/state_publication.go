@@ -81,6 +81,19 @@ func protectedStateMigrate(ctx context.Context, cfg config.Config, o RunOptions)
 	identity := postgres.StatePublicationIdentity{WriterFenceIdentity: postgres.WriterFenceIdentity{Transition: cfg.StateTransition, Node: node, ConfigSHA256: hash}, BundleSHA256: stateDigest(data)}
 	physical := host.StatePublication{Transition: cfg.StateTransition, Node: node, ConfigSHA256: hash, BundleSHA256: identity.BundleSHA256, Attempt: o.MaintenanceAttempt}
 	var enabled bool
+	if o.MaintenanceAttempt == 0 {
+		original, complete, err := host.CompletedStatePublication(physical, data)
+		if err != nil {
+			return err
+		}
+		if complete {
+			enabled, err = repository.CompletedStatePublication(ctx, original.Attempt, identity)
+			if err != nil {
+				return err
+			}
+			return statePublicationResult(o, identity, original.Attempt, enabled)
+		}
+	}
 	action := func(ctx context.Context) error {
 		if o.MaintenanceAttempt == 0 {
 			physical.Attempt, e = repository.StatePublicationAttempt(ctx, identity)
@@ -110,8 +123,11 @@ func protectedStateMigrate(ctx context.Context, cfg config.Config, o RunOptions)
 	if e != nil {
 		return e
 	}
+	return statePublicationResult(o, identity, physical.Attempt, enabled)
+}
+func statePublicationResult(o RunOptions, identity postgres.StatePublicationIdentity, attempt int64, enabled bool) error {
 	if o.Output == nil {
 		return nil
 	}
-	return json.NewEncoder(o.Output).Encode(map[string]any{"operation": "state migrate", "node": node, "transition": cfg.StateTransition, "bundle_sha256": identity.BundleSHA256, "workers_enabled": enabled, "attempt": physical.Attempt})
+	return json.NewEncoder(o.Output).Encode(map[string]any{"operation": "state migrate", "node": identity.Node, "transition": identity.Transition, "bundle_sha256": identity.BundleSHA256, "workers_enabled": enabled, "attempt": attempt})
 }

@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/migration"
 )
 
@@ -42,6 +44,35 @@ func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, 
 	if uint64(current.Host.ID) != evidence.HostID || current.Host.UUID != uuid {
 		return evidence, errors.New("legacy recovery current host differs")
 	}
+	enrollment := current.Host.MDMEnrolledAt
+	if command.Transport == "windows_script" {
+		enrollment = current.Host.EnrolledAt
+		if current.Host.Platform != "windows" || h.Platform != "windows" {
+			return evidence, errors.New("original Windows transport differs")
+		}
+	} else if command.Transport != "" || (current.Host.Platform != "darwin" && current.Host.Platform != "macos" && current.Host.Platform != "ios" && current.Host.Platform != "ipados") || current.Host.Platform != h.Platform {
+		return evidence, errors.New("original Apple transport differs")
+	}
+	var retained float64
+	var fleetEnrollment *string
+	at, err := time.Parse(time.RFC3339Nano, enrollment)
+	// Python datetime truncates parsed fractional timestamps to microseconds;
+	// compare its original numeric representation without changing retained bytes.
+	if err != nil || json.Unmarshal(h.Binding[1], &retained) != nil || retained <= 0 || float64(domain.Unix(at.Truncate(time.Microsecond))) != retained || json.Unmarshal(h.Binding[2], &fleetEnrollment) != nil || (fleetEnrollment == nil && current.Host.EnrolledAt != "") || (fleetEnrollment != nil && (*fleetEnrollment == "" || current.Host.EnrolledAt != *fleetEnrollment)) {
+		return evidence, errors.New("original enrollment binding differs")
+	}
+	submitted, err := migration.ReceiptTime([]byte(command.CreatedAt))
+	if err != nil {
+		return evidence, err
+	}
+	// Fleet's legacy results are second precision. Only this lower bound is
+	// floored; original request and response timestamps remain untouched.
+	return c.recoverBoundCommand(ctx, uuid, h, command, hint, submitted.Truncate(time.Second), evidence)
+}
+
+// Both callers verify their own original enrollment representation before this
+// shared GET-only terminal lookup; new work retains its exact timestamp bound.
+func (c *Client) recoverBoundCommand(ctx context.Context, uuid string, h migration.LegacyCertificateHost, command migration.LegacyCommand, hint string, submitted time.Time, evidence LegacyRecoveryEvidence) (LegacyRecoveryEvidence, error) {
 	if command.Transport == "windows_script" {
 		execution := command.ExecutionID
 		if execution == "" {
@@ -75,8 +106,7 @@ func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, 
 		if e != nil {
 			return evidence, e
 		}
-		submitted, e := migration.ReceiptTime([]byte(command.CreatedAt))
-		if e != nil || created.Before(submitted) {
+		if created.Before(submitted) {
 			return evidence, errors.New("script result predates original request")
 		}
 		evidence.Outcome = "terminal"
@@ -118,8 +148,7 @@ func (c *Client) RecoverLegacyCommand(ctx context.Context, source, uuid string, 
 	if e != nil {
 		return evidence, e
 	}
-	submitted, e := migration.ReceiptTime([]byte(command.CreatedAt))
-	if e != nil || at.Before(submitted) {
+	if at.Before(submitted) {
 		return evidence, errors.New("MDM result predates original request")
 	}
 	evidence.Outcome = "terminal"

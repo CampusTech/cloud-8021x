@@ -169,6 +169,17 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 					t.Fatal("original exact publication did not resume", e)
 				}
 			}
+			lookup := p
+			lookup.Attempt = 0
+			completed, ok, err := CompletedStatePublication(lookup, raw)
+			if err != nil || !ok || completed.Attempt != p.Attempt {
+				t.Fatal("exact completed original unavailable", ok, err)
+			}
+			changedLookup := lookup
+			changedLookup.BundleSHA256 = strings.Repeat("f", 64)
+			if _, _, err = CompletedStatePublication(changedLookup, raw); err == nil {
+				t.Fatal("changed lookup identity accepted")
+			}
 			complete, e := readPrivateCache(filepath.Join(dir, "publication-complete.json"), 4096)
 			if e != nil || !bytes.Equal(complete, original) {
 				t.Fatal("original publication receipt changed", e)
@@ -199,6 +210,9 @@ func TestInstalledStatePublicationInterruptedOriginalArchive(t *testing.T) {
 						}
 						if err != nil {
 							t.Fatal(err)
+						}
+						if _, _, err = CompletedStatePublication(lookup, raw); err == nil {
+							t.Fatal("unsafe completed evidence accepted")
 						}
 						if err = ValidateStatePublicationRecovery(p, raw); err == nil {
 							t.Fatal("unsafe publication evidence accepted")

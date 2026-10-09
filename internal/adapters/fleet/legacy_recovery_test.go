@@ -15,7 +15,7 @@ import (
 )
 
 func TestLegacyRecoveryReadsOriginalTerminalEvidence(t *testing.T) {
-	for _, scenario := range []string{"terminal", "pending", "wrong-host", "predates", "foreign-result", "absent", "empty"} {
+	for _, scenario := range []string{"terminal", "same-second", "changed-enrollment", "missing-enrollment", "changed-fleet-enrollment", "missing-fleet-enrollment", "wrong-platform", "pending", "wrong-host", "predates", "foreign-result", "absent", "empty"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +29,7 @@ func TestLegacyRecoveryReadsOriginalTerminalEvidence(t *testing.T) {
 					if scenario == "wrong-host" {
 						uuid = "replacement"
 					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"host": map[string]any{"id": 42, "uuid": uuid}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"host": legacyRecoveryHost(scenario, uuid, "darwin")})
 				case "/api/v1/fleet/commands/results":
 					if r.URL.Query().Get("command_uuid") != "original-command" {
 						t.Error("lost original command")
@@ -45,6 +45,9 @@ func TestLegacyRecoveryReadsOriginalTerminalEvidence(t *testing.T) {
 					row := appleResult{HostUUID: "host-42", CommandUUID: "original-command", RequestType: "CertificateList", Status: "Acknowledged", UpdatedAt: "2026-10-08T12:00:01Z", Result: "original-output"}
 					if scenario == "pending" {
 						row.Status = "NotNow"
+					}
+					if scenario == "same-second" {
+						row.UpdatedAt = "2026-10-08T12:00:00Z"
 					}
 					if scenario == "predates" {
 						row.UpdatedAt = "2026-10-08T11:59:59Z"
@@ -63,11 +66,19 @@ func TestLegacyRecoveryReadsOriginalTerminalEvidence(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			binding := []json.RawMessage{json.RawMessage(`42`), json.RawMessage(`1791450000.123456789`), json.RawMessage(`null`)}
+			binding := []json.RawMessage{json.RawMessage(`42`), json.RawMessage(`1791450000.123456`), json.RawMessage(`"2026-10-08T09:00:00.123456789Z"`)}
 			host := migration.LegacyCertificateHost{Binding: binding, Platform: "darwin"}
-			command := migration.LegacyCommand{UUID: "original-command", CreatedAt: json.Number("1791460800"), Hosts: map[string][]json.RawMessage{"host-42": binding}}
+			command := migration.LegacyCommand{UUID: "original-command", CreatedAt: json.Number("1791460800.75"), Hosts: map[string][]json.RawMessage{"host-42": binding}}
+			original, _ := json.Marshal(command)
 			proof, e := client.RecoverLegacyCommand(context.Background(), server.URL, "host-42", host, command, "")
-			good := scenario == "terminal"
+			after, _ := json.Marshal(command)
+			if string(after) != string(original) {
+				t.Fatal("original reservation mutated")
+			}
+			if scenario == "same-second" && !strings.Contains(string(proof.Response), "2026-10-08T12:00:00Z") {
+				t.Error("original result time not retained")
+			}
+			good := scenario == "terminal" || scenario == "same-second"
 			if (e == nil) != good {
 				t.Fatalf("proof=%+v err=%v", proof, e)
 			}
@@ -82,7 +93,7 @@ func TestLegacyRecoveryReadsOriginalTerminalEvidence(t *testing.T) {
 }
 
 func TestLegacyWindowsRecoveryUsesExactOriginalScriptAndExecution(t *testing.T) {
-	for _, scenario := range []string{"terminal", "known-absent", "unknown-absent", "hint-terminal", "pending", "wrong-script", "wrong-nonce", "wrong-host", "predates", "empty"} {
+	for _, scenario := range []string{"terminal", "same-second", "changed-enrollment", "missing-enrollment", "changed-fleet-enrollment", "missing-fleet-enrollment", "wrong-platform", "known-absent", "unknown-absent", "hint-terminal", "pending", "wrong-script", "wrong-nonce", "wrong-host", "predates", "empty"} {
 		t.Run(scenario, func(t *testing.T) {
 			script := "Write-Output 'fixture'\n"
 			hash := sha256.Sum256([]byte(script))
@@ -92,7 +103,7 @@ func TestLegacyWindowsRecoveryUsesExactOriginalScriptAndExecution(t *testing.T) 
 					t.Error("unexpected method/credential")
 				}
 				if r.URL.Path == "/api/v1/fleet/hosts/42" {
-					_, _ = w.Write([]byte(`{"host":{"id":42,"uuid":"host-42"}}`))
+					_ = json.NewEncoder(w).Encode(map[string]any{"host": legacyRecoveryHost(scenario, "host-42", "windows")})
 					return
 				}
 				if r.URL.Path != "/api/v1/fleet/scripts/results/execution-42" {
@@ -118,6 +129,8 @@ func TestLegacyWindowsRecoveryUsesExactOriginalScriptAndExecution(t *testing.T) 
 					row.Script = script + "\n# Collection nonce: other\n"
 				case "wrong-host":
 					row.HostID = 43
+				case "same-second":
+					row.CreatedAt = "2026-10-08T12:00:00Z"
 				case "predates":
 					row.CreatedAt = "2026-10-08T11:59:59Z"
 				}
@@ -129,19 +142,48 @@ func TestLegacyWindowsRecoveryUsesExactOriginalScriptAndExecution(t *testing.T) 
 				t.Fatal(e)
 			}
 			digest, _ := json.Marshal(hex.EncodeToString(hash[:]))
-			binding := []json.RawMessage{json.RawMessage(`42`), json.RawMessage(`1791450000.123456789`), json.RawMessage(`null`), digest}
+			binding := []json.RawMessage{json.RawMessage(`42`), json.RawMessage(`1791450000.123456`), json.RawMessage(`"2026-10-08T09:00:00.123456789Z"`), digest}
 			host := migration.LegacyCertificateHost{Binding: binding, Platform: "windows"}
-			command := migration.LegacyCommand{UUID: "original-command", Transport: "windows_script", ExecutionID: "execution-42", CreatedAt: json.Number("1791460800"), Hosts: map[string][]json.RawMessage{"host-42": binding}}
+			command := migration.LegacyCommand{UUID: "original-command", Transport: "windows_script", ExecutionID: "execution-42", CreatedAt: json.Number("1791460800.75"), Hosts: map[string][]json.RawMessage{"host-42": binding}}
 			hint := ""
 			if scenario == "unknown-absent" || scenario == "hint-terminal" {
 				command.ExecutionID = ""
 				hint = "execution-42"
 			}
+			original, _ := json.Marshal(command)
 			proof, e := client.RecoverLegacyCommand(context.Background(), server.URL, "host-42", host, command, hint)
-			good := scenario == "terminal" || scenario == "hint-terminal"
+			after, _ := json.Marshal(command)
+			if string(after) != string(original) {
+				t.Fatal("original reservation mutated")
+			}
+			if scenario == "same-second" && !strings.Contains(string(proof.Response), "2026-10-08T12:00:00Z") {
+				t.Error("original result time not retained")
+			}
+			good := scenario == "terminal" || scenario == "same-second" || scenario == "hint-terminal"
 			if (e == nil) != good {
 				t.Fatalf("scenario %s proof=%+v error=%v", scenario, proof, e)
 			}
 		})
 	}
+}
+
+func legacyRecoveryHost(scenario, uuid, platform string) map[string]any {
+	h := map[string]any{"id": 42, "uuid": uuid, "platform": platform, "last_enrolled_at": "2026-10-08T09:00:00.123456789Z", "last_mdm_enrolled_at": "2026-10-08T09:00:00.123456789Z"}
+	field := "last_mdm_enrolled_at"
+	if platform == "windows" {
+		field = "last_enrolled_at"
+	}
+	switch scenario {
+	case "changed-enrollment":
+		h[field] = "2026-10-08T09:00:01Z"
+	case "missing-enrollment":
+		delete(h, field)
+	case "changed-fleet-enrollment":
+		h["last_enrolled_at"] = "2026-10-08T09:00:01Z"
+	case "missing-fleet-enrollment":
+		delete(h, "last_enrolled_at")
+	case "wrong-platform":
+		h["platform"] = "linux"
+	}
+	return h
 }

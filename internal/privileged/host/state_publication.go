@@ -188,3 +188,46 @@ func PublishCapturedState(p StatePublication, data []byte) error {
 	}
 	return syncWriterDirectory(dir)
 }
+
+// CompletedStatePublication recognizes only an exact, fully published original
+// before a caller opens another maintenance attempt. Incomplete evidence must
+// use the explicit original-attempt recovery path; it is never rewritten here.
+func CompletedStatePublication(p StatePublication, data []byte) (StatePublication, bool, error) {
+	if os.Geteuid() != 0 || p.Attempt != 0 {
+		return p, false, errors.New("root ordinary publication lookup required")
+	}
+	// Validate the fixed identity before reading its immutable original attempt.
+	p.Attempt = 1
+	dir, e := publicationDirectory(p)
+	if e != nil {
+		return p, false, e
+	}
+	raw, e := readPrivateCache(filepath.Join(dir, "publication-original.json"), 4096)
+	if errors.Is(e, os.ErrNotExist) {
+		for _, name := range []string{"publication-complete.json", "published-bundle.json"} {
+			if _, err := readPrivateCache(filepath.Join(dir, name), 96<<20); !errors.Is(err, os.ErrNotExist) {
+				return p, false, errors.New("publication artifacts lack original identity")
+			}
+		}
+		p.Attempt = 0
+		return p, false, nil
+	}
+	if e != nil {
+		return p, false, e
+	}
+	var original StatePublication
+	if domain.DecodeJSONStrict(raw, &original) != nil {
+		return p, false, errors.New("original publication identity unavailable")
+	}
+	p.Attempt = original.Attempt
+	if _, _, e = publicationOriginal(p); e != nil {
+		return p, false, e
+	}
+	if _, e = readPrivateCache(filepath.Join(dir, "publication-complete.json"), 4096); e != nil {
+		return p, false, errors.New("incomplete publication requires original-attempt recovery")
+	}
+	if e = validatePublicationFiles(p, data); e != nil {
+		return p, false, e
+	}
+	return original, true, nil
+}

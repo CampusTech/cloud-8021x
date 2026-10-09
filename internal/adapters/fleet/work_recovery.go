@@ -21,7 +21,7 @@ func (c *Client) RecoverCollectionWork(ctx context.Context, payload, receipt jso
 	var r reservation
 	var submitted collectionReceipt
 	var empty LegacyRecoveryEvidence
-	if c == nil || len(payload) > 1<<20 || domain.DecodeJSONStrict(payload, &r) != nil || r.HostID <= 0 || r.HostUUID == "" || r.UUID == "" || r.CreatedAt <= 0 || len(r.Trust) != 64 || len(r.Key) != 64 || (r.Transport != "apple" && r.Transport != "windows") || len(hints) > 100 {
+	if c == nil || len(payload) > 1<<20 || domain.DecodeJSONStrict(payload, &r) != nil || r.HostID <= 0 || r.HostUUID == "" || r.UUID == "" || len(r.UUID) > 253 || r.CreatedAt <= 0 || len(r.Trust) != 64 || len(r.Key) != 64 || (r.Transport != "apple" && r.Transport != "windows") || len(hints) > 100 {
 		return empty, errors.New("invalid original collection work")
 	}
 	if len(receipt) > 0 && string(receipt) != "null" && domain.DecodeJSONStrict(receipt, &submitted) != nil {
@@ -80,8 +80,13 @@ func (c *Client) RecoverCollectionWork(ctx context.Context, payload, receipt jso
 	if hex.EncodeToString(digest[:]) != r.Key || (r.LegacyScope != "" && r.LegacyScope != migration.LegacyCollectionScope(c.base, uint64(r.HostID), r.HostUUID)) {
 		return empty, errors.New("original collection provider binding differs")
 	}
+	lowerBound, e := migration.ReceiptTime([]byte(command.CreatedAt))
+	if e != nil {
+		return empty, e
+	}
+	evidence := LegacyRecoveryEvidence{CommandUUID: r.UUID, HostUUID: r.HostUUID, HostID: uint64(r.HostID)}
 	if command.Transport != "windows_script" || command.ExecutionID != "" {
-		return c.RecoverLegacyCommand(ctx, c.base, r.HostUUID, legacyHost, command, "")
+		return c.recoverBoundCommand(ctx, r.HostUUID, legacyHost, command, "", lowerBound, evidence)
 	}
 	seen := map[string]bool{}
 	var matched *LegacyRecoveryEvidence
@@ -90,7 +95,7 @@ func (c *Client) RecoverCollectionWork(ctx context.Context, payload, receipt jso
 			return empty, errors.New("invalid duplicate execution hint")
 		}
 		seen[hint] = true
-		proof, e := c.RecoverLegacyCommand(ctx, c.base, r.HostUUID, legacyHost, command, hint)
+		proof, e := c.recoverBoundCommand(ctx, r.HostUUID, legacyHost, command, hint, lowerBound, evidence)
 		if e != nil {
 			continue
 		}
