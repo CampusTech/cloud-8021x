@@ -45,9 +45,141 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+  components:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [native, dependencies, monitoring]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Select native architecture
+        run: echo "BUILD_ARCH=$(dpkg --print-architecture)" >> "$GITHUB_ENV"
+      - name: Build authenticated fixed artifacts in pinned Debian snapshot
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: mkdir component && scripts/build-debian.sh "$COMPONENT" "$BUILD_ARCH" component
+      - name: Preserve exact Debian filenames in safe artifact transport
+        run: python3 scripts/artifact-transport.py pack component transport/component.tar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: component-${{ matrix.component }}-${{ env.BUILD_ARCH }}
+          path: transport/
+          if-no-files-found: error
+          retention-days: 14
+  ca:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Build both CA architectures and run upstream compatibility tests
+        run: mkdir component && scripts/build-debian.sh step-ca amd64 component
+      - name: Preserve exact Debian filenames in safe artifact transport
+        run: python3 scripts/artifact-transport.py pack component transport/component.tar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: component-step-ca
+          path: transport/
+          if-no-files-found: error
+          retention-days: 14
+  bundle:
+    needs: [components, ca, build]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: component-*
+          path: transported-components
+      - name: Verify bounded transports and preserve exact package filenames
+        run: |
+          for component in transported-components/component-*; do
+            python3 scripts/artifact-transport.py unpack "$component/component.tar" "components/$(basename "$component")"
+          done
+          python3 -m venv .fixture-venv
+          .fixture-venv/bin/pip install PyYAML==6.0.3
+          .fixture-venv/bin/python -m unittest discover -s tests -p test_artifact_transport.py
+      - name: Verify complete input manifests and assemble finite closure
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: |
+          python3 -m unittest discover -s tests -p test_packaging_acquisition.py
+          mkdir bundle
+          python3 scripts/build-bundle.py "$BUILD_ARCH" bundle \
+            --native "components/component-native-$BUILD_ARCH" \
+            --monitoring "components/component-monitoring-$BUILD_ARCH" \
+            --dependencies "components/component-dependencies-$BUILD_ARCH" \
+            --step-ca components/component-step-ca
+      - name: Inventory and scan every retained executable in the actual archives
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          python3 tests/package_binary_inventory.py bundle binary-evidence --scanner "$(go env GOPATH)/bin/govulncheck"
+      - name: Actual clean-image install, failed-write/source packets and interrupted rollback
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: tests/native_package_acceptance.sh "$BUILD_ARCH" bundle
+      - name: Existing native bootstrap status, activation and maintainer rollback
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: scripts/test_bootstrap_native.sh "$BUILD_ARCH" bundle
+      - name: Existing native auth privacy, clock rollback and retention
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: scripts/test_auth_retention.sh "$BUILD_ARCH" bundle
+      - name: Actual unprivileged host checks and durable monitoring handoff
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: |
+          .fixture-venv/bin/python tests/ddot_queue.py --architecture "$BUILD_ARCH" \
+            --packages "components/component-monitoring-$BUILD_ARCH" --full-config --evidence queue-evidence
+          .fixture-venv/bin/python tests/ddot_queue.py --architecture "$BUILD_ARCH" \
+            --packages "components/component-monitoring-$BUILD_ARCH" --full-config --storage-full --evidence enospc-evidence
+      - name: Package verified release bytes and provenance deterministically
+        env:
+          BUILD_ARCH: ${{ matrix.architecture }}
+        run: |
+          mkdir release-bundle
+          tar --sort=name --mtime=@1791417600 --owner=0 --group=0 --numeric-owner -C bundle -cf - . | \
+            gzip -n -9 > "release-bundle/cloud-8021x-debian13-$BUILD_ARCH.tar.gz"
+          cp bundle/package-manifest.json "release-bundle/package-manifest-$BUILD_ARCH.json"
+          cd release-bundle
+          sha256sum -- * > "SHA256SUMS-$BUILD_ARCH"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: debian13-${{ matrix.architecture }}-bundle
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: package-runtime-evidence-${{ matrix.architecture }}
+          path: |
+            binary-evidence/
+            queue-evidence/
+            enospc-evidence/
+          retention-days: 14
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, bundle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,9 +188,14 @@ jobs:
         with:
           name: application-release
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: debian13-*-bundle
+          merge-multiple: true
+          path: dist
       - name: Verify downloaded release bytes
         working-directory: dist
-        run: sha256sum --check SHA256SUMS
+        run: sha256sum --check SHA256SUMS SHA256SUMS-amd64 SHA256SUMS-arm64
       - name: Publish explicitly tagged release with merged PRs and contributors
         env:
           GH_TOKEN: ${{ github.token }}

@@ -12,10 +12,6 @@ import (
 	"text/template"
 )
 
-// ImageARM64 and ImageAMD64 are registry content digests for Agent 7.82.0-full.
-const ImageARM64 = "datadog/agent@sha256:d8f8a5271388c6f8eca64afc6864f0dc4ccac4277ac08b9c53f511ad29ea4a86"
-const ImageAMD64 = "datadog/agent@sha256:821e779db4209716f7d717387cd4c56c6dfc6791aaf5a1b33576f31adb4c4314"
-
 //go:embed collector.yaml.tmpl
 var collector string
 

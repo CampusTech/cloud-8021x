@@ -87,3 +87,16 @@ func TestRetirementRefusesUnmanagedUtilityOwnership(t *testing.T) {
 		})
 	}
 }
+
+func TestNewSudoRequiresPreparedBaseForSafeRollback(t *testing.T) {
+	incoming := fixtureManifest()
+	dependency := Artifact{Name: "sudo", Version: "1.9.16p2-3+deb13u2", Architecture: incoming.Architecture, SHA256: strings.Repeat("d", 64)}
+	incoming.Artifacts = append(incoming.Artifacts, dependency)
+	if _, err := planPackages(incoming, Manifest{}, map[string]Artifact{}, nil); err == nil {
+		t.Fatal("new sudo accepted without proof its maintainer script can safely restore the original absence")
+	}
+	plan, err := planPackages(incoming, Manifest{}, map[string]Artifact{"sudo": dependency}, nil)
+	if err != nil || !samePackage(plan.Retained["sudo"], dependency) {
+		t.Fatalf("already prepared unchanged sudo should be retained: %#v %v", plan.Retained, err)
+	}
+}

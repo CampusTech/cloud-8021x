@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual pinned DDOT crash/overflow test; Docker required, no host ports/real keys."""
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -11,19 +12,31 @@ import uuid
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-IMAGE = 'datadog/agent@sha256:d8f8a5271388c6f8eca64afc6864f0dc4ccac4277ac08b9c53f511ad29ea4a86'
+IMAGE = 'golang@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d'
+VERSION = '1:7.84.2-1+campus1'
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--evidence', required=True)
+parser.add_argument('--packages', required=True, help='actual rebuilt package directory with mandatory SHA256SUMS')
+parser.add_argument('--architecture', choices=['amd64', 'arm64'], required=True)
 parser.add_argument('--storage-full', action='store_true')
 parser.add_argument('--full-config', action='store_true')
 args = parser.parse_args()
+packages = pathlib.Path(args.packages).resolve()
+checksums = dict(line.split(maxsplit=1)[::-1] for line in (packages / 'SHA256SUMS').read_text().splitlines())
+archives = []
+for package in ['datadog-agent', 'datadog-agent-ddot']:
+    filename = f'{package}_{VERSION}_{args.architecture}.deb'
+    path = packages / filename
+    assert path.is_file() and not path.is_symlink(), filename
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == checksums.get(filename), filename
+    archives.append('/packages/' + filename)
 evidence = pathlib.Path(args.evidence).resolve()
 evidence.mkdir(parents=True, exist_ok=True)
-name = 'cloud8021x-task7-ddot-' + uuid.uuid4().hex[:8]
+name = 'cloud8021x-task10-ddot-' + uuid.uuid4().hex[:8]
 with tempfile.TemporaryDirectory(prefix='cloud8021x-ddot-task7-') as tmp:
     tmp = pathlib.Path(tmp)
     template = (ROOT / 'internal/templates/ddot/collector.yaml.tmpl').read_text()
@@ -45,21 +58,29 @@ with tempfile.TemporaryDirectory(prefix='cloud8021x-ddot-task7-') as tmp:
                 pipeline['exporters'] = ['debug/ordinary']
     (tmp / 'collector.yaml').write_text(yaml.safe_dump(config))
     (tmp / 'core.yaml').write_text('hostname: task7-export-worker\nsite: us5.datadoghq.com\napi_key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nlogs_enabled: true\notelcollector:\n  enabled: true\n  converter:\n    features: [ddflare]\n')
+    with (tmp / 'core.yaml').open('a') as core:
+        core.write('auth_token_file_path: /opt/datadog-agent/run/auth_token\nipc_cert_file_path: /opt/datadog-agent/run/ipc_cert.pem\ndisable_file_logging: true\nlog_to_console: true\ncloud_provider_metadata: []\nremote_configuration:\n  enabled: false\napm_config:\n  enabled: false\nuse_dogstatsd: false\n')
     run('go', 'test', './internal/adapters/otlp', '-run', '^TestDDOTWire$', cwd=ROOT,
         env={**os.environ, 'C8021X_DDOT_EVIDENCE': str(tmp), 'C8021X_DDOT_GENERATE': '1'})
     shutil.copy(ROOT / 'tests/ddot_probe.py', tmp / 'probe.py')
     try:
         run('docker', 'run', '-d', '--name', name, '--network', 'none', '--memory', '768m',
-            '--label', 'cloud8021x.task=7', '--label', 'cloud8021x.disposable=true',
+            '--platform', 'linux/' + args.architecture, '-v', str(packages) + ':/packages:ro',
+            '--label', 'cloud8021x.task=10', '--label', 'cloud8021x.disposable=true',
             *(['--tmpfs', '/task7/queue:rw,size=64k'] if args.storage_full else []),
             '--entrypoint', '/bin/sleep', IMAGE, 'infinity')
         inspect = subprocess.check_output(['docker', 'inspect', name], text=True)
         info = json.loads(inspect)[0]
         assert info['HostConfig']['NetworkMode'] == 'none' and not info['HostConfig']['PortBindings']
         (evidence / 'container.json').write_text(inspect)
-        run('docker', 'exec', name, 'mkdir', '-p', '/task7/queue')
+        run('docker', 'exec', name, 'dpkg', '--install', *archives)
+        run('docker', 'exec', name, 'useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', 'dd-agent')
+        run('docker', 'exec', name, 'mkdir', '-p', '/task7/queue', '/task7/evidence', '/opt/datadog-agent/run')
         run('docker', 'cp', str(tmp) + '/.', name + ':/task7/')
-        result = run('docker', 'exec', name, '/opt/datadog-agent/embedded/bin/python',
+        run('docker', 'exec', name, 'chown', '-R', 'dd-agent:dd-agent', '/task7/evidence', '/task7/queue', '/opt/datadog-agent/run')
+        run('docker', 'exec', name, 'chmod', '0700', '/opt/datadog-agent/run')
+        run('docker', 'exec', name, 'chmod', '0644', '/task7/input.json')
+        result = run('docker', 'exec', '--user', 'dd-agent', name, '/opt/datadog-agent/embedded/bin/python',
                      '/task7/probe.py', *(['--storage-full'] if args.storage_full else []), capture_output=True)
         print(result.stdout)
         run('docker', 'cp', name + ':/task7/evidence/.', str(evidence))

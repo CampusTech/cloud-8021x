@@ -78,7 +78,11 @@ func TestInstalledPackageRollbackAndMaintainerSuppression(t *testing.T) {
 	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
 		if !radiusPackage(name) {
-			incoming.Artifacts = append(incoming.Artifacts, build(name, "1.0.0-1", ArtifactDirectory))
+			version := MonitoringVersion
+			if name == "step-ca" {
+				version = StepCAVersion
+			}
+			incoming.Artifacts = append(incoming.Artifacts, build(name, version, ArtifactDirectory))
 			continue
 		}
 		arch := runtime.GOARCH
@@ -335,7 +339,10 @@ func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
 	}
 	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
-		version := "1.0.0-1"
+		version := MonitoringVersion
+		if name == "step-ca" {
+			version = StepCAVersion
+		}
 		if radiusPackage(name) {
 			version = RadiusVersion
 		}

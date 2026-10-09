@@ -9,7 +9,10 @@ import (
 func fixtureManifest() Manifest {
 	m := Manifest{Schema: 1, Architecture: "arm64", CollectorSHA256: strings.Repeat("c", 64), PostgresCASHA256: strings.Repeat("d", 64)}
 	for _, name := range requiredArtifacts {
-		version := "1.0.0-1"
+		version := MonitoringVersion
+		if name == "step-ca" {
+			version = StepCAVersion
+		}
 		if radiusPackage(name) {
 			version = RadiusVersion
 		}
@@ -69,5 +72,24 @@ func TestManifestCannotPublishWithoutPinnedDatabaseTrust(t *testing.T) {
 	}
 	if err = m.Validate("arm64"); err == nil {
 		t.Fatal("new publication accepts an unbound PostgreSQL trust artifact")
+	}
+}
+
+func TestForwardManifestRejectsUnreviewedSecurityBuilds(t *testing.T) {
+	for _, product := range []string{"step-ca", "monitoring"} {
+		t.Run(product, func(t *testing.T) {
+			m := fixtureManifest()
+			for i := range m.Artifacts {
+				if product == "step-ca" && m.Artifacts[i].Name == "step-ca" {
+					m.Artifacts[i].Version = "0.30.2-1"
+				}
+				if product == "monitoring" && strings.HasPrefix(m.Artifacts[i].Name, "datadog-agent") {
+					m.Artifacts[i].Version = "1:7.84.2-1"
+				}
+			}
+			if err := m.Validate("arm64"); err == nil {
+				t.Fatal("new publication accepted an official package whose actual Go binary failed the security gate")
+			}
+		})
 	}
 }

@@ -21,7 +21,7 @@ import (
 
 func TestInstalledNativeStatusAndPolicyActivation(t *testing.T) {
 	if os.Getenv("C8021X_NATIVE_FIXTURE") != "task8" {
-		t.Skip("owned campus3 native fixture required")
+		t.Skip("owned current verified Trixie native fixture required")
 	}
 	ctx := context.Background()
 	run := func(path string, args ...string) {

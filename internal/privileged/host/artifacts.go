@@ -29,7 +29,9 @@ const maxArchiveBytes int64 = 1 << 30
 
 // Preserve the previous twelve-archive aggregate ceiling while allowing a bounded closure.
 const maxArtifactBytes int64 = 12 << 30
-const RadiusVersion = "3.2.10+dfsg-2~bookworm+campus3"
+const RadiusVersion = "3.2.10+dfsg-2+trixie.campus4"
+const StepCAVersion = "0.30.2-1+campus1"
+const MonitoringVersion = "1:7.84.2-1+campus1"
 
 var requiredArtifacts = []string{"freeradius", "freeradius-common", "freeradius-config", "freeradius-utils", "freeradius-rest", "freeradius-postgresql", "libfreeradius3", "step-ca", "datadog-agent", "datadog-agent-ddot"}
 
@@ -71,7 +73,10 @@ func (m Manifest) Validate(arch string) error {
 			return errors.New("unapproved artifact identity, checksum or architecture")
 		}
 		if radiusPackage(a.Name) && a.Version != RadiusVersion {
-			return errors.New("coherent reviewed campus3 FreeRADIUS family required")
+			return errors.New("coherent reviewed Debian13 campus4 FreeRADIUS family required")
+		}
+		if a.Name == "step-ca" && a.Version != StepCAVersion || (a.Name == "datadog-agent" || a.Name == "datadog-agent-ddot") && a.Version != MonitoringVersion {
+			return errors.New("reviewed security rebuild package revision required")
 		}
 		seen[a.Name] = true
 	}

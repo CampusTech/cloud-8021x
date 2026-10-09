@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +49,16 @@ func (s *nativeAuthCursorFixture) AuthCursors(_ context.Context, sources []strin
 func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 	if os.Getenv("C8021X_AUTH_FIXTURE") != "task9" {
 		t.Skip("owned actual native auth fixture required")
+	}
+	faketimeLibrary := map[string]string{
+		"arm64": "/usr/lib/aarch64-linux-gnu/faketime/libfaketime.so.1",
+		"amd64": "/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1",
+	}[runtime.GOARCH]
+	if faketimeLibrary == "" {
+		t.Fatal("unsupported native fixture architecture")
+	}
+	if _, err := os.Stat(faketimeLibrary); err != nil {
+		t.Fatal("pinned architecture-specific faketime fixture unavailable", err)
 	}
 	ctx := context.Background()
 	run := func(path string, args ...string) {
@@ -150,10 +161,10 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		process = exec.Command("/usr/sbin/freeradius", "-f")
+		process = exec.Command("/usr/sbin/freeradius", "-d", radiusDirectory, "-f")
 		process.Stdout = log
 		process.Stderr = log
-		process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LD_PRELOAD=/usr/lib/aarch64-linux-gnu/faketime/libfaketime.so.1", "FAKETIME_TIMESTAMP_FILE=" + clockFile, "FAKETIME_NO_CACHE=1", "FAKETIME_DONT_FAKE_MONOTONIC=1"}
+		process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LD_PRELOAD=" + faketimeLibrary, "FAKETIME_TIMESTAMP_FILE=" + clockFile, "FAKETIME_NO_CACHE=1", "FAKETIME_DONT_FAKE_MONOTONIC=1"}
 		if e = process.Start(); e != nil {
 			t.Fatal(e)
 		}
@@ -161,7 +172,8 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		packet()
 		if e = CompleteAuthGeneration(ctx, backend, transaction.Reference(), generation, prior); e != nil {
-			t.Fatal(e)
+			args, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", process.Process.Pid))
+			t.Fatalf("actual native producer argv=%q read=%v: %v", args, readErr, e)
 		}
 		observed, e := CaptureAuthGeneration(ctx, backend)
 		if e != nil {

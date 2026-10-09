@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
+assert os.geteuid() != 0, 'package lifecycle must work as dd-agent'
 ROOT = pathlib.Path('/task7')
 EVIDENCE = ROOT / 'evidence'
 EVIDENCE.mkdir(exist_ok=True)
@@ -75,22 +76,30 @@ def start():
                                 '--core-config', '/task7/core.yaml', '--config',
                                 '/task7/collector.yaml', '--sync-delay', '1s'],
                                stdout=log, stderr=subprocess.STDOUT,
-                               env={**os.environ, 'DD_API_KEY': 'a' * 32})
+                               env={**os.environ, 'DD_API_KEY': 'a' * 32, 'DD_APM_ENABLED': 'true'})
     wait(lambda: ready() if process.poll() is None else False)
     return process
 
+core_log = open(EVIDENCE / 'core.log', 'ab', buffering=0)
+core = subprocess.Popen(['/opt/datadog-agent/bin/agent/agent', 'run', '-c', '/task7/core.yaml'], stdout=core_log, stderr=subprocess.STDOUT)
+wait(lambda: (pathlib.Path('/opt/datadog-agent/run/auth_token')).exists() and core.poll() is None)
+for check in ['cpu', 'disk', 'io', 'load', 'memory', 'network', 'uptime']:
+    checked = subprocess.run(['/opt/datadog-agent/bin/agent/agent', 'check', check, '--check-rate', '--json', '-c', '/task7/core.yaml'], capture_output=True, text=True, check=True)
+    payload = json.loads(checked.stdout)
+    (EVIDENCE / ('host-check-' + check + '.json')).write_text(checked.stdout)
+    assert payload and payload[0].get('aggregator', {}).get('metrics'), (check, payload)
 process = start()
 try:
     headers = {}
-    token = ROOT / 'auth_token'
+    token = pathlib.Path('/opt/datadog-agent/run/auth_token')
     if token.exists():
         headers['Authorization'] = 'Bearer ' + token.read_text().strip()
     request = urllib.request.Request('https://127.0.0.1:7777/', headers=headers)
     with urllib.request.urlopen(request, context=ssl._create_unverified_context()) as response:
         effective = json.load(response)
     (EVIDENCE / 'effective.json').write_text(json.dumps(effective, indent=2))
-    assert effective['version'] == '7.82.0'
-    assert effective['extension_version'] == 'v0.155.0'
+    assert effective['version'] == '7.84.2+campus1', effective['version']
+    assert effective['extension_version'] == 'v0.159.0', effective['extension_version']
     # The host-side harness parses this YAML and checks the effective pipeline.
     initial = (ROOT / 'input.json').read_bytes()
     if '--storage-full' in sys.argv:
@@ -150,3 +159,5 @@ finally:
         process.kill()
         process.wait(timeout=5)
     server.shutdown()
+    core.kill()
+    core.wait(timeout=5)

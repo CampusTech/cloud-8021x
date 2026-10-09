@@ -62,6 +62,11 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact, compare
 	for _, a := range incoming.Artifacts {
 		old, present := current[a.Name]
 		if !present {
+			// Debian sudo refuses removal on a locked-root base. Installing it
+			// here cannot guarantee rollback to its original absence.
+			if a.Name == "sudo" {
+				return plan, errors.New("sudo must already be supplied by the prepared OS base")
+			}
 			plan.Absent = append(plan.Absent, a.Name)
 			plan.Changed = true
 			continue

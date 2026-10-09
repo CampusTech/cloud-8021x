@@ -2,6 +2,8 @@
 # CI/development only: authenticated source -> fixed binaries -> inert packages.
 # No package install, CA initialization, service action, or publication.
 set -euo pipefail
+# Package modes must not depend on the invoking shell or builder account.
+umask 022
 [[ "$(id -u)" != 0 ]] || { echo "CA upstream permission tests require an unprivileged build user" >&2; exit 2; }
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 output=${1:?usage: build-step-ca.sh EMPTY_OUTPUT_DIRECTORY}

@@ -1,5 +1,74 @@
 # Native FreeRADIUS package contract
 
+## Debian13 shipping family
+
+The current family is **3.2.10+dfsg-2+trixie.campus4** on amd64 and arm64,
+from the authenticated Debian3.2.10+dfsg-2 source pinned in `source.sha256`.
+`scripts/build-debian.sh native ARCH EMPTY_OUTPUT_DIRECTORY` uses pinned Debian13
+image/immutable20261008T000000Z Debian and Debian-security metadata, verified
+signatures and exact Release hashes. Its native recipe builds at an invariant
+source path and fixed changelog timestamp: upstream embeds compiler diagnostic
+flags, so a random temporary build path would change two output archives.
+
+Only `detail-close-error.patch` and `source-fresh.patch` are applied. The Bookworm
+packaging rebase below is historical and is not applied to the shipping family.
+Actual stock Trixie3.2.10 still emits Accounting-Response after `/dev/full` failure;
+its version number is insufficient to remove the close-error patch. The tested
+source freshness check preserves the original packet receipt deadline, including
+a request delayed across expiry, and is retained until a replacement has the same
+packet/security/rollback proof.
+
+`scripts/build-debian.sh dependencies ARCH EMPTY_OUTPUT_DIRECTORY` acquires only
+the explicit static `trixie-dependencies.txt` allowlist from the same authenticated
+snapshot. This is development/CI acquisition, never on-node apt resolution.
+`scripts/build-bundle.py` verifies complete mandatory input hashes and exact
+package identities; the protected Go installer verifies dependency compatibility,
+keeps already satisfied dependencies unchanged, requires exact cold archives for
+changed installed packages, and rejects unreviewed base/helper replacement.
+The supported image must already supply compatible libc, libssl, systemd,
+perl-base and other OS base packages; application publication cannot upgrade them.
+The base must also already provide compatible sudo. Debian refuses to remove a
+new sudo package on a locked-root system, so protected preflight rejects its
+original absence before mutation; it never bypasses that removal safeguard.
+The reviewed closure contains52 dependency archives plus10 product archives.
+
+`tests/native_package_acceptance.sh ARCH VERIFIED_BUNDLE_DIRECTORY` uses a clean
+networkless Debian13 fixture and the actual protected package planner/installer,
+then exercises loaded ABI, successful accounting, failed-close noACK and original
+source-receipt semantics. A helper exits after installation; recovery uses the
+persisted package plan to restore the exact prior inventory. The separate
+systemd/two-node/whole-policy acceptance gates still apply. Packages are produced
+locally/CI, with mandatory hash manifests and provenance; this task publishes none.
+
+The existing bootstrap harness also requires the current complete bundle:
+`scripts/test_bootstrap_native.sh ARCH VERIFIED_BUNDLE_DIRECTORY`. It keeps the
+actual native status/private health, policy activation ordering and maintainer
+suppression/exact rollback assertions. It creates its own labelled networkless
+fixture; no historical container supplies binaries. Missing or tampered bundle
+inputs fail before Docker is accessed. The development base supplies pinned
+iproute2 solely for its isolated loopback-address tests.
+
+For the broader prepared native packet fixture, set `C8021X_NATIVE_BUNDLE` to
+that verified bundle before running `tests/radius_integration.py --native`.
+The explicitly selected container must be Debian13, carry `cloud8021x.test=task10` (or `task11`),
+`cloud8021x.disposable=true` and `cloud8021x.bundle.sha256` equal to the package
+manifest hash, have no published host ports, and contain the exact matching
+native family. The runner never provisions or borrows a historical container.
+Its full PostgreSQL/EAP preparation and acceptance remain separate.
+
+`scripts/test_auth_retention.sh ARCH VERIFIED_BUNDLE_DIRECTORY` uses the same
+verified inputs for real cached-descriptor, stopped-producer, privacy, generation
+retention and clock-rollback assertions. Its development-only pinned libfaketime
+selects the target architecture; process identity still requires the exact
+protected service command. Architecture emulation that changes `/proc` arguments
+cannot substitute for the native-architecture CI process-identity gate.
+
+## Historical Task6 Bookworm evidence
+
+The remainder records the original independently reviewed Task6 source and ABI
+proofs. Its campus3 archives, build environment and temporary task boundaries are
+historical/cold rollback evidence, not current shipping requirements.
+
 The selected security-fixed source is Debian `3.2.10+dfsg-2`, rebuilt as the
 complete `3.2.10+dfsg-2~bookworm+campus3` family against Bookworm libraries.
 The earlier 3.2.1 probe is a failure baseline, **not a deployment artifact**.

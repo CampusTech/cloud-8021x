@@ -1,27 +1,35 @@
 #!/usr/bin/env bash
-# Actual native auth FD, clock rollback, distinct producer and retention proof.
-# Uses previously proven campus3 fixture packages; Debian13 shipping proof is Task10.
+# Actual native auth FD/clock/privacy/retention proof using current verified Trixie inputs.
 set -euo pipefail
-fixture=$(mktemp -d /private/tmp/cloud8021x-task9-auth.XXXXXX)
-container="cloud8021x-task9-auth-$(openssl rand -hex 5)"
-cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf "$fixture"; }
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+arch=${1:?usage: test_auth_retention.sh amd64_or_arm64 VERIFIED_BUNDLE_DIRECTORY}
+bundle=${2:?mandatory verified bundle directory required}
+[[ "$arch" == amd64 || "$arch" == arm64 ]] || exit 2
+bundle=$(cd -- "$bundle" && pwd)
+fixture=$(mktemp -d)
+container="cloud8021x-task10-auth-$(openssl rand -hex 5)"
+started=false
+cleanup() {
+  if [[ "$started" == true ]]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi
+  rm -rf "$fixture"
+}
 trap cleanup EXIT
-arch=$(docker version --format '{{.Server.Arch}}')
-if [[ "$arch" != arm64 ]]; then echo 'Reviewed local campus3 fixture artifacts currently require arm64' >&2; exit 1; fi
-mkdir "$fixture/artifacts"
-for package in freeradius freeradius-common freeradius-config freeradius-utils freeradius-rest freeradius-postgresql libfreeradius3; do
-  deb_arch=arm64
-  if [[ "$package" == freeradius-common ]]; then deb_arch=all; fi
-  name="${package}_3.2.10+dfsg-2~bookworm+campus3_${deb_arch}.deb"
-  docker cp "cloud8021x-daemon-fr-c7d492:/task6-secure-build/$name" "$fixture/artifacts/$name" >/dev/null
-  expected=$(awk -v n="$name" '$2==n{print $1}' patches/freeradius/campus3-arm64-artifacts.sha256)
-  actual=$(shasum -a 256 "$fixture/artifacts/$name" | awk '{print $1}')
-  [[ -n "$expected" && "$actual" == "$expected" ]]
-done
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o "$fixture/host.test" ./internal/privileged/host
+# Mandatory complete manifest and archive hashes before any Docker operation.
+python3 "$root/tests/native_package_inputs.py" "$bundle" "$arch" > "$fixture/archives.txt"
+manifest_hash=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$bundle/package-manifest.json")
+cd "$root"
+GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go test -c -o "$fixture/host.test" ./internal/privileged/host
 cp examples/cloud-8021x.yaml "$fixture/config.yaml"
-docker run -d --name "$container" --label cloud8021x.test=task9 --label cloud8021x.disposable=true --cap-add NET_ADMIN --cap-add SYS_PTRACE -v "$fixture:/fixture:ro" debian@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 sleep infinity >/dev/null
-# Acquisition/dependency resolution is a development fixture only. Product
-# installation accepts only its preverified fixed local manifest, without apt.
-docker exec "$container" sh -c 'printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d; chmod 755 /usr/sbin/policy-rc.d; apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /fixture/artifacts/*.deb sudo passwd iproute2 ca-certificates libfaketime' >/dev/null
-docker exec -e C8021X_AUTH_FIXTURE=task9 "$container" /fixture/host.test -test.run '^TestInstalledAuthGenerationRetentionAndClockRollback$' -test.v
+mkdir "$fixture/artifacts"
+docker build --platform "linux/$arch" --iidfile "$fixture/image" -f tests/native_package_fixture.Dockerfile "$fixture"
+docker create --name "$container" --platform "linux/$arch" --network none \
+  --label cloud8021x.test=task10 --label cloud8021x.task=10 --label cloud8021x.disposable=true \
+  --label "cloud8021x.bundle.sha256=$manifest_hash" --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+  -v "$fixture:/fixture:ro" -v "$bundle:/bundle:ro" -v "$bundle:/fixture/artifacts:ro" \
+  "$(cat "$fixture/image")" sleep infinity >/dev/null
+started=true
+docker start "$container" >/dev/null
+# Exact preverified local archives only; no apt/network resolver in this fixture.
+docker exec "$container" sh -c 'set -eu; set --; while IFS= read -r archive; do set -- "$@" "$archive"; done < /fixture/archives.txt; dpkg --install "$@"' > "$fixture/install.log" 2>&1 || { cat "$fixture/install.log" >&2; exit 1; }
+docker exec -e C8021X_AUTH_FIXTURE=task9 "$container" /fixture/host.test \
+  -test.run '^TestInstalledAuthGenerationRetentionAndClockRollback$' -test.v
