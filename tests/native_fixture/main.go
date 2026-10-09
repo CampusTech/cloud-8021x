@@ -19,6 +19,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/jobs"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
 	"github.com/CampusTech/cloud-8021x/internal/telemetry"
+	"github.com/CampusTech/cloud-8021x/internal/templates/systemd"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -30,6 +31,13 @@ func main() {
 			return e
 		}
 		switch args[0] {
+		case "sudoers-render":
+			files, err := systemd.Render()
+			if err != nil {
+				return err
+			}
+			_, err = os.Stdout.Write(files["/etc/sudoers.d/cloud-8021x"])
+			return err
 		case "project":
 			var event accounting.Event
 			if err := json.NewDecoder(os.Stdin).Decode(&event); err != nil {

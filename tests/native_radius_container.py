@@ -212,8 +212,8 @@ def prepare():
         'paths': {'auth_log_dir': str(AUTH), 'accounting_spool_dir': str(SPOOL)}}
     config['database'].update(native_writer_dsn={'file': str(ROOT/'secrets/native-dsn')}, ca_file=str(CERT/'ca.pem'), connect_timeout='1s', query_timeout='1s')
     write(CFG, json.dumps(config), 0o644)
-    write('/etc/sudoers.d/task6-leaf', 'freerad ALL=(root) NOPASSWD: /usr/local/bin/cloud-8021x --config /etc/cloud-8021x/config.yaml radius verify-leaf /run/radius-verified-leaves/* *\n', 0o440)
-    run('visudo', '-cf', '/etc/sudoers.d/task6-leaf')
+    write('/etc/sudoers.d/cloud-8021x', run('/task6-native-fixture', 'sudoers-render', str(CFG)).stdout, 0o440)
+    run('visudo', '-cf', '/etc/sudoers.d/cloud-8021x')
     for sub,owner in [('app','cloud8021x'),('secrets','root')]:
         (ROOT/sub).chmod(0o700)
         shutil.chown(ROOT/sub,user=owner)

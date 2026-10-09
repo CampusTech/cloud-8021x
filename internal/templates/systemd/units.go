@@ -241,6 +241,12 @@ d /run/freeradius 0755 freerad freerad -
 d /var/log/freeradius/auth 2750 freerad cloud8021x-events -
 d /var/log/freeradius/radacct 2750 freerad cloud8021x-spool-metadata -
 `)
-	files["/etc/sudoers.d/cloud-8021x"] = []byte("freerad ALL=(root) NOPASSWD: /usr/local/bin/cloud-8021x ^--config /etc/cloud-8021x/config\\.yaml radius verify-leaf /run/radius-verified-leaves/[A-Za-z0-9_.-]+ [0-9a-f]{64}$\n")
+	// Debian13 creates an expired native account. Keep that login restriction,
+	// while exempting only the already-authorized completed-leaf handoff from
+	// sudo's PAM account check; all other commands retain the global policy.
+	files["/etc/sudoers.d/cloud-8021x"] = []byte(`Cmnd_Alias C8021X_VERIFY_LEAF = /usr/local/bin/cloud-8021x ^--config /etc/cloud-8021x/config\.yaml radius verify-leaf /run/radius-verified-leaves/[A-Za-z0-9_.-]+ [0-9a-f]{64}$
+Defaults!C8021X_VERIFY_LEAF !pam_acct_mgmt
+freerad ALL=(root) NOPASSWD: C8021X_VERIFY_LEAF
+`)
 	return files, nil
 }
