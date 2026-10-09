@@ -118,6 +118,11 @@ func generateSeed(s seedSpec) (map[string][]byte, error) {
 	}
 	now := s.ObservedAt.UTC()
 	files := map[string][]byte{}
+	specBytes, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	files["spec.json"] = specBytes
 	ec, err := syntheticCA(stepca.EC, now)
 	if err != nil {
 		return nil, err

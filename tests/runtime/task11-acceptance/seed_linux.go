@@ -28,6 +28,11 @@ func seedGuest() error {
 	if err != nil {
 		return err
 	}
+	original, err := originalManifestBytes(files)
+	if err != nil {
+		return err
+	}
+	files["original-manifest.json"] = original
 	root := control + "/original-seed"
 	// Exclusive directory: reruns cannot renew/reseed preserved original identity.
 	if err = os.Mkdir(root, 0700); err != nil {

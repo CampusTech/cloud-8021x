@@ -27,6 +27,7 @@ import (
 type nodeEnrollment struct{ MachineID, Hostname, Pin, ConfigSHA256 string }
 type enrollment struct {
 	Cloud                               cloudPins
+	Passive                             passivePins
 	Schema                              int
 	ApplicationSHA256, ControllerSHA256 string
 	Nodes                               map[string]nodeEnrollment
@@ -303,6 +304,25 @@ func nodeCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 		return err
 	}
 	switch args[0] {
+	case "passive-install", "passive-observe":
+		if len(args) != 1 {
+			return errors.New("fixed passive action accepts private typed input only")
+		}
+		raw, err := boundedInput(in, 16<<10)
+		if err != nil {
+			return err
+		}
+		defer clear(raw)
+		if args[0] == "passive-install" {
+			return installPassiveNode(raw, out)
+		}
+		return nodePassiveObserver(ctx, raw, out)
+	case "inventory-publication":
+		if len(args) != 1 {
+			return errors.New("fixed publication observation takes no arguments")
+		}
+		return observePublication(out)
+
 	case "active-proof":
 		if len(args) != 1 {
 			return errors.New("fixed active proof arguments required")

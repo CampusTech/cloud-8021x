@@ -49,6 +49,14 @@ field names (digest/ID values below are descriptions, not executable inputs):
     "InstalledSeedSHA256": "exact original-seed/api/seed.json bytes SHA256",
     "OriginalStateSHA256": "exact retained original certificate-state.json SHA256"
   },
+  "Passive": {
+    "ObserverSHA256": "reviewed installed observer executable SHA256",
+    "ObserverSourceSHA256": "reviewed observer source receipt SHA256",
+    "CloudSourceSHA256": "reviewed cloud source receipt SHA256",
+    "ApplicationSourceSHA": "clean shipping app 40-character Git revision",
+    "OriginalSeedSHA256": "exact original-seed/original-manifest.json SHA256",
+    "Manifests": {}
+  },
   "Nodes": {
     "blue-primary": {"MachineID":"32 lowercase hex", "Hostname":"task11-blue-primary", "Pin":"", "ConfigSHA256":"staged raw YAML SHA256"},
     "blue-secondary": {"MachineID":"different 32 lowercase hex", "Hostname":"task11-blue-secondary", "Pin":"", "ConfigSHA256":"staged raw YAML SHA256"},
@@ -105,10 +113,15 @@ One explicit requested stage at a time:
 2. `task11-acceptance prepare`: require actual source FreeRADIUS/EC/RSA units
    active; actual capture, corresponding private transfer, actual green prepare,
    repeated for the second role. Independent passive/reboot audits follow.
-3. `task11-acceptance cutover`: currently blocked pending the actual cloud
-   primitive verifier. Planned steps refresh both source captures/prepares,
-   then installed activate primary, secondary, primary.
-4. `task11-acceptance deactivate`: installed deactivate on both greens.
+3. `task11-acceptance cutover`: require actual pinned primitive cloud verifier,
+   independent prepared observer/reboot/API window, then refresh both source
+   captures/prepares and recheck both passive nodes before the first activation.
+   Actual activate primary must wait for its peer. Grant both green API
+   permissions immediately before secondary/primary activation; business intake
+   remains unavailable until actual SQL and PID1 workers-active proof passes.
+4. `task11-acceptance deactivate`: installed deactivate on both greens, revoke
+   both green API permissions, freeze independently validated inventory phase
+   manifests, and run actual deactivated observer/reboot/API window.
 5. `task11-acceptance proofs`: installed rollback-proof on both greens, then
    transfer both signed proofs to both original nodes. Pending/uncertain work
    must be reconciled with actual supported commands first; this tool does not
@@ -294,7 +307,74 @@ After deactivation and recovery, `verify-cloud` projects both actual SQL snapsho
 requires matching records/outbox identities, writes fixed root0600 expected.json,
 computes its independent SHA before calling the pinned verifier, and requires its
 strict complete result. The expected file never comes from intake. Original-state,
-seed and helper pins must be reviewed actual bytes; the current cloud owner has
-not yet supplied a final built helper pin. Fixed /proc/self/fd execution retains
+seed and helper pins must be reviewed actual bytes. A development cloud helper
+build receipt is available separately; it is not installed enrollment or a seed
+pin. Fixed /proc/self/fd execution retains
 the checked verifier inode through launch. Every control subprocess remains in
 the owned operation cgroup, whose actual cross-PIDnamespace acceptance is pending.
+
+
+## Independent installed passive observation (R135 source preparation)
+
+The pending refusal is replaced with executable, fail-closed integration. None
+of the installed operations below has been launched by this source-preparation
+slice. The reviewed helper contracts and compiled controller do not constitute
+reboot, SQL, namespace, cloud traffic, or installed acceptance evidence.
+
+`seed` emits a root0600 original-manifest.json over a closed set of20 actual
+original input files, including private spec.json and API seed. Review its exact
+bytes independently before setting Passive.OriginalSeedSHA256. Source secrets
+remain private guest files. Each observation revalidates these original files,
+original certificate-state and API seed pins. ObserverSourceSHA256 and
+CloudSourceSHA256 bind the reviewed source receipts in enrollment; executable
+SHA pins enforce the corresponding installed bytes. Assembly must independently
+review that mapping; no receipt hash is an execution-success assertion.
+
+Before each actual prepare, the controller verifies the actual signed source
+capture against its public pin and expected deployment/config/release/epoch.
+It derives the expected24 slots through shipping CA validation, rendering and
+server adoption. In particular, installed client trust contains intermediates
+and roots; installed native/cache chains include the intermediate. Raw original
+roots/cache bytes cannot replace these transformations. The actual completed
+KnownInstallation and ParallelInstalledReceipt are required before the root0600
+fixed `/etc/cloud8021x-task11-passive-seed.json` can be installed. Its digest is
+retained separately under enrollment.Passive.Manifests for each node and phase.
+
+The fixed observer runs only as `/usr/local/libexec/task11-passive-audit observe`
+through a retained, hashed root-owned executable FD inside the existing pinned
+namespace/cgroup operation. Each request binds the clean shipping source,
+application/config/helper/seed hashes and freshly inspected boot/namespaces.
+The strict response must match that request, independent preserved slots, actual
+prepared SQL identities/fences, completed generation state and passive units.
+Only public metadata/digests enter evidence; private source material is cleared.
+
+The controller retains each actual API baseline before preparation or the
+reboot window, then calls final with its exact peer, seed, cursor and prefix
+hash. Zero reads is valid; any mutation attempt or policy change refuses. These
+API windows are separate from product observations. Deactivation starts a new
+window only after both genuine product deactivations and explicit API permission
+revocations; previously active traffic is not relabeled passive. Proof/resume
+stages recheck the deactivated pair and retain their own API windows.
+
+Reboot calls fixed machinectl for only the enrolled node. A pidfd must prove
+old Leader termination; refreshed registration must preserve enrolled root,
+machine ID and hostname with a changed BootID. The observer then runs again in
+fresh namespaces. Content/ownership/modes, SQL/work/guard/fences and persistent
+collector UUID/backing inode/size/capacity must match. Volatile file inode/device
+and namespace IDs are not mistaken for stable reboot identity. Timeout or
+uncertainty refuses onward progress and retains actual prior side effects.
+Actual nspawn restart behavior, operation cgroup cleanup across PID namespaces,
+unchanged unrelated sentinels and the complete reboot comparison remain required
+guest gates; no unit fixture substitutes for those observations.
+
+Deactivated inventory is the only mutable preserved slot. After actual completed
+installation/receipt validation, the real atomic published snapshot is decoded
+and compared with the original certificate provenance and exact independently
+seeded two-host projection. The original Apple fingerprint/group/enrollment/
+observed timestamp authority must remain identical. Only the approved Windows
+identity may be added, with no new certificates or serial authority, exact group
+and enrollment. Neutral display equivalence permits updated_at variation;
+changed display or authority refuses. Only then is the actual publication hash
+frozen before reboot. All other23 slots, original manifest and certificate-state
+pins stay unchanged. No SQL inventory-generation table or intake-derived
+historical expectation is invented.

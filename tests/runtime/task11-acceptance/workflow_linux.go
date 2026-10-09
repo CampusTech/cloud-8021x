@@ -14,6 +14,7 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/adoption"
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
+	audit "github.com/CampusTech/cloud-8021x/tests/runtime/task11-passive-audit/contract"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
@@ -274,14 +275,29 @@ func executeStage(ctx context.Context, stage string, logger *logrus.Logger) erro
 		if err = primitiveCloudGate(ctx, e); err != nil {
 			return err
 		}
-		// The cloud verifier is now real and independently pinned. Builder confirmed
-		// the required installed passive/reboot/mount auditor does not yet exist.
-		// Never replace that separate execution gate with a handwritten receipt.
+		// Actual pinned observer + genuine reboot + retained API window are
+		// independent of the cloud primitive and must all pass before final capture.
 		if err = installedPassiveAudit(ctx, e); err != nil {
 			return err
 		}
 	}
 
+	var window *retainedPassiveWindow
+	if stage == "prepare" || stage == "cutover" || stage == "proofs" || stage == "resume" {
+		if err = e.Passive.validate(); err != nil {
+			return err
+		}
+		w, er := startPassiveWindow(ctx, e, stage)
+		if er != nil {
+			return er
+		}
+		window = &w
+		if stage == "proofs" || stage == "resume" {
+			if err = passivePair(ctx, e, "deactivated", false); err != nil {
+				return err
+			}
+		}
+	}
 	plan, err := stagePlan(stage)
 	if err != nil {
 		return err
@@ -301,15 +317,36 @@ func executeStage(ctx context.Context, stage string, logger *logrus.Logger) erro
 					break
 				}
 			}
+
 		default:
+			var prepared audit.Manifest
+			if s.Operation == "prepare" {
+				prepared, err = expectedPreparedManifest(ctx, e, s.Node)
+				if err != nil {
+					return err
+				}
+			}
 			if s.Operation == "activate" && activationCount == 0 {
 				if err = freezeDisplay(ctx, e); err != nil {
 					return err
 				}
+				if err = passivePair(ctx, e, "prepared", false); err != nil {
+					return err
+				}
+				if window == nil {
+					return errors.New("actual before-capture API baseline absent")
+				}
+				if err = finishPassiveWindow(ctx, e, *window); err != nil {
+					return err
+				}
+				window = nil
 			}
 			var raw []byte
 			raw, err = nodeCall(ctx, s.Node, e, []string{"op", s.Operation, e.ApplicationSHA256}, nil, 1<<20, 20*time.Minute)
 			status := "command-exited-zero"
+			if err == nil && s.Operation == "prepare" {
+				err = savePassiveManifest(ctx, &e, s.Node, "prepared", prepared)
+			}
 			if err != nil {
 				status = "command-failed-reconcile-state"
 			}
@@ -363,6 +400,35 @@ func executeStage(ctx context.Context, stage string, logger *logrus.Logger) erro
 			return err
 		}
 	}
+
+	if stage == "prepare" {
+		if err = passivePair(ctx, e, "prepared", true); err != nil {
+			return err
+		}
+	}
+	if stage == "deactivate" {
+		w, er := startPassiveWindow(ctx, e, "deactivated-reboot")
+		if er != nil {
+			return er
+		}
+		window = &w
+		if err = freezeDeactivatedManifests(ctx, &e); err != nil {
+			return err
+		}
+		if err = passivePair(ctx, e, "deactivated", true); err != nil {
+			return err
+		}
+	}
+	if stage == "proofs" || stage == "resume" {
+		if err = passivePair(ctx, e, "deactivated", false); err != nil {
+			return err
+		}
+	}
+	if window != nil {
+		if err = finishPassiveWindow(ctx, e, *window); err != nil {
+			return err
+		}
+	}
 	if stage == "cutover" {
 		if activationCount != 3 {
 			return errors.New("complete actual activation pair required")
@@ -385,7 +451,7 @@ func executeStage(ctx context.Context, stage string, logger *logrus.Logger) erro
 		}
 	}
 	// Exiting zero means only the requested CLI steps returned zero. Independent
-	// passive/reboot/packet/SQL/mount/cloud audits remain separate gates.
+	// Packet acceptance and final independent cloud reconciliation remain separate gates.
 	return nil
 }
 
@@ -407,10 +473,4 @@ func requestedStage(ctx context.Context) error {
 		return err
 	}
 	return executeStage(ctx, request.Stage, logrus.New())
-}
-
-// Builder explicitly confirms this installed auditor does not exist yet. This
-// remains an executable refusal, never a configurable boolean or fake receipt.
-func installedPassiveAudit(context.Context, enrollment) error {
-	return errors.New("cutover requires the independent installed passive/reboot/mount/API audit; implementation pending")
 }
