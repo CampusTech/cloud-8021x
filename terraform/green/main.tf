@@ -172,6 +172,10 @@ resource "google_compute_firewall" "peer" {
   target_service_accounts = [google_service_account.green.email]
   source_service_accounts = [google_service_account.green.email]
   allow {
+    protocol = "udp"
+    ports    = ["18121"]
+  }
+  allow {
     protocol = "tcp"
     ports    = ["18122"]
   }

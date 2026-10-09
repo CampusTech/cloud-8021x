@@ -66,15 +66,16 @@ Archives are named `<name>_<version>_<architecture>.deb` in that directory.
 The coherent FreeRADIUS family is `freeradius`, `freeradius-common`,
 `freeradius-config`, `freeradius-utils`, `freeradius-rest`,
 `freeradius-postgresql`, `libfreeradius3`, all version
-`3.2.10+dfsg-2~bookworm+campus3`. Only `freeradius-common` may use architecture
-`all`. The other packages are `step-ca`, `datadog-agent`, `datadog-agent-ddot`; Agent and DDOT versions must match.
+`3.2.10+dfsg-2+trixie.campus4`. Only `freeradius-common` may use architecture
+`all`. The other packages are `step-ca` version `0.30.2-1+campus1` and
+`datadog-agent`/`datadog-agent-ddot`, both version `1:7.84.2-1+campus1`.
 Task 10 supplies authenticated, scanned compatible versions and all required
 base-image dependencies. There is no unverified fallback, apt resolver, broad
 upgrade or automatic downgrade of unrelated packages.
 
 The dependency-name allowlist is fixed in `internal/privileged/host/dependencies.go`;
 it is not an apt resolver or a general package-install API. The measured clean
-Debian13 native/host-helper closure contains48 dependency archives (58 including
+Debian13 native/host-helper closure contains 52 dependency archives (62 including
 products). Every archive has an exact name/version/architecture/hash; each is at
 most1GiB, with the historical12GiB aggregate ceiling retained. `all` architecture
 is allowed for the reviewed common/dependency packages only. Read-only validation
@@ -84,10 +85,11 @@ reverse dependencies, conflicts and breaks against installed state before mutati
 Ordinary dpkg dependency enforcement remains enabled during installation/rollback.
 
 Compatible newer dependencies remain installed unchanged; changed library versions
-require their exact prior archive. Existing `adduser`, `ca-certificates`, `sudo`,
-`nftables` and `openssl` replacements require separate OS/dependency preparation;
-initial installation is supported. libc/libssl/systemd/apt/dpkg/kernel replacements
-are outside the archive allowlist. Missing dependencies, unsupported metadata,
+require their exact prior archive. Existing `adduser`, `ca-certificates`,
+`nftables` and `openssl` replacements require separate OS/dependency preparation; initial installation is supported.
+The supported base must already provide compatible `sudo`, systemd/sysusers,
+libc/libssl and perl-base; missing sudo refuses before mutation.
+libc/libssl/systemd/apt/dpkg/kernel replacements are outside the archive allowlist. Missing dependencies, unsupported metadata,
 unreviewed base changes or an incomplete closure refuse before mutation. Historical
 product-only rollback journals keep their original observation scope; current
 journals also bind all reviewed dependencies.

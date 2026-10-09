@@ -194,8 +194,8 @@ go test -race ./...
 scripts/test_telemetry_postgres.sh
 # Prepared, labeled disposable native fixture with matched campus3 packages and synthetic TLS PG:
 python3 tests/radius_integration.py --native --container "$TASK7_NATIVE_FIXTURE" --native-mode termination
-python3 tests/ddot_queue.py --evidence /private/tmp/task7-ddot-proof --full-config
-python3 tests/ddot_queue.py --evidence /private/tmp/task7-ddot-full-proof --storage-full
+python3 tests/ddot_queue.py --packages "$VERIFIED_MONITORING_OUTPUT" --architecture arm64 --evidence /private/tmp/task7-ddot-proof --full-config
+python3 tests/ddot_queue.py --packages "$VERIFIED_MONITORING_OUTPUT" --architecture arm64 --evidence /private/tmp/task7-ddot-full-proof --storage-full
 golangci-lint run
 ```
 

@@ -5,3 +5,5 @@ These files are byte-preserved retired Python/server startup and Terraform input
 The active Windows SYSTEM certificate inventory tool remains in `scripts/windows_certificates.ps1`; its copy here only preserves historical template rendering. `baseline_checkpoint.py` remains the existing development fixture.
 
 Current deployment tests: `tests/test_green_deployment.py` and `terraform/green/tests/green.tftest.hcl`.
+
+`scripts/fetch-outputs.sh` is the byte-preserved obsolete Jamf/self-signed/secret-README helper. It is a historical fixture only: never execute it or use it as an operator workflow.

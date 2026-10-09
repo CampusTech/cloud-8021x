@@ -119,12 +119,20 @@ resource "google_secret_manager_secret" "ca_dsn" {
   lifecycle { prevent_destroy = true }
 }
 resource "google_secret_manager_secret_version" "ca_dsn" {
-  for_each    = google_secret_manager_secret.ca_dsn
-  secret      = each.value.id
-  secret_data = "postgres://stepca:${replace(urlencode(data.google_secret_manager_secret_version.inherited_ca_password[0].secret_data), "+", "%20")}@${var.private_administrator.host}:${var.private_administrator.port}/${each.key}?sslmode=verify-ca&sslrootcert=/etc/cloud-8021x/postgres-ca.pem"
+  for_each = google_secret_manager_secret.ca_dsn
+  secret   = each.value.id
+  # Preserve the original CA JSON dataSource byte-for-byte; application DSNs
+  # continue to use independently pinned, verified TLS in module.database.
+  secret_data = "postgresql://stepca:${data.google_secret_manager_secret_version.inherited_ca_password[0].secret_data}@${var.private_administrator.host}:5432/${each.key}?sslmode=require"
   # Do not deliver a usable credential before the CA ACL/capacity/TLS prerequisite.
   depends_on = [module.database]
-  lifecycle { prevent_destroy = true }
+  lifecycle {
+    prevent_destroy = true
+    precondition {
+      condition     = can(regex("^[A-Za-z0-9]+$", data.google_secret_manager_secret_version.inherited_ca_password[0].secret_data)) && var.private_administrator.port == 5432
+      error_message = "Legacy CA wrappers require the original alphanumeric password and port 5432. Otherwise disable inherited_ca_password and supply reviewed exact existing EC/RSA DSN secrets; do not re-encode credentials or rewrite CA JSON."
+    }
+  }
 }
 output "inherited_ca_dsn_references" {
   value       = { for database, secret in google_secret_manager_secret.ca_dsn : database => secret.id }

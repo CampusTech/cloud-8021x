@@ -16,3 +16,5 @@ Current contracts live in [daemon operations](../daemon-operations.md),
 [protected bootstrap](../bootstrap/README.md), and
 [release building](../releasing.md). Use their current prerequisites and the
 actual shipping artifact evidence for deployment decisions.
+
+[Parallel runtime validation](parallel-runtime.md) records the Task 10 local Linux and TLS PostgreSQL fixtures. It does not establish production readiness or full systemd PID 1 acceptance; those remain separate deployment gates.

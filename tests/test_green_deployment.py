@@ -56,6 +56,20 @@ class ActualTerraformContract(unittest.TestCase):
                 self.assertTrue(resource['change']['after']['name'].startswith('green-test-'), resource['address'])
         self.assertTrue(all(r['change']['actions'] == ['no-op'] for r in self.plans['existing_green_state_plan']['resource_changes']))
 
+    def test_peer_health_allows_only_both_protocols_between_green_accounts(self):
+        # The seeded synthetic state resolves the service-account email, unknown
+        # during the initial creation plan. No real state is read.
+        changes = {r['address']: r['change']['after'] for r in self.plans['existing_green_state_plan']['resource_changes']}
+        peer = changes['google_compute_firewall.peer']
+        self.assertEqual({(a['protocol'], tuple(a['ports'])) for a in peer['allow']},
+                         {('udp', ('18121',)), ('tcp', ('18122',))})
+        account = changes['google_service_account.green']['email']
+        self.assertTrue(account)
+        self.assertEqual(peer['source_service_accounts'], [account])
+        self.assertEqual(peer['target_service_accounts'], [account])
+        for key in ('source_ranges', 'destination_ranges', 'source_tags', 'target_tags'):
+            self.assertFalse(peer.get(key), key)
+
     def test_exact_serialized_yaml_passes_strict_go_validator(self):
         import tempfile
         with tempfile.TemporaryDirectory(prefix='cloud8021x-green-config-') as directory:
