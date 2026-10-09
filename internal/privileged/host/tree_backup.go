@@ -155,7 +155,7 @@ func (t *Transaction) InstallPackages(ctx context.Context, plan PackagePlan) err
 		return err
 	}
 	if plan.Changed {
-		if err = InstallArtifacts(ctx, plan.Incoming); err != nil {
+		if err = plan.install(ctx); err != nil {
 			return err
 		}
 	}

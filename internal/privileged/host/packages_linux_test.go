@@ -101,7 +101,7 @@ func TestInstalledPackageRollbackAndMaintainerSuppression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Previous) != 1 || len(plan.Absent) != 4 {
+	if len(plan.Previous) != 1 || len(plan.Absent) != 3 {
 		t.Fatalf("incorrect package history: %#v", plan)
 	}
 	before, err := os.ReadFile(radiusDirectory + "/radiusd.conf")
@@ -270,5 +270,134 @@ func TestInstalledPackageRollbackAndMaintainerSuppression(t *testing.T) {
 	after, err := os.ReadFile(radiusDirectory + "/radiusd.conf")
 	if err != nil || string(before) != string(after) {
 		t.Fatal("pre-package native config not restored", err)
+	}
+}
+
+// This fixture runs only inside an owned Debian 13 container, with synthetic
+// package payloads. It exercises dpkg removal and a persisted interrupted plan.
+func TestIsolatedUtilityRetirementAndInterruptedRollback(t *testing.T) {
+	if os.Getenv("C8021X_PACKAGE_FIXTURE") != "task10" {
+		t.Skip("owned Debian 13 package fixture required")
+	}
+	ctx := context.Background()
+	if err := os.MkdirAll(rollbackArtifactDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	build := func(name, version, base string, utility bool) Artifact {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "DEBIAN"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		control := "Package: " + name + "\nVersion: " + version + "\nArchitecture: " + runtime.GOARCH + "\nMaintainer: Owned Task10 fixture\nDescription: disposable protected package fixture\n"
+		if err := os.WriteFile(filepath.Join(dir, "DEBIAN/control"), []byte(control), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if utility {
+			if err := os.MkdirAll(filepath.Join(dir, "usr/bin"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "usr/bin", name), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if name == "step-cli" {
+				for script, body := range map[string]string{"postinst": "update-alternatives --install /usr/bin/step step /usr/bin/step-cli 50", "prerm": "update-alternatives --remove step /usr/bin/step-cli"} {
+					if err := os.WriteFile(filepath.Join(dir, "DEBIAN", script), []byte("#!/bin/sh\nset -e\n"+body+"\n"), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		a := Artifact{Name: name, Version: version, Architecture: runtime.GOARCH}
+		file := filepath.Join(base, a.filename())
+		if out, err := exec.Command("/usr/bin/dpkg-deb", "--build", dir, file).CombinedOutput(); err != nil {
+			t.Fatalf("build fixture: %s %v", out, err)
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		a.SHA256 = hex.EncodeToString(sum[:])
+		return a
+	}
+	old := Manifest{Schema: 1, Architecture: runtime.GOARCH}
+	for _, name := range retiredArtifacts {
+		a := build(name, "0.30.2-1", rollbackArtifactDirectory, true)
+		old.Artifacts = append(old.Artifacts, a)
+		if _, err := execute(ctx, "/usr/bin/dpkg", "--install", filepath.Join(rollbackArtifactDirectory, a.filename())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	incoming := Manifest{Schema: 1, Architecture: runtime.GOARCH, CollectorSHA256: strings.Repeat("c", 64)}
+	for _, name := range requiredArtifacts {
+		version := "1.0.0-1"
+		if radiusPackage(name) {
+			version = RadiusVersion
+		}
+		incoming.Artifacts = append(incoming.Artifacts, build(name, version, ArtifactDirectory, false))
+	}
+	if _, err := PreparePackages(ctx, incoming); err == nil {
+		t.Fatal("retired utilities accepted without archives manifest")
+	}
+	data, _ := json.Marshal(old)
+	if err := os.WriteFile(rollbackArtifactDirectory+"/manifest.json", data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll("/usr/local/bin", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/usr/local/bin/step", []byte("unmanaged"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PreparePackages(ctx, incoming); err == nil {
+		t.Fatal("unmanaged shadow utility accepted")
+	}
+	if err := os.Remove("/usr/local/bin/step"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PreparePackages(ctx, incoming)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Retired) != 2 || len(plan.Previous) != 2 {
+		t.Fatalf("retirement plan: %#v", plan)
+	}
+	checkpoint, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = plan.install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/usr/bin/step", "/usr/bin/step-cli", "/usr/bin/step-kms-plugin"} {
+		if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("retired executable remains: %s %v", path, err)
+		}
+	}
+	var recovered PackagePlan
+	if err = json.Unmarshal(checkpoint, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if err = recovered.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	current, err := installedPackages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current) != 2 {
+		t.Fatalf("unexpected restored package count: %d", len(current))
+	}
+	for _, a := range old.Artifacts {
+		if !samePackage(a, current[a.Name]) {
+			t.Fatal("exact cold utility package not restored")
+		}
+	}
+	if err = verifyRetiredUtilities(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := filepath.EvalSymlinks("/usr/bin/step"); err != nil || target != "/usr/bin/step-cli" {
+		t.Fatal("official alternative not restored", err)
 	}
 }

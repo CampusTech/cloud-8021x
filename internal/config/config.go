@@ -230,7 +230,8 @@ type Backends struct {
 	RadiusBinary        string `yaml:"radius_binary"`
 	RadiusConfigDir     string `yaml:"radius_config_dir"`
 	RadiusService       string `yaml:"radius_service"`
-	StepBinary          string `yaml:"step_binary"`
+	// LegacyStepBinary decodes historical protected configuration for rollback only.
+	LegacyStepBinary    string `yaml:"step_binary,omitempty"`
 	StepCAService       string `yaml:"step_ca_service"`
 	CollectorConfigFile string `yaml:"collector_config_file"`
 }
@@ -265,7 +266,7 @@ func Defaults() Config {
 		Database:    Database{TLSMode: "verify-full", MinConnections: 0, MaxConnections: 8, ConnectTimeout: 5 * time.Second, QueryTimeout: 5 * time.Second},
 		Telemetry:   Telemetry{BusinessEndpoint: "http://127.0.0.1:4319", Transport: "http", Timeout: 5 * time.Second, ShutdownTimeout: 10 * time.Second, QueueSize: 1024, TraceSampleRatio: 0.1},
 		CA:          CA{Provider: "step-ca"},
-		Backends:    Backends{RadiusVerifyLeafDir: "/run/radius-verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepBinary: "/usr/bin/step", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
+		Backends:    Backends{RadiusVerifyLeafDir: "/run/radius-verified-leaves", RadiusBinary: "/usr/sbin/freeradius", RadiusConfigDir: "/etc/freeradius/3.0", RadiusService: "freeradius", StepCAService: "step-ca", CollectorConfigFile: "/etc/cloud-8021x/ddot.yaml"},
 		Paths:       Paths{StateDir: "/var/lib/cloud-8021x", CacheDir: "/var/cache/cloud-8021x", HandoffDir: "/run/radius-certificate-bindings", InventoryFile: "/var/lib/cloud-8021x/inventory.json", MetadataFile: "/var/lib/cloud-8021x/metadata.json", AuthLogDir: "/var/log/freeradius/auth", AccountingSpoolDir: "/var/log/freeradius/radacct", DowngradeGuardFile: "/var/lib/cloud-8021x/fingerprint-enforced", LegacyStateDir: "/var/lib/fleet-radius"},
 		Schedules:   Schedules{Inventory: 5 * time.Minute, Certificates: time.Hour, Sites: 5 * time.Minute, Sources: time.Minute, Metrics: time.Minute, AccountingWorkers: 2, ExportWorkers: 1},
 	}
@@ -624,7 +625,10 @@ func (c Config) Validate() error {
 	if !duration(c.Network.Discovery.MaxAge, 7*24*time.Hour) {
 		return errors.New("source discovery age out of bounds")
 	}
-	for _, path := range []string{c.Paths.StateDir, c.Paths.CacheDir, c.Paths.HandoffDir, c.Paths.InventoryFile, c.Paths.MetadataFile, c.Paths.AuthLogDir, c.Paths.AccountingSpoolDir, c.Paths.DowngradeGuardFile, c.Paths.LegacyStateDir, c.Backends.RadiusBinary, c.Backends.RadiusConfigDir, c.Backends.StepBinary, c.Backends.CollectorConfigFile} {
+	if c.Backends.LegacyStepBinary != "" && c.Backends.LegacyStepBinary != "/usr/bin/step" {
+		return errors.New("only the historical fixed step utility path can be decoded")
+	}
+	for _, path := range []string{c.Paths.StateDir, c.Paths.CacheDir, c.Paths.HandoffDir, c.Paths.InventoryFile, c.Paths.MetadataFile, c.Paths.AuthLogDir, c.Paths.AccountingSpoolDir, c.Paths.DowngradeGuardFile, c.Paths.LegacyStateDir, c.Backends.RadiusBinary, c.Backends.RadiusConfigDir, c.Backends.CollectorConfigFile} {
 		if !cleanPath(path) {
 			return errors.New("runtime and backend paths must be absolute and clean")
 		}

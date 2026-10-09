@@ -80,7 +80,7 @@ func (c Config) ValidateBootstrap() error {
 	}
 	// Fixed installed boundaries: root never derives commands or service paths
 	// from a daemon-controlled leaf/candidate or an overridden CLI configuration.
-	if c.RuntimeUser != "cloud8021x" || c.Backends.RadiusBinary != "/usr/sbin/freeradius" || c.Backends.RadiusConfigDir != "/etc/freeradius/3.0" || c.Backends.RadiusService != "freeradius" || c.Backends.StepBinary != "/usr/bin/step" || c.Backends.StepCAService != "step-ca" || c.Backends.RadiusVerifyLeafDir != "/run/radius-verified-leaves" || c.Paths.HandoffDir != "/run/radius-certificate-bindings" {
+	if c.RuntimeUser != "cloud8021x" || c.Backends.RadiusBinary != "/usr/sbin/freeradius" || c.Backends.RadiusConfigDir != "/etc/freeradius/3.0" || c.Backends.RadiusService != "freeradius" || c.Backends.StepCAService != "step-ca" || c.Backends.RadiusVerifyLeafDir != "/run/radius-verified-leaves" || c.Paths.HandoffDir != "/run/radius-certificate-bindings" {
 		return errors.New("bootstrap requires fixed installed backend and account paths")
 	}
 	resources, files := map[string]bool{}, map[string]string{}

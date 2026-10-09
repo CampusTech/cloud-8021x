@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -21,6 +20,7 @@ type PackagePlan struct {
 	Previous  []Artifact          `json:"previous"`
 	Absent    []string            `json:"originally_absent"`
 	Installed map[string]Artifact `json:"installed"`
+	Retired   []string            `json:"retired,omitempty"`
 	Changed   bool                `json:"changed"`
 }
 
@@ -35,7 +35,7 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 	familyVersion := ""
 	familyCount := 0
 	for name, a := range current {
-		if !slices.Contains(requiredArtifacts, name) || a.Name != name {
+		if !managedPackage(name) || a.Name != name {
 			return plan, errors.New("unexpected installed package identity")
 		}
 		if radiusPackage(name) {
@@ -51,7 +51,7 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 	}
 	archives := map[string]Artifact{}
 	for _, a := range prior.Artifacts {
-		if !slices.Contains(requiredArtifacts, a.Name) || archives[a.Name].Name != "" || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != incoming.Architecture && (a.Name != "freeradius-common" || a.Architecture != "all")) {
+		if !managedPackage(a.Name) || archives[a.Name].Name != "" || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+~:-]{0,95}$`).MatchString(a.Version) || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(a.SHA256) || (a.Architecture != incoming.Architecture && (a.Name != "freeradius-common" || a.Architecture != "all")) {
 			return plan, errors.New("invalid rollback artifact identity")
 		}
 		archives[a.Name] = a
@@ -71,6 +71,19 @@ func planPackages(incoming, prior Manifest, current map[string]Artifact) (Packag
 			return plan, errors.New("verified exact prior archive required before package mutation")
 		}
 		plan.Previous = append(plan.Previous, previous)
+		plan.Changed = true
+	}
+	for _, name := range retiredArtifacts {
+		old, present := current[name]
+		if !present {
+			continue
+		}
+		previous, ok := archives[name]
+		if !ok || !samePackage(previous, old) || prior.Schema != 1 || prior.Architecture != incoming.Architecture {
+			return plan, errors.New("exact cold archive required before utility retirement")
+		}
+		plan.Previous = append(plan.Previous, previous)
+		plan.Retired = append(plan.Retired, name)
 		plan.Changed = true
 	}
 	return plan, nil
@@ -102,7 +115,7 @@ func installedPackages() (map[string]Artifact, error) {
 			}
 		}
 		name := fields["Package"]
-		if !slices.Contains(requiredArtifacts, name) {
+		if !managedPackage(name) {
 			continue
 		}
 		if seen[name] {
@@ -140,9 +153,53 @@ func verifyRollbackArtifact(ctx context.Context, a Artifact) error {
 	}
 	return nil
 }
+func validateRetiredOwner(path, name, owner string, current map[string]Artifact) error {
+	if current[name].Name != name || strings.TrimSpace(owner) != name+": "+path {
+		return errors.New("unmanaged or ambiguous retired utility requires explicit repair")
+	}
+	return nil
+}
+
+// Refuse shadow copies and unknown alternatives rather than deleting unmanaged
+// files or declaring vulnerable executables retired while they remain installed.
+func verifyRetiredUtilities(ctx context.Context, current map[string]Artifact) error {
+	for _, directory := range []string{"/usr/bin", "/usr/local/bin"} {
+		for _, entry := range []struct{ file, name string }{{"step", "step-cli"}, {"step-cli", "step-cli"}, {"step-kms-plugin", "step-kms-plugin"}} {
+			path := filepath.Join(directory, entry.file)
+			info, err := os.Lstat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			// The official step-cli package owns /usr/bin/step-cli and registers this
+			// exact update-alternatives link in postinst; dpkg does not list the alias.
+			if path == "/usr/bin/step" && info.Mode()&os.ModeSymlink != 0 {
+				target, err := filepath.EvalSymlinks(path)
+				if err != nil || target != "/usr/bin/step-cli" || current["step-cli"].Name != "step-cli" {
+					return errors.New("foreign step alternative requires explicit repair")
+				}
+				continue
+			}
+			owner, err := execute(ctx, "/usr/bin/dpkg-query", "--search", path)
+			if err != nil {
+				return errors.New("unmanaged retired utility requires explicit repair")
+			}
+			if err = validateRetiredOwner(path, entry.name, string(owner), current); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func PreparePackages(ctx context.Context, incoming Manifest) (PackagePlan, error) {
 	current, err := installedPackages()
 	if err != nil {
+		return PackagePlan{}, err
+	}
+	if err = verifyRetiredUtilities(ctx, current); err != nil {
 		return PackagePlan{}, err
 	}
 	var prior Manifest
@@ -172,6 +229,32 @@ func PreparePackages(ctx context.Context, incoming Manifest) (PackagePlan, error
 		}
 	}
 	return plan, nil
+}
+
+// install applies only the journaled plan; retired utilities are never forward artifacts.
+func (p PackagePlan) install(ctx context.Context) error {
+	if err := InstallArtifacts(ctx, p.Incoming); err != nil {
+		return err
+	}
+	if len(p.Retired) == 0 {
+		return nil
+	}
+	return withPackagePolicy(ctx, func() error {
+		args := append([]string{"--remove"}, p.Retired...)
+		if _, err := execute(ctx, "/usr/bin/dpkg", args...); err != nil {
+			return err
+		}
+		actual, err := installedPackages()
+		if err != nil {
+			return err
+		}
+		for _, name := range p.Retired {
+			if _, present := actual[name]; present {
+				return errors.New("retired utility remains installed")
+			}
+		}
+		return verifyRetiredUtilities(ctx, actual)
+	})
 }
 
 func (p PackagePlan) Rollback(ctx context.Context) error {

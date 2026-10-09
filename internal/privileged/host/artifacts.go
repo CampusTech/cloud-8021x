@@ -24,7 +24,14 @@ const ArtifactDirectory = "/var/cache/cloud-8021x/artifacts"
 const ArtifactManifest = ArtifactDirectory + "/manifest.json"
 const RadiusVersion = "3.2.10+dfsg-2~bookworm+campus3"
 
-var requiredArtifacts = []string{"freeradius", "freeradius-common", "freeradius-config", "freeradius-utils", "freeradius-rest", "freeradius-postgresql", "libfreeradius3", "step-ca", "step-cli", "step-kms-plugin", "datadog-agent", "datadog-agent-ddot"}
+var requiredArtifacts = []string{"freeradius", "freeradius-common", "freeradius-config", "freeradius-utils", "freeradius-rest", "freeradius-postgresql", "libfreeradius3", "step-ca", "datadog-agent", "datadog-agent-ddot"}
+
+// Retired utilities are accepted only in installed state and cold rollback archives.
+var retiredArtifacts = []string{"step-cli", "step-kms-plugin"}
+
+func managedPackage(name string) bool {
+	return slices.Contains(requiredArtifacts, name) || slices.Contains(retiredArtifacts, name)
+}
 
 type Artifact struct {
 	Name         string `json:"name"`

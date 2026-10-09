@@ -44,15 +44,14 @@ backup/activation engine.
 | `application_version` | Bounded release identifier, required for `--incoming` |
 | `application_sha256`, `config_sha256` | Lowercase SHA256 of incoming fixed `cloud-8021x` and `config.yaml` |
 | `collector_sha256` | Mandatory lowercase SHA256 of the installed standalone collector executable |
-| `artifacts` | Exactly the twelve allowlisted records below, each with `name`, `version`, `architecture`, `sha256` |
+| `artifacts` | Exactly the ten allowlisted product records below, each with `name`, `version`, `architecture`, `sha256` |
 
 Archives are named `<name>_<version>_<architecture>.deb` in that directory.
 The coherent FreeRADIUS family is `freeradius`, `freeradius-common`,
 `freeradius-config`, `freeradius-utils`, `freeradius-rest`,
 `freeradius-postgresql`, `libfreeradius3`, all version
 `3.2.10+dfsg-2~bookworm+campus3`. Only `freeradius-common` may use architecture
-`all`. The other packages are `step-ca`, `step-cli`, `step-kms-plugin`,
-`datadog-agent`, `datadog-agent-ddot`; Agent and DDOT versions must match.
+`all`. The other packages are `step-ca`, `datadog-agent`, `datadog-agent-ddot`; Agent and DDOT versions must match.
 Task 10 supplies authenticated, scanned compatible versions and all required
 base-image dependencies. There is no unverified fallback, apt resolver, broad
 upgrade or automatic downgrade of unrelated packages.
@@ -63,6 +62,16 @@ state and requires its exact prior archive in
 `rollback/manifest.json` (schema/architecture/artifact records as above).
 Missing or mismatched prior archives refuse before disturbing authentication.
 Only packages independently proven originally absent can be removed on rollback.
+The unused `step-cli` and `step-kms-plugin` utilities are not forward artifacts.
+When installed, their exact authenticated cold archives are mandatory before
+protected removal. Go verifies package ownership of known executable paths,
+including the official `step` alternative; unmanaged shadow copies or foreign
+alternatives require explicit repair. The journal retains the removal plan and
+exact prior packages for interrupted rollback. CA initialization and signing use
+Go and direct KMS; `step-ca` remains the service. Historical `step_binary` values
+are decoded only for protected old configuration and are never executed. Operators
+who need a CLI must provide separately maintained operator tooling.
+
 A prior native family must contain all seven matching versions or none. Old,
 potentially vulnerable archives are rollback data, never the shipping default;
 retain them only for the controlled rollback window, then retry the reviewed
