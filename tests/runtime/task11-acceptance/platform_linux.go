@@ -304,6 +304,11 @@ func nodeCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 		return err
 	}
 	switch args[0] {
+	case "scenario-accounting", "scenario-ca":
+		if len(args) != 1 {
+			return errors.New("fixed scenario reader accepts private typed input only")
+		}
+		return nodeScenarioRead(ctx, args[0], in, out)
 	case "passive-install", "passive-observe":
 		if len(args) != 1 {
 			return errors.New("fixed passive action accepts private typed input only")
