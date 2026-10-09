@@ -30,7 +30,7 @@ func TestPassiveManifestDerivesActualAdoptedTransforms(t *testing.T) {
 	cfg.Bootstrap.ACMEProvisioner = "wifi-acme"
 	cfg.Bootstrap.SCEPProvisioner = "wifi-scep"
 	cfg.Inventory.Fleet.ManagedCertificates = true
-	cfg.Listeners.Webhook.Address = "127.0.0.1:9080"
+	cfg.Listeners.Webhook.Address = "127.0.0.1:9444"
 	a := adoption.Authorization{Policy: files["source/etc/freeradius/3.0/device-policy-cache.json"], Certificates: files["source/var/lib/cloud-8021x/certificate-state.json"], ClassSHA256: adoption.Digest(files["source/run/radius-accounting-key"]), Native: &adoption.NativeIdentity{WebhookCertificate: files["source/etc/acme-authz-webhook/server.crt"], WebhookKey: files["source/etc/acme-authz-webhook/server.key"], ECConfig: files["source/etc/step-ca/config/ca.json"], RSAConfig: files["source/etc/step-ca-rsa/config/ca.json"], ECTemplate: files["source/etc/step-ca/templates/x509/wifi-acme.tpl"], RSATemplate: files["source/etc/step-ca-rsa/templates/x509/wifi-scep.tpl"]}}
 	trust := bytes.Join([][]byte{files["source/etc/step-ca/certs/intermediate_ca.crt"], files["source/etc/step-ca/certs/root_ca.crt"], files["source/etc/step-ca-rsa/certs/intermediate_ca.crt"], files["source/etc/step-ca-rsa/certs/root_ca.crt"]}, nil)
 	a.TrustSHA256 = adoption.Digest(trust)
@@ -57,6 +57,15 @@ func TestPassiveManifestDerivesActualAdoptedTransforms(t *testing.T) {
 	chain := append(leaf, files["source/etc/step-ca/certs/intermediate_ca.crt"]...)
 	if m.Slots["native-server"] != adoption.Digest(chain) || m.Slots["server-cache"] != m.Slots["native-server"] || m.Slots["inventory"] != adoption.Digest(a.Policy) {
 		t.Fatal("production adopted output differs")
+	}
+	mismatched := cfg
+	mismatched.Listeners.Webhook.Address = "127.0.0.1:9080"
+	if _, err = derivePassiveManifest(mismatched, a, files, originalPin, pin, now); err == nil {
+		t.Fatal("mismatched configured webhook callback accepted")
+	}
+	preserved, err := originalManifestBytes(files)
+	if err != nil || adoption.Digest(preserved) != originalPin {
+		t.Fatal("mismatched callback altered immutable original bundle", err)
 	}
 	a.Native.WebhookKey = []byte("replacement")
 	if _, err = derivePassiveManifest(cfg, a, files, originalPin, pin, now); err == nil {
