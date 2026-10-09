@@ -172,6 +172,7 @@ User=dd-agent
 Group=dd-agent
 ExecStart=/opt/datadog-agent/embedded/bin/otel-agent run --config /etc/cloud-8021x/ddot.yaml --core-config /etc/datadog-agent/datadog.yaml --pidfile /opt/datadog-agent/run/otel-agent.pid
 EnvironmentFile=/run/cloud-8021x-collector/datadog.env
+Environment=DD_APM_ENABLED=true
 Restart=on-failure
 RestartSec=2
 UMask=0077

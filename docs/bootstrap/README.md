@@ -338,3 +338,12 @@ mutated. The SCEP fixture uses Go-rendered product config and actual local step-
 its local signer substitute does not certify production KMS or Cloud SQL.
 
 For the integrated daemon import/publication, cold rollback export and retained-work procedures, see the [daemon operator runbook](../daemon-operations.md). Source scheduling now uses the protected per-node claim and exact persisted candidate before the root action; the installed timer is enabled only through that guarded integration.
+
+The fixed matching Agent/DDOT 7.84.2+campus1 binaries were exercised with Collector
+0.159.0. The full DDOT ordinary exporter embeds its trace component; inheriting
+`apm_config.enabled: false` from the core Agent causes the collector to exit.
+The protected DDOT unit therefore sets `DD_APM_ENABLED=true` only for that process.
+It does not enable a separate trace-agent executable in the core Agent. The actual
+full pipeline retained fsync-backed business handoff, producer projection, queue
+limit refusal, SIGKILL recovery and ENOSPC refusal in the isolated artifact fixture.
+Final package acquisition and full two-node systemd acceptance remain separate gates.

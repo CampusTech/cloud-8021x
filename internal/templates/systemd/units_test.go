@@ -62,3 +62,19 @@ func TestNativeServiceUsesProtectedConfigurationExplicitly(t *testing.T) {
 		}
 	}
 }
+
+func TestDDOTEmbeddedTraceComponentCannotInheritDisabledCoreSetting(t *testing.T) {
+	files, err := Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, data := range files {
+		if path != "/etc/systemd/system/datadog-agent-ddot.service" && strings.Contains(string(data), "DD_APM_ENABLED=true") {
+			t.Fatal("embedded trace setting escaped collector service", path)
+		}
+	}
+	collector := string(files["/etc/systemd/system/datadog-agent-ddot.service"])
+	if !strings.Contains(collector, "Environment=DD_APM_ENABLED=true\n") {
+		t.Fatal("full DDOT exits when it inherits an ordinary core Agent's disabled APM setting")
+	}
+}
