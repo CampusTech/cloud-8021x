@@ -50,6 +50,12 @@ func command() *cobra.Command {
 		}
 		return nasDescriptorEntry(cmd.Context(), args)
 	}})
+	root.AddCommand(&cobra.Command{Use: "scenario-cleanup-child ROLE", Hidden: true, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if dryRun {
+			return errors.New("private cleanup entry cannot run outside an owned operation")
+		}
+		return scenarioCleanupEntry(cmd.Context(), args, cmd.OutOrStdout())
+	}})
 	root.AddCommand(&cobra.Command{Use: "source-writer", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if dryRun {
 			return nil

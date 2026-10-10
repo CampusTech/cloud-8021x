@@ -298,6 +298,9 @@ func nodeCommand(ctx context.Context, args []string, in io.Reader, out io.Writer
 	if err := fixtureGuard(); err != nil {
 		return err
 	}
+	if handled, err := dispatchScenarioProbe(ctx, args, in, out, nodeScenarioProbe); handled {
+		return err
+	}
 	switch args[0] {
 	case "scenario-accounting", "scenario-ca":
 		if len(args) != 1 {

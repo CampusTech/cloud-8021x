@@ -317,9 +317,7 @@ func executeScenarioStage(ctx context.Context, stage sc.Stage) error {
 		}
 		clear(raw)
 	default:
-		// Remaining closed lifecycle/probe/gate operations are deliberately unavailable
-		// until their measured adapters are installed; never synthesize a pass body.
-		err = errScenarioController
+		err = scenarioControlBody(ctx, e, claim, &result, scenarioControl)
 	}
 	if err != nil {
 		return errScenarioController
