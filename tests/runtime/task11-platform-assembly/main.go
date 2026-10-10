@@ -64,9 +64,9 @@ func (o operation) inventory() error {
 func command() *cobra.Command {
 	var sha, result string
 	var dry, debug bool
-	cmd := &cobra.Command{Use: "task11-platform-assembly assemble|start-primitive|start-original|audit-loops", Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true, RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "task11-platform-assembly assemble|start-primitive|start-original|audit-loops|audit-nas", Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true, RunE: func(cmd *cobra.Command, args []string) error {
 		stage := args[0]
-		if stage != "audit-loops" {
+		if stage != "audit-loops" && stage != "audit-nas" {
 			if _, e := stageOrder(stage); e != nil {
 				return e
 			}
@@ -98,6 +98,9 @@ func command() *cobra.Command {
 		ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Minute)
 		defer cancel()
 		op := operation{in: in, r: runner{p}, ctx: ctx, planSHA: sha}
+		if stage == "audit-nas" {
+			return op.auditNAS()
+		}
 		if stage == "audit-loops" {
 			return op.auditLoops()
 		}

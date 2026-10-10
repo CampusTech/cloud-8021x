@@ -31,8 +31,9 @@ command, image, namespace, destination or credential override. `Schema` is1.
 - `ApplicationSHA256` and clean40hex `ApplicationSourceSHA`: actual LinuxARM64
   shipping build metadata, with no dirty-tree substitute.
 - `Helpers`: exactly task11-acceptance, task11-passive-audit,
-  task11-cloud-contract, task11-assembly-seed, task11-blue-migration and
-  task11-systemd-fixture. Each `{path,sha256}` is fixed to `control/public/NAME`.
+  task11-cloud-contract, task11-assembly-seed, task11-blue-migration,
+  task11-systemd-fixture and task11-scenarios. Each `{path,sha256}` is fixed
+  to `control/public/NAME`.
   Controller/observer/cloud hashes also bind the candidate enrollment. The cloud
   binary must remain reviewed `e6c0a5373ca718e17cf288f28095223c67dbfefa88461233ed1660ec2d5fd0d4`.
   Helpers are development binaries; only the shipping app is called a clean build.
@@ -168,7 +169,22 @@ used. Actual allocator/mount behavior still requires the later kernel gate.
 NAS root is `/var/lib/cloud8021x-task11/aux/nas`; its existing pinned
 `/usr/local/libexec/task11-systemd-fixture packets` and genuine eapol_test come
 from the approved helper/base. The separate scenario owner supplies private NAS
-inputs and independent expected projections. No scenario helper is added here.
+inputs and independent expected projections. The seventh individually pinned
+`task11-scenarios` helper is bound read-only at NAS
+`/usr/local/libexec/task11-scenarios` alongside systemd-fixture.
+
+Assembly explicitly mounts procfs at `aux/nas/proc` with
+`ro,nosuid,nodev,noexec` using the pinned mount tool. Any preexisting target or
+descendant mount, or nonempty/unsafe directory, refuses without repair or unmount.
+Post-assembly and later reconciliation independently read bounded actual
+mountinfo, procfs statfs/device and outer PID namespace, and retained
+source/helper inode, SHA and read-only mount identities. This outer-PID proc view
+is an explicit helper prerequisite, never a confinement claim.
+
+Fixed `audit-nas --plan-sha256 PIN` repeats those read-only observations; generated
+inventory alone cannot satisfy the audit. Root separately owns the 13 private
+material publication and actual helper/assembly gates. None of these new
+NAS helper/procfs operations has been executed by this source slice.
 
 ## Inventory ABI and limits
 

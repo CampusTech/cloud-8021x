@@ -67,7 +67,7 @@ var machineID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 const publicRoot = controlRoot + "/public"
 
-var helperNames = []string{"task11-acceptance", "task11-passive-audit", "task11-cloud-contract", "task11-assembly-seed", "task11-blue-migration", "task11-systemd-fixture"}
+var helperNames = []string{"task11-acceptance", "task11-passive-audit", "task11-cloud-contract", "task11-assembly-seed", "task11-blue-migration", "task11-systemd-fixture", "task11-scenarios"}
 var toolPaths = map[string]string{"ip": "/usr/sbin/ip", "nft": "/usr/sbin/nft", "mount": "/usr/bin/mount", "umount": "/usr/bin/umount", "mkfs": "/usr/sbin/mke2fs", "fallocate": "/usr/bin/fallocate", "chroot": "/usr/sbin/chroot", "systemctl": "/usr/bin/systemctl", "systemd-run": "/usr/bin/systemd-run", "nspawn": "/usr/bin/systemd-nspawn", "dpkg-query": "/usr/bin/dpkg-query", "dpkg": "/usr/bin/dpkg", "losetup": "/usr/sbin/losetup", "sysctl": "/usr/sbin/sysctl"}
 
 func (p plan) validate() error {

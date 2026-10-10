@@ -109,7 +109,7 @@ func (o operation) privateRoots() error {
 	}
 	// NAS owns only public helper/executables; its future private packet inputs
 	// come from the separate independently reviewed scenario driver.
-	return o.bindPublic(o.in.Plan.Helpers["task11-systemd-fixture"], platformRoot+"/aux/nas/usr/local/libexec/task11-systemd-fixture")
+	return o.prepareNAS()
 }
 func (o operation) populateNode(n node) error {
 	root := rootFor(n.Name)

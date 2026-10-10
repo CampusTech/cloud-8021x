@@ -24,6 +24,9 @@ func (o operation) reconcile(_ string) error {
 	if e != nil || len(mounts) > 4<<20 {
 		return errors.New("actual owned mount inventory unavailable")
 	}
+	if e = o.auditNAS(); e != nil {
+		return e
+	}
 	for _, n := range o.in.Plan.Nodes {
 		if !strings.Contains(string(mounts), " "+rootFor(n.Name)+" ") {
 			return errors.New("actual node overlay absent")
