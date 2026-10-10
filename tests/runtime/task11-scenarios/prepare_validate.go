@@ -89,7 +89,7 @@ func validateProducerInputs(in producerInputs) (producerValidated, error) {
 			return v, errors.New("original preserved bytes differ")
 		}
 	}
-	for _, name := range producerMaterialPaths {
+	for _, name := range producerAllMaterialPaths() {
 		if len(in.Files[name]) == 0 || len(in.Files[name]) > 64<<10 || digestBytes(in.Files[name]) != i.Files[name] {
 			return v, errors.New("independently finalized NAS bytes differ")
 		}

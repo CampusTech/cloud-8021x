@@ -38,5 +38,11 @@ func validateNativeMaterials(p nasPrivatePlan, material map[string][]byte) error
 	if e != nil || digestBytes(leaf.Raw) != p.ClientLeafSHA256 {
 		return errors.New("actual EAP client differs from independent leaf pin")
 	}
+	if p.Scenario.Case == "eap-unenrolled" {
+		leaf, err := validateRejectClient(p.EC, material, p.RejectMaterials)
+		if err != nil || digestBytes(leaf.Raw) != p.RejectLeafSHA256 {
+			return errors.New("actual rejection client differs")
+		}
+	}
 	return nil
 }

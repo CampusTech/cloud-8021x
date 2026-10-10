@@ -157,6 +157,9 @@ func validateCaseRequest(p scenarioPlan, r scenariocontract.Request) error {
 	}
 	for _, allowed := range actions {
 		if allowed.Action == r.Action {
+			if p.Case == "eap-unenrolled" && allowed.Sequence != r.Sequence {
+				continue
+			}
 			if r.Node != allowed.Node || len(r.Sessions) != len(allowed.Sessions) {
 				return errors.New("requested Node/Sessions differ from immutable case")
 			}

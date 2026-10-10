@@ -214,6 +214,22 @@ func generateSeed(s seedSpec) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// This independent trusted client is deliberately absent from every original
+	// identity/observation map below. It exists only in a newly generated seed.
+	rejectKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	rejectTemplate := &x509.Certificate{Subject: pkix.Name{CommonName: "22222222-3333-4444-8555-666666666666"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(30 * 24 * time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	_, rejectPEM, err := issue(rejectTemplate, ec.intermediate, rejectKey.Public(), ec.kms)
+	if err != nil {
+		return nil, err
+	}
+	files["nas/reject-client.pem"] = append(bytes.Clone(rejectPEM), ec.material.Intermediate...)
+	files["nas/reject-client.key"], err = keyPEM(rejectKey)
+	if err != nil {
+		return nil, err
+	}
 	fp := adoption.Digest(leaf.Raw)
 	at := domain.Unix(now)
 	rec := &domain.DeviceRecord{DeviceID: domain.DeviceID("fleet:1"), Groups: []domain.GroupID{"fleet:1"}, Enrolled: true, ObservedAt: &at}

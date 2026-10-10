@@ -11,7 +11,7 @@ func publishPreparedNAS(b preparedNAS, write func(string, string, []byte) error)
 	if e := validatePreparedNAS(b); e != nil {
 		return e
 	}
-	for _, name := range nasMaterialNames {
+	for _, name := range publishedNASMaterialNames() {
 		if e := write("materials", name, b.Materials[name]); e != nil {
 			return e
 		}
@@ -24,10 +24,10 @@ func publishPreparedNAS(b preparedNAS, write func(string, string, []byte) error)
 	return nil
 }
 func validatePreparedNAS(b preparedNAS) error {
-	if len(b.Materials) != 13 || len(b.Plans) != 9 {
+	if len(b.Materials) != 16 || len(b.Plans) != 10 {
 		return errors.New("complete exclusive fixed publication required")
 	}
-	for _, name := range nasMaterialNames {
+	for _, name := range publishedNASMaterialNames() {
 		if len(b.Materials[name]) == 0 || len(b.Materials[name]) > 64<<10 {
 			return errors.New("closed bounded material absent")
 		}

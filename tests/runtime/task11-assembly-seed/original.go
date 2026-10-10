@@ -26,7 +26,7 @@ func originalManifest(files map[string][]byte) ([]byte, error) {
 }
 
 func originalTreeNames() []string {
-	return append(append([]string{}, originalNames...), "original-manifest.json", "api/ec-kms.pem", "api/rsa-kms.pem", "private-original/ec-root.pem", "private-original/rsa-root.pem", "nas/client.pem", "nas/client.key")
+	return append(append([]string{}, originalNames...), "original-manifest.json", "api/ec-kms.pem", "api/rsa-kms.pem", "private-original/ec-root.pem", "private-original/rsa-root.pem", "nas/client.pem", "nas/client.key", "nas/reject-client.pem", "nas/reject-client.key")
 }
 func validateOriginalTree(files map[string][]byte) error {
 	names := originalTreeNames()

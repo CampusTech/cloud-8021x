@@ -29,6 +29,12 @@ func validatePlan(p scenarioPlan) error {
 	if !ok || p.Target != r[0] || p.Namespace != r[1] || p.Machine != "task11-"+p.Node || p.NAS != "10.203.11.40" || p.NASNamespace != "c11-nas" || !sessionPattern.MatchString(p.Session) {
 		return errors.New("closed green and NAS identities required")
 	}
+	if p.Scenario == "eap-unenrolled" {
+		if p.Node != "green-primary" || len(p.Events) != 0 || p.OutageSeconds != 0 {
+			return errors.New("fixed rejection case forbids accounting or outage")
+		}
+		return nil
+	}
 	switch p.Scenario {
 	case "postgres-outage", "business-outage":
 		if p.OutageSeconds < 1 || p.OutageSeconds > 60 {
@@ -60,6 +66,9 @@ func scenarioSteps(p scenarioPlan) ([]string, error) {
 	}
 	prefix := []string{"fresh-active-pair", "freeze-independent-events", "readonly-before"}
 	var mid []string
+	if p.Scenario == "eap-unenrolled" {
+		return []string{"fresh-active-pair", "readonly-before", "authenticated-native-reject", "readonly-after-empty"}, nil
+	}
 	switch p.Scenario {
 	case "postgres-outage":
 		mid = []string{"stop-owned-postgres", "traffic-native-response", "start-owned-postgres", "wait-ledger-replay"}

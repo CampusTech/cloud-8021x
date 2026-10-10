@@ -16,10 +16,14 @@ func TestFinalizeAddsPinnedPersistentNASInputs(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, name := range []string{"nas/scep-client.key", "nas/eap.conf", "nas/radius-secret", "nas/broker-token"} {
+	for _, name := range []string{"nas/scep-client.key", "nas/eap.conf", "nas/reject-eap.conf", "nas/reject-client.pem", "nas/reject-client.key", "nas/radius-secret", "nas/broker-token"} {
 		if len(b.Original[name]) == 0 || b.Input.Files[name] != digest(b.Original[name]) {
 			t.Fatalf("NAS input not finalized/pinned: %s", name)
 		}
+	}
+	expectedReject := bytes.ReplaceAll(bytes.ReplaceAll(b.Original["nas/eap.conf"], []byte("/client.pem"), []byte("/reject-client.pem")), []byte("/client.key"), []byte("/reject-client.key"))
+	if !bytes.Equal(expectedReject, b.Original["nas/reject-eap.conf"]) {
+		t.Fatal("fixed negative profile differs from actual positive server/endpoint pins")
 	}
 	block, rest := pem.Decode(b.Original["nas/scep-client.key"])
 	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
@@ -40,7 +44,7 @@ func TestFinalizeAddsPinnedPersistentNASInputs(t *testing.T) {
 			t.Fatal("NAS credential differs from actual immutable secret")
 		}
 	}
-	for _, name := range []string{"nas/client.pem", "nas/client.key", "source/run/radius-accounting-key", "source/etc/step-ca/config/ca.json"} {
+	for _, name := range []string{"nas/client.pem", "nas/client.key", "nas/reject-client.pem", "nas/reject-client.key", "source/run/radius-accounting-key", "source/etc/step-ca/config/ca.json"} {
 		if !bytes.Equal(original[name], b.Original[name]) {
 			t.Fatal("preserved original modified")
 		}

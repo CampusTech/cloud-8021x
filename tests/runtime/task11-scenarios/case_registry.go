@@ -6,6 +6,8 @@ import "errors"
 // plans directory. No environment, pathname or generic command override exists.
 func closedCaseFiles(command string) ([]string, error) {
 	switch command {
+	case "eap-unenrolled":
+		return []string{"eap-unenrolled.json"}, nil
 	case "native-accounting":
 		return []string{"native-accounting.json"}, nil
 	case "ongoing-baseline":

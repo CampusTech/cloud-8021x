@@ -55,7 +55,7 @@ func TestScenarioPlanSelectionOnlyReadsClosedPrivateFiles(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 	name, got, err := selectScenarioPlan(adoption.Digest(raw), read)
-	if err != nil || name != "ca-ec-continuity" || !bytes.Equal(got, raw) || reads != 9 {
+	if err != nil || name != "ca-ec-continuity" || !bytes.Equal(got, raw) || reads != 10 {
 		t.Fatal("exact immutable plan not selected", name, err, reads)
 	}
 	for _, kind := range []string{"missing", "duplicate", "read-error", "oversize", "pin"} {

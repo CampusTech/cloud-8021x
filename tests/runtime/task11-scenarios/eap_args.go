@@ -22,5 +22,9 @@ func fixedEAPArguments(p nasPrivatePlan, secret []byte) ([]string, error) {
 	if _, e := accounting.CanonicalKey(accounting.Raw{SourceIP: p.Scenario.NAS, NASIP: one(p.Scenario.NAS), Station: one(p.Station), Session: one(p.Scenario.Session)}); e != nil {
 		return nil, errors.New("independently chosen canonical station required")
 	}
-	return []string{"-c", nasMaterialRoot + "/eap.conf", "-a", "10.203.11.40", "-A", "10.203.11.40", "-p", "18120", "-s", string(secret), "-M", p.Station, "-t", "15", "-N", "61:d:19"}, nil
+	profile := "eap.conf"
+	if p.Scenario.Case == "eap-unenrolled" {
+		profile = "reject-eap.conf"
+	}
+	return []string{"-c", nasMaterialRoot + "/" + profile, "-a", "10.203.11.40", "-A", "10.203.11.40", "-p", "18120", "-s", string(secret), "-M", p.Station, "-t", "15", "-N", "61:d:19"}, nil
 }

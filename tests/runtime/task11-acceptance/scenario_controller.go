@@ -16,7 +16,7 @@ import (
 )
 
 var errScenarioController = errors.New("fixed scenario controller operation refused")
-var scenarioCases = []string{"native-accounting", "ongoing-interim", "ongoing-stop", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage", "ca-ec-continuity", "ca-rsa-continuity"}
+var scenarioCases = []string{"native-accounting", "eap-unenrolled", "ongoing-interim", "ongoing-stop", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage", "ca-ec-continuity", "ca-rsa-continuity"}
 
 type scenarioNASPrior struct {
 	SelectionBytes []byte `json:"selection_bytes"`

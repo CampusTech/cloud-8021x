@@ -69,6 +69,16 @@ func runNAS(ctx context.Context, action string, raw []byte) ([]byte, error) {
 		}
 		material[name] = v
 	}
+	for _, name := range nasRejectMaterialNames {
+		if input.Plan.Scenario.Case != "eap-unenrolled" {
+			break
+		}
+		v, err := readProtectedNASMaterial(nasMaterialRoot, name, input.Plan.RejectMaterials[name], 0)
+		if err != nil {
+			return nil, err
+		}
+		material[name] = v
+	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	var body any
@@ -95,6 +105,9 @@ func runNAS(ctx context.Context, action string, raw []byte) ([]byte, error) {
 		actual, class, e := runNativeEAP(ctx, input.Plan, material["radius-secret"], executable)
 		if e != nil {
 			return nil, e
+		}
+		if input.Plan.Scenario.Case == "eap-unenrolled" && actual.Accepted {
+			return nil, errors.New("unenrolled client unexpectedly admitted; accounting forbidden")
 		}
 		if !actual.Accepted {
 			body = nativeRejectedBody(input.Plan, actual, chosen)

@@ -27,7 +27,7 @@ type nasAdmission struct {
 func validatePlanCase(p scenarioPlan) error {
 	expected := p.Case
 	switch p.Case {
-	case "native-accounting", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage":
+	case "eap-unenrolled", "native-accounting", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage":
 	case "ongoing-interim", "ongoing-stop":
 		expected = "ongoing-baseline"
 		first := 3

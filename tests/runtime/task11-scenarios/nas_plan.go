@@ -15,7 +15,25 @@ var nasMaterialNames = []string{
 	"rsa-decrypter.pem", "broker.crt", "broker-token", "scep-client.key",
 }
 
+var nasRejectMaterialNames = []string{"reject-eap.conf", "reject-client.pem", "reject-client.key"}
+
+func publishedNASMaterialNames() []string {
+	return append(append([]string{}, nasMaterialNames...), nasRejectMaterialNames...)
+}
+func producerAllMaterialPaths() map[string]string {
+	paths := map[string]string{}
+	for n, p := range producerMaterialPaths {
+		paths[n] = p
+	}
+	for n, p := range producerRejectMaterialPaths {
+		paths[n] = p
+	}
+	return paths
+}
+
 type nasPrivatePlan struct {
+	RejectMaterials    map[string]string `json:"reject_materials,omitempty"`
+	RejectLeafSHA256   string            `json:"reject_leaf_sha256,omitempty"`
 	Schema             int               `json:"schema"`
 	OriginalSeedSHA256 string            `json:"original_seed_sha256"`
 	Scenario           scenarioPlan      `json:"scenario"`
@@ -44,6 +62,18 @@ func decodeNASPlan(raw []byte, pin string) (nasPrivatePlan, error) {
 		if !shaPattern.MatchString(p.Materials[name]) {
 			return p, errors.New("closed NAS material pins required")
 		}
+	}
+	if p.Scenario.Case == "eap-unenrolled" {
+		if len(p.RejectMaterials) != 3 || !shaPattern.MatchString(p.RejectLeafSHA256) || p.RejectLeafSHA256 == p.ClientLeafSHA256 {
+			return p, errors.New("independent rejection client pins required")
+		}
+		for _, n := range nasRejectMaterialNames {
+			if !shaPattern.MatchString(p.RejectMaterials[n]) {
+				return p, errors.New("closed rejection material pins required")
+			}
+		}
+	} else if p.RejectMaterials != nil || p.RejectLeafSHA256 != "" {
+		return p, errors.New("rejection material outside fixed case")
 	}
 	if validateECPlan(p.EC) != nil || validateCAClientPlan(p.RSA) != nil || p.EC.RootSHA256 != p.Materials["ec-root.pem"] || p.EC.IntermediateSHA256 != p.Materials["ec-intermediate.pem"] || p.EC.ClientCertificateSHA256 != p.Materials["client.pem"] || p.EC.ClientKeySHA256 != p.Materials["client.key"] || p.RSA.RootSHA256 != p.Materials["rsa-root.pem"] || p.RSA.IntermediateSHA256 != p.Materials["rsa-intermediate.pem"] || p.RSA.DecrypterSHA256 != p.Materials["rsa-decrypter.pem"] || p.RSA.BrokerCertificateSHA256 != p.Materials["broker.crt"] || p.RSA.BrokerTokenSHA256 != p.Materials["broker-token"] {
 		return p, errors.New("NAS CA material/route pins differ")

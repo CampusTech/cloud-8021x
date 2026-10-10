@@ -32,7 +32,7 @@ func loadProducerInputs() (producerInputs, error) {
 	for _, name := range producerOriginalNames {
 		paths[name] = true
 	}
-	for _, name := range producerMaterialPaths {
+	for _, name := range producerAllMaterialPaths() {
 		paths[name] = true
 	}
 	paths["original-manifest.json"] = true
@@ -118,7 +118,7 @@ func runPrepare(dry bool) ([]byte, error) {
 		Materials        int               `json:"materials"`
 		PlanSHA256       map[string]string `json:"plan_sha256"`
 		DryRun           bool              `json:"dry_run"`
-	}{1, digestBytes(in.Input), digestBytes(in.Platform), digestBytes(in.Enrollment), self, 13, map[string]string{}, dry}
+	}{1, digestBytes(in.Input), digestBytes(in.Platform), digestBytes(in.Enrollment), self, len(bundle.Materials), map[string]string{}, dry}
 	for name, raw := range bundle.Plans {
 		projection.PlanSHA256[name] = digestBytes(raw)
 	}

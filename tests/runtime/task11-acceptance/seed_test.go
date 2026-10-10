@@ -98,6 +98,7 @@ func TestSeedIsGenuineOriginalStateWithoutAccountingOrReceiptKeys(t *testing.T) 
 	if _, err = approvedGreenHosts(files["api/seed.json"], strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
+	assertUnenrolledSeedClient(t, files, snapshot, state, now)
 	var cloud map[string]json.RawMessage
 	if json.Unmarshal(files["api/seed.json"], &cloud) != nil || len(cloud["keys"]) == 0 || len(cloud["secrets"]) == 0 {
 		t.Fatal("missing real cloud import material")

@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CampusTech/cloud-8021x/internal/migration"
 
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
@@ -32,6 +40,25 @@ func producerFixture(t *testing.T) producerInputs {
 	for name, path := range producerMaterialPaths {
 		files[path] = material[name]
 	}
+	rejectKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(5), Subject: pkix.Name{CommonName: rejectedDevice}, NotBefore: ec.now.Add(-time.Minute), NotAfter: ec.now.Add(time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}, ec.intermediate, rejectKey.Public(), ec.intermediateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectLeaf, err := x509.ParseCertificate(rejectDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectPrivate, err := x509.MarshalPKCS8PrivateKey(rejectKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["nas/reject-client.pem"] = append(pemCertificate(rejectLeaf), ec.intermediatePEM...)
+	files["nas/reject-client.key"] = pemPrivateKey(rejectPrivate)
+	files["nas/reject-eap.conf"] = fixedRejectNASConfig()
 	cloud := producerCloud{Schema: 1, ProjectID: "task11-acceptance", ProjectNumber: seed.ProjectNumber, Secrets: map[string]map[string]string{}, Keys: map[string]string{}, Routes: []json.RawMessage{}}
 	for name, b := range map[string][]byte{"radius-task11-secret": material["radius-secret"], "scep-broker-token": material["broker-token"], "smallstep-rsa-scep-decrypter-cert": pemCertificate(rsa.decrypter), "radius-accounting-class-key": material["class-key"]} {
 		cloud.Secrets["projects/"+seed.ProjectNumber+"/secrets/"+name] = map[string]string{"1": base64.StdEncoding.EncodeToString(b)}
@@ -45,6 +72,12 @@ func producerFixture(t *testing.T) producerInputs {
 	rec := &domain.DeviceRecord{DeviceID: "fleet:1", Groups: []domain.GroupID{"fleet:1"}, Enrolled: true, ObservedAt: &seen}
 	snapshot := domain.Snapshot{Version: 2, UpdatedAt: seen, Identities: map[string]*domain.DeviceRecord{ec.old.Subject.CommonName: rec}, Certificates: map[string]*domain.DeviceRecord{digestBytes(ec.old.Raw): rec}, HardwareSerials: map[string]*domain.DeviceRecord{}}
 	files["source/etc/freeradius/3.0/device-policy-cache.json"], _ = json.Marshal(snapshot)
+	stamp := json.Number(strconv.FormatInt(at.Unix(), 10))
+	enrolledAt, _ := json.Marshal(at.Add(-time.Hour).Format(time.RFC3339))
+	binding := []json.RawMessage{json.RawMessage("1"), json.RawMessage(stamp), enrolledAt}
+	trust := digestBytes(ec.rootPEM)
+	state := migration.LegacyCertificateState{Version: 1, Source: "https://fleet.task11.test", Trust: &trust, Hosts: map[string]migration.LegacyCertificateHost{ec.old.Subject.CommonName: {Binding: binding, Platform: "darwin", LastAttempt: stamp, Observation: &migration.LegacyCertificateObservation{Fingerprints: []string{digestBytes(ec.old.Raw)}, ObservedAt: stamp, TrustVerified: true}}}, Commands: []migration.LegacyCommand{}}
+	files["source/var/lib/cloud-8021x/certificate-state.json"], _ = json.Marshal(state)
 	// Match the original preserved RADIUS server SAN using an actual signed leaf.
 	files["source/etc/freeradius/3.0/certs/server.pem"] = pureTrustPEM(t, false, nativeServerDNS)
 	manifest := producerManifest{Schema: 1, Files: map[string]string{}}
@@ -118,19 +151,22 @@ func producerFixture(t *testing.T) producerInputs {
 	in.Enrollment, _ = json.Marshal(enrolled)
 	return in
 }
-func TestPrepareProducesNinePlansFromPreservedInputs(t *testing.T) {
+func TestPrepareProducesTenPlansFromPreservedInputs(t *testing.T) {
 	in := producerFixture(t)
 	b, e := prepareNASBundle(in)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(b.Materials) != 13 || len(b.Plans) != 9 {
+	if len(b.Materials) != 16 || len(b.Plans) != 10 {
 		t.Fatal("closed producer set missing")
 	}
 	for name, raw := range b.Plans {
 		p, e := decodeNASPlan(raw, digestBytes(raw))
 		if e != nil {
 			t.Fatal(e)
+		}
+		if len(p.Materials) != 13 {
+			t.Fatal("positive/base thirteen material contract changed")
 		}
 		if p.Scenario.Case+".json" != name || p.ClientLeafSHA256 == "" || p.Scenario.Session != "task11-"+p.Scenario.Case {
 			t.Fatal("plan identity differs")

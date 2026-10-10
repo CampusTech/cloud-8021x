@@ -56,6 +56,9 @@ func measuredNodeContinuity(before, after sc.NodeObservation, newBoot bool) erro
 	return nil
 }
 func executeAccountingActions(ctx context.Context, p nasPrivatePlan, a outerAttempt, invoke measuredInvoker) ([]retiredOperation, error) {
+	if p.Scenario.Case == "eap-unenrolled" {
+		return executeRejectedActions(ctx, p, a, invoke)
+	}
 	planned, e := outerAccountingRequests(p.Scenario, a.AttemptID, a.PlanSHA256)
 	if e != nil || invoke == nil {
 		return nil, errors.New("fixed measured accounting route required")

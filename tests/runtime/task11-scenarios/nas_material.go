@@ -17,7 +17,7 @@ const nasMaterialRoot = "/var/lib/cloud8021x-task11-nas"
 // Directory and UID parameters exist for pure filesystem regressions; CLI/stdin
 // never supply paths, owners, or a relaxed material-name list.
 func readProtectedNASMaterial(root, name, pin string, uid int) ([]byte, error) {
-	if uid < 0 || !filepath.IsAbs(root) || filepath.Clean(root) != root || !slices.Contains(nasMaterialNames, name) || !shaPattern.MatchString(pin) {
+	if uid < 0 || !filepath.IsAbs(root) || filepath.Clean(root) != root || !slices.Contains(publishedNASMaterialNames(), name) || !shaPattern.MatchString(pin) {
 		return nil, errors.New("closed canonical pinned NAS material required")
 	}
 	fd, e := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)

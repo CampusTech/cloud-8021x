@@ -91,7 +91,7 @@ func (s *outerStore) check() error {
 }
 func outerCase(name string) bool {
 	switch name {
-	case "native-accounting", "ongoing-interim", "ongoing-stop", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage", "ca-ec-continuity", "ca-rsa-continuity":
+	case "native-accounting", "eap-unenrolled", "ongoing-interim", "ongoing-stop", "duplicate-pair", "ha-primary", "postgres-outage", "business-outage", "ca-ec-continuity", "ca-rsa-continuity":
 		return true
 	}
 	return false
