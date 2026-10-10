@@ -430,18 +430,9 @@ func restoreLegacyWriterFiles(id string, run commandRunner) error {
 		return e
 	}
 	defer unlock()
-	// Verification above may have consumed a completed copied-rollback binding.
-	// Preserve original restore owners/modes, using only the now-proven tuples.
+	// Recheck original directory bindings under the fixed locks before writes.
 	if e = verifyWriterLineage(receipt); e != nil {
 		return e
-	}
-	current, _, e := snapshotWriterLineage()
-	if e != nil || len(current) != len(receipt.Directories) {
-		return errors.New("restore lineage unavailable")
-	}
-	for i := range receipt.Directories {
-		receipt.Directories[i].Device = current[i].Device
-		receipt.Directories[i].Inode = current[i].Inode
 	}
 	for _, saved := range receipt.Files {
 		if !legacyWriterFile(saved.Path) {

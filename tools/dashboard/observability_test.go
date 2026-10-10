@@ -277,7 +277,29 @@ func TestObservabilityPlanPreservesExactOwnership(t *testing.T) {
 }
 
 func TestObservabilityActualMockedOwnerPlan(t *testing.T) {
-	cmd := isolatedTerraformFixture(t, "../../terraform/observability", "test", "-json", "-verbose")
+	files, err := observabilityFiles("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := t.TempDir()
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(module, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(module, "tests"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".terraform.lock.hcl", "tests/owner.tftest.hcl"} {
+		data, err := os.ReadFile(filepath.Join("../../terraform/observability", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(module, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := isolatedTerraformFixture(t, module, "test", "-json", "-verbose")
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("mocked owner fixture: %v: %s", err, raw)
@@ -309,10 +331,6 @@ func TestObservabilityActualMockedOwnerPlan(t *testing.T) {
 	ids := map[string]any{}
 	for _, resource := range plan.Changes {
 		ids[resource.Address] = resource.Change.Before["id"]
-	}
-	files, err := observabilityFiles("../..")
-	if err != nil {
-		t.Fatal(err)
 	}
 	var handoff map[string]any
 	if err = json.Unmarshal(files["ownership-handoff.json"], &handoff); err != nil {

@@ -1,9 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"encoding/json"
-	"os/exec"
+	"os"
 	"reflect"
 	"testing"
 
@@ -41,43 +40,54 @@ func TestOptionalBYODProfileStableIdentityAndExactDeviceTarget(t *testing.T) {
 		t.Fatal("trust exception enabled")
 	}
 	if x["PayloadUUID"] != "FDA6C11F-26D6-5B0B-AC54-14D31A13022B" {
-		t.Fatalf("legacy UUID mismatch: %s", x["PayloadUUID"])
+		t.Fatalf("original UUID mismatch: %s", x["PayloadUUID"])
 	}
 }
 
-func TestRetainedPythonProfileFullParity(t *testing.T) {
-	python, e := exec.LookPath("python3")
-	if e != nil {
-		t.Skip("retained development parity requires python3")
-	}
-	for _, identity := range []string{"device-uuid", "uuid-é-😀", "uuid-<>&"} {
-		o := profileOptions{Identity: identity, Provisioner: "scep", SSID: "Campus", ServerDNS: "radius.example", SCEPURL: "https://ca.example/scep/scep"}
-		input, _ := json.Marshal(map[string]string{"identity": identity, "provisioner": o.Provisioner, "ssid": o.SSID, "radius_server_name": o.ServerDNS, "scep_url": o.SCEPURL})
-		cmd := exec.Command(python, "-c", `import runpy,sys,json,types
-m=runpy.run_path('../../tests/legacy/scripts/byod_profile.py')
-a=types.SimpleNamespace(**json.load(sys.stdin))
-sys.stdout.buffer.write(m['profile_bytes'](a,bytes([1,2,3]),'original-challenge'))`)
-		cmd.Stdin = bytes.NewReader(input)
-		old, e := cmd.Output()
-		if e != nil {
-			t.Fatal(e)
-		}
-		current, e := profileBytes(o, []byte{1, 2, 3}, "original-challenge")
-		if e != nil {
-			t.Fatal(e)
-		}
-		decode := func(data []byte) map[string]any {
-			var result map[string]any
-			if _, e := plist.Unmarshal(data, &result); e != nil {
-				t.Fatal(e)
+// Goldens were decoded from the original Python generator before its retirement.
+// Only the per-issuance OU is normalized; every other payload field is compared.
+func TestOriginalProfileGoldenFullParity(t *testing.T) {
+	for _, fixture := range []struct {
+		name, identity, file string
+	}{
+		{"ASCII", "device-uuid", "byod-ascii.json"},
+		{"Unicode", "uuid-é-😀", "byod-unicode.json"},
+		{"HTML", "uuid-<>&", "byod-html.json"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			golden, err := os.ReadFile("testdata/" + fixture.file)
+			if err != nil {
+				t.Fatal(err)
 			}
-			scep := result["PayloadContent"].([]any)[0].(map[string]any)["PayloadContent"].(map[string]any)
+			var expected map[string]any
+			if err := json.Unmarshal(golden, &expected); err != nil {
+				t.Fatal(err)
+			}
+			o := profileOptions{Identity: fixture.identity, Provisioner: "scep", SSID: "Campus", ServerDNS: "radius.example", SCEPURL: "https://ca.example/scep/scep"}
+			current, err := profileBytes(o, []byte{1, 2, 3}, "original-challenge")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if _, err := plist.Unmarshal(current, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			scep := decoded["PayloadContent"].([]any)[0].(map[string]any)["PayloadContent"].(map[string]any)
 			subject := scep["Subject"].([]any)
 			subject[1].([]any)[0].([]any)[1] = "<per-issuance-ou>"
-			return result
-		}
-		if !reflect.DeepEqual(decode(old), decode(current)) {
-			t.Fatalf("retained full profile differs for %q", identity)
-		}
+			// JSON gives plist integers and certificate bytes the same representation
+			// as the independent decoded golden (numbers and base64 respectively).
+			normalized, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual map[string]any
+			if err := json.Unmarshal(normalized, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(expected, actual) {
+				t.Fatalf("full profile differs from original golden for %q", fixture.identity)
+			}
+		})
 	}
 }

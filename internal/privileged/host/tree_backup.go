@@ -1,7 +1,6 @@
 package host
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -65,28 +64,11 @@ func (t *Transaction) snapshotRadius(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var manifest []byte
-	if t.receipt.WriterRetirement != nil {
-		manifest, err = nativeTreeManifest(radiusDirectory)
-		if err != nil {
-			return err
-		}
-		if err = privateWrite(filepath.Join(t.directory, "radius-manifest.json"), manifest, 0600); err != nil {
-			return err
-		}
-		t.receipt.RadiusManifestSHA256 = digestBytes(manifest)
-	}
 	if _, err = execute(ctx, "/usr/bin/cp", "--archive", "--no-dereference", "--", radiusDirectory, filepath.Join(t.directory, "radius")); err != nil {
 		return err
 	}
 	if _, err = execute(ctx, "/usr/bin/sync", "--file-system", t.directory); err != nil {
 		return err
-	}
-	if manifest != nil {
-		copied, err := nativeTreeManifest(filepath.Join(t.directory, "radius"))
-		if err != nil || !bytes.Equal(copied, manifest) {
-			return errors.New("native backup differs from original manifest")
-		}
 	}
 	t.receipt.TreeSaved = true
 	t.receipt.HadRadius = true

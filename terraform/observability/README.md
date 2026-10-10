@@ -2,7 +2,7 @@
 
 This is a generated provider-only entrypoint for the **existing Datadog resource owner**. It contains the same JSON dashboards, monitors and pipelines as the authoritative root `datadog*.tf` sources. It is not a second owner and must not be applied while another state manages any of these remote IDs. The disabled native dashboard companion stays outside both active modules.
 
-Generate or check it from the repository root without any cloud/state access:
+Generate it from the repository root before initializing or validating this entrypoint. The large `observability.tf` output is ignored rather than committed; its authoritative source remains the root `datadog*.tf` files. Generation and drift checking need no cloud/state access:
 
 ```sh
 (cd tools/dashboard && go run . observability --root ../.. --output ../../terraform/observability)
@@ -12,7 +12,7 @@ terraform -chdir=terraform/observability validate
 terraform -chdir=terraform/observability test
 ```
 
-The generator reads only the named monitoring source files, rejects unresolved/unsupported references, and emits `observability.tf`, `versions.tf` and the closed `ownership-handoff.json` inventory. Do not hand-edit those generated files. Inputs are reviewed nonsecret query/project/physical-host values. Supply Datadog credentials through the private operator environment (`DD_API_KEY`, `DD_APP_KEY`), never VM configuration or tfvars. The mock tests use neither credentials nor a remote backend.
+The generator reads only the named monitoring source files, rejects unresolved/unsupported references, and emits `observability.tf`, `versions.tf` and the closed `ownership-handoff.json` inventory. Do not hand-edit those generated files. Inputs are reviewed nonsecret query/project/physical-host values. Supply Datadog credentials through the private operator environment (`DD_API_KEY`, `DD_APP_KEY`), never VM configuration or tfvars. The mock tests generate a fresh temporary entrypoint from those same sources, copy the reviewed provider lock and test fixture, and use neither credentials nor a remote backend.
 
 ## Separately approved ownership transfer
 

@@ -13,8 +13,9 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/adapters/stepca"
 )
 
-// The original CA JSON is read from the byte-preserved startup fixture, never
-// synthesized from the new renderer. Terraform uses only mocked providers.
+// The original CA JSON templates were copied byte-for-byte from the retired
+// startup fixture, never synthesized from the new renderer. Terraform uses only
+// mocked providers.
 func TestTerraformCAWrappersAdoptOriginalECAndRSA(t *testing.T) {
 	if os.Getenv("C8021X_TERRAFORM_FIXTURE") != "1" {
 		t.Skip("explicit offline Terraform fixture required")
@@ -50,10 +51,6 @@ func TestTerraformCAWrappersAdoptOriginalECAndRSA(t *testing.T) {
 			}
 		}
 	}
-	source, err := os.ReadFile("../../tests/legacy/scripts/startup.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
 	o := stepca.RenderOptions{ECDNS: "ec.example.test", RSADNS: "rsa.example.test", ECKey: "cloudkms:projects/fixture-project/locations/global/keyRings/ca/cryptoKeys/ec/cryptoKeyVersions/1", RSAKey: "cloudkms:projects/fixture-project/locations/global/keyRings/ca/cryptoKeys/rsa/cryptoKeyVersions/1", ECDB: dsns["stepca"], RSADB: dsns["stepca_rsa"], ACME: "wifi-acme", SCEP: "wifi-scep", WebhookPort: 9444, RSAMaterial: stepca.Material{DecrypterCert: []byte("synthetic-cert"), DecrypterKey: []byte("synthetic-key")}}
 	replacer := strings.NewReplacer(
 		"$STEPPATH", "/etc/step-ca", "${smallstep_signing_key_uri}", o.ECKey, "${smallstep_rsa_signing_key_uri}", o.RSAKey,
@@ -63,12 +60,12 @@ func TestTerraformCAWrappersAdoptOriginalECAndRSA(t *testing.T) {
 		"$${RSA_SCEP_DECRYPTER_CERT_B64}", base64.StdEncoding.EncodeToString(o.RSAMaterial.DecrypterCert), "$${RSA_SCEP_DECRYPTER_KEY_B64}", base64.StdEncoding.EncodeToString(o.RSAMaterial.DecrypterKey))
 	for i, db := range []string{"stepca", "stepca_rsa"} {
 		t.Run(db, func(t *testing.T) {
-			delimiter := []string{"CAJSON", "CARSAJSON"}[i]
-			parts := strings.SplitN(string(source), "<<"+delimiter+"\n", 2)
-			if len(parts) != 2 {
-				t.Fatal("legacy JSON missing")
+			file := []string{"original-ec-ca.json.tmpl", "original-rsa-ca.json.tmpl"}[i]
+			source, err := os.ReadFile("testdata/" + file)
+			if err != nil {
+				t.Fatal(err)
 			}
-			original := strings.SplitN(parts[1], "\n"+delimiter, 2)[0]
+			original := string(source)
 			original = regexp.MustCompile(`(?m)^%\{ (?:if acme_webhook_url != "" ~|endif ~)\}\n`).ReplaceAllString(original, "")
 			raw := []byte(replacer.Replace(original))
 			var expected map[string]any

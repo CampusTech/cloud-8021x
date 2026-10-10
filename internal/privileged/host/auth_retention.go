@@ -92,13 +92,7 @@ func readAuthGeneration(generation string) (AuthGeneration, error) {
 	if domain.DecodeJSONStrict(data, &receipt) != nil || receipt.Phase != "complete" || receipt.ID != out.Reference {
 		return out, errors.New("auth generation lacks completed native attestation")
 	}
-	native := receipt.Native
-	// Existing in-place receipts predate independent native attestation. Their
-	// exact completed retirement tree remains valid; its writer guards are unchanged.
-	if native == nil && receipt.WriterRetirement != nil {
-		native = receipt.WriterRetirement.Native
-	}
-	if native["mods-enabled/auth_detail"] != out.ModuleSHA256 {
+	if receipt.Native["mods-enabled/auth_detail"] != out.ModuleSHA256 {
 		return out, errors.New("auth generation lacks completed native attestation")
 	}
 	return out, nil

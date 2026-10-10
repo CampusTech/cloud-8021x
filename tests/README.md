@@ -57,12 +57,21 @@ physical AP VLAN/DHCP behavior, real Windows/iOS/macOS profile renewal or office
 cutover/failover. Those remain staging gates before deployment. No suite uses
 production secrets, Fleet hosts, Datadog accounts or Terraform state.
 
-## Retained historical parity tests
+## Configuration and compatibility checks
 
-`python3 -m unittest discover -s tests -v` includes the previous Bash/Python runtime's
-parity tests under `tests/legacy`. Some require Terraform and `cryptography`.
-`tests/radius_integration.py` without `--native` exercises that legacy runtime;
-it is historical evidence, not validation of the new daemon.
+`python3 -m unittest discover -s tests -v` checks current Terraform, profile
+examples, release inputs and development runners. Terraform-backed cases require
+Terraform; installed loader scenarios also require `C8021X_LOADER_FIXTURE=1` and
+an owned Docker fixture. `tests/radius_integration.py` invokes the current native
+runner, including when `--native` is omitted.
+
+Small golden fixtures in `internal/provisioning/testdata` and
+`internal/app/testdata` preserve complete CA configuration and BYOD profile
+comparisons against the independently captured previous outputs. Their provenance
+is recorded beside the comparisons. They contain synthetic public configuration,
+not tenant credentials. The old executable Bash/Python runtime remains in Git
+history. Set `C8021X_TERRAFORM_FIXTURE=1` to execute the actual mocked Terraform
+CA-adoption comparison in the Go provisioning suite.
 
 Windows inventory assertions use API fixtures. Pilot the retained PowerShell
 collector, machine certificate, pre-login networking and renewal on an actual

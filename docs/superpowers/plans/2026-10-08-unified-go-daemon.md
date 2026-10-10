@@ -156,4 +156,17 @@ The latest user direction supersedes the required in-place OS-upgrade path and a
 
 Green must adopt the exact existing CA state and trust (including signers, decrypters, CA DBs, server identity, provisioners, Class/challenge/broker secrets). It starts accounting at an explicit fresh epoch and the first ongoing-session report is a baseline. Certificate freshness and pending/uncertain external command ownership still require authenticated source handoff; passive preparation does not authorize submissions, renewal, production export or shared network updates. Later activation coordinates single worker authority, NAS auth/accounting, and exactly EC/RSA/broker group replacements by the existing frontdoor owner, preserving stable routes/IPs/certificates and blue rollback.
 
-The thin loader stages authenticated immutable-generation artifacts with independent application/manifest/provenance/config/SQL-CA pins and root ownership; Go performs protected publication/rollback. Actual package/OS/native/two-node acceptance is distinct from synthetic Terraform and loader tests. See [ordered deployment contract](../../deployment/parallel-green.md) and [historical validation index](../../validation/README.md). Historical retired Python/startup/Terraform inputs live only under `tests/legacy` and do not validate the shipping runtime.
+The thin loader stages authenticated immutable-generation artifacts with independent application/manifest/provenance/config/SQL-CA pins and root ownership; Go performs protected publication/rollback. Actual package/OS/native/two-node acceptance is distinct from synthetic Terraform and loader tests. See [ordered deployment contract](../../deployment/parallel-green.md) and [validation guidance](../../validation/README.md). Retired Python/startup/Terraform inputs and checkpoint reports remain in Git history. Small independently captured CA/profile goldens preserve compatibility comparisons; they do not validate shipping artifacts.
+
+
+### Approved bounded simplification
+
+Remove retired executable test inputs and historical build/report archives rather
+than maintaining duplicate implementations. Preserve independently captured small
+CA/profile goldens and current Go/native integration assertions. Generate the
+large observability Terraform output on demand while retaining its provider lock,
+closed owner inventory and exact-ID plan guard. Remove unused in-place retirement
+and copied-tree recovery paths; retain original source fencing, passive parallel
+adoption, native attestation and normal green rollback. Record fresh affected
+checks and measured reduction in the validation scope review, then push one
+cleanup commit to PR39. This task authorizes no production deployment or merge.

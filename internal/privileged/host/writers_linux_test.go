@@ -108,138 +108,29 @@ func TestInstalledLegacyWriterFenceRetainsAndRestoresExactFiles(t *testing.T) {
 		t.Fatal(e)
 	}
 
-	// Replace the native tree as a real installation does. Missing Python alone
-	// is insufficient; only its completed transaction and exact cache can prove
-	// retirement. Preserve the old inode tree for the rollback check below.
+	// Parallel adoption leaves the source tree in place. An exact-byte copy
+	// cannot substitute different directory bindings for its original fence.
+	original, e := os.ReadFile(filepath.Join(transactionRoot, "writers", id, "receipt.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
 	if e = os.Rename(radiusDirectory, radiusParent+"/fixture-prior"); e != nil {
 		t.Fatal(e)
 	}
-	for _, p := range []string{radiusDirectory, "/etc/cloud-8021x", "/run/cloud-8021x/credentials", "/run/cloud-8021x-root"} {
-		if e = protectedDirectory(p, 0, 0, 0755); e != nil {
-			t.Fatal(e)
-		}
+	if output, e := exec.Command("/usr/bin/cp", "--archive", "--no-dereference", "--", radiusParent+"/fixture-prior", radiusDirectory).CombinedOutput(); e != nil {
+		t.Fatal(e, string(output))
 	}
-	if _, e = revalidateLegacyWriterFence(context.Background(), id, "radius-primary", nil, run); e == nil {
-		t.Fatal("unproven missing native modules accepted")
+	if _, e = fenceLegacyWriters(context.Background(), id, "radius-primary", hash, run, func() error { return nil }); e == nil {
+		t.Fatal("copied source tree substituted for original directory bindings")
 	}
-	tx, e := BeginTransaction(func(string) error { return nil })
-	if e != nil {
-		t.Fatal(e)
-	}
-	tree := map[string][]byte{"radiusd.conf": []byte("new-native")}
-	files := []File{{Path: "/usr/local/bin/cloud-8021x", Data: []byte("new-binary"), Mode: 0755}, {Path: "/etc/cloud-8021x/config.yaml", Data: []byte("new-config"), Mode: 0600}, {Path: "/run/cloud-8021x/credentials/policy", Data: []byte("pinned"), Mode: 0600}, {Path: PostgresCAFile, Data: []byte("old-database-trust"), Mode: 0644}}
-	cache, e := tx.CredentialCacheFiles(files, tree)
-	if e != nil {
-		t.Fatal(e)
-	}
-	for _, f := range append(append(files, cache...), File{Path: radiusDirectory + "/radiusd.conf", Data: tree["radiusd.conf"], Mode: 0600}) {
-		if e = Write(f); e != nil {
-			t.Fatal(e)
-		}
-	}
-	tx.receipt.WriterRetirement = &writerRetirement{Transition: id, ReceiptSHA256: digest, Native: map[string]string{"radiusd.conf": digestBytes(tree["radiusd.conf"])}}
-	tx.receipt.Phase = "complete"
-	if e = tx.CompleteInstalled(); e != nil {
-		t.Fatal(e)
-	}
-	layout := []File{files[2]}
-	if _, e = revalidateLegacyWriterFence(context.Background(), id, "radius-primary", layout, run); e != nil {
-		t.Fatalf("completed native retirement: %v", e)
-	}
-	if e = AppendWriterBinding(id, "radius-primary", hash, strings.Repeat("c", 64), digest); e != nil {
-		t.Fatal(e)
-	}
-	original, e := os.ReadFile(filepath.Join(transactionRoot, "writers", id, "receipt.json"))
-	if e != nil || digestBytes(original) != digest {
-		t.Fatal("upgrade changed original", e)
-	}
-	if e = os.WriteFile(radiusDirectory+"/foreign.py", []byte("unsafe"), 0600); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = revalidateLegacyWriterFence(context.Background(), id, "radius-primary", layout, run); e == nil {
-		t.Fatal("unbound native tree accepted")
+	afterRejected, e := os.ReadFile(filepath.Join(transactionRoot, "writers", id, "receipt.json"))
+	if e != nil || !bytes.Equal(afterRejected, original) {
+		t.Fatal("rejected copied source tree changed original proof", e)
 	}
 	if e = os.RemoveAll(radiusDirectory); e != nil {
 		t.Fatal(e)
 	}
 	if e = os.Rename(radiusParent+"/fixture-prior", radiusDirectory); e != nil {
-		t.Fatal(e)
-	}
-	// A copied rollback changes directory inodes. Only the exact completed
-	// transaction and original manifest may add a new protected observation.
-	rollback, e := BeginTransaction(func(string) error { return nil })
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = rollback.BindWriterRetirement(id, nil); e != nil {
-		t.Fatal(e)
-	}
-	if e = rollback.snapshotRadius(context.Background()); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Rename(radiusDirectory, radiusParent+"/fixture-before-copy"); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Mkdir(radiusDirectory, 0755); e != nil {
-		t.Fatal(e)
-	}
-	rollback.receipt.TreeSwapped = true
-	if e = rollback.restoreRadius(context.Background()); e != nil {
-		t.Fatal(e)
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
-		t.Fatal("unrecorded copy accepted")
-	}
-	if e = rollback.recordRollbackLineage(); e != nil {
-		t.Fatal(e)
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
-		t.Fatal("unfinished rollback accepted")
-	}
-	if e = rollback.persist("rolled-back"); e != nil {
-		t.Fatal(e)
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e != nil {
-		t.Fatal("completed exact copied rollback rejected", e)
-	}
-	originalDirectoryInfo, e := os.Stat(radiusDirectory)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = os.WriteFile(radiusDirectory+"/foreign.py", []byte("foreign"), 0600); e != nil {
-		t.Fatal(e)
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
-		t.Fatal("mutated rollback tree accepted")
-	}
-	if e = os.Remove(radiusDirectory + "/foreign.py"); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Chtimes(radiusDirectory, originalDirectoryInfo.ModTime(), originalDirectoryInfo.ModTime()); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Chmod(legacyVLANModule, 0600); e != nil {
-		t.Fatal(e)
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
-		t.Fatal("mutated rollback metadata accepted")
-	}
-	if e = os.Chmod(legacyVLANModule, 0644); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Rename(radiusDirectory, radiusParent+"/fixture-observed-copy"); e != nil {
-		t.Fatal(e)
-	}
-	if output, e := exec.Command("/usr/bin/cp", "--archive", "--", radiusParent+"/fixture-observed-copy", radiusDirectory).CombinedOutput(); e != nil {
-		t.Fatal(e, string(output))
-	}
-	if e = verifyWriterMasks(mustWriterReceipt(t, id)); e == nil {
-		t.Fatal("arbitrary exact-byte copy reused stale tuple observation")
-	}
-	if e = os.RemoveAll(radiusDirectory); e != nil {
-		t.Fatal(e)
-	}
-	if e = os.Rename(radiusParent+"/fixture-observed-copy", radiusDirectory); e != nil {
 		t.Fatal(e)
 	}
 	if err = restoreLegacyWriterFiles(id, run); err != nil {
@@ -432,13 +323,4 @@ func TestInstalledLegacyWriterRecoversExactStaleMaskTemporary(t *testing.T) {
 	if e := maskWriterUnit(path); e == nil {
 		t.Fatal("foreign temporary accepted")
 	}
-}
-
-func mustWriterReceipt(t *testing.T, id string) writerReceipt {
-	t.Helper()
-	r, _, e := loadWriterReceipt(id)
-	if e != nil {
-		t.Fatal(e)
-	}
-	return r
 }

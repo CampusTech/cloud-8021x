@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def gauge_query(query, samples):
     """Evaluate the dashboard's simple gauge/count aggregation on fixtures."""
-    match = re.search(r'(min|max|sum):([a-z_.]+)\{', query)
+    match = re.match(r'(min|max|sum):([a-z0-9_.]+)\{', query)
+    if match is None:
+        raise AssertionError('Unsupported dashboard gauge query')
     aggregation, metric = match.groups()
     scoped_hosts = set(re.findall(r'host:([a-z0-9-]+)', query))
     values = [v for host, v in samples.get(metric, {}).items()
@@ -49,26 +51,27 @@ def widget_value(samples):
 
 class RadiusOnlineCountTests(unittest.TestCase):
     def test_two_healthy_nodes_count_as_two(self):
-        self.assertEqual(widget_value({'freeradius.up': {'radius-primary': 1, 'radius-secondary': 1}}), 2)
+        self.assertEqual(widget_value({'cloud8021x.backend.up': {'radius-primary': 1, 'radius-secondary': 1}}), 2)
 
     def test_down_node_is_not_online(self):
-        self.assertEqual(widget_value({'freeradius.up': {'radius-primary': 1, 'radius-secondary': 0}}), 1)
+        self.assertEqual(widget_value({'cloud8021x.backend.up': {'radius-primary': 1, 'radius-secondary': 0}}), 1)
 
     def test_missing_node_is_not_online(self):
-        self.assertEqual(widget_value({'freeradius.up': {'radius-primary': 1, 'radius-secondary': None}}), 1)
+        self.assertEqual(widget_value({'cloud8021x.backend.up': {'radius-primary': 1, 'radius-secondary': None}}), 1)
 
     def test_legacy_alias_cannot_double_count_same_hosts(self):
         values = {'radius-primary': 1, 'radius-secondary': 1}
-        self.assertEqual(widget_value({'freeradius.up': values, 'freeradius.freeradius_up': values}), 2)
+        self.assertEqual(widget_value({'cloud8021x.backend.up': values, 'freeradius.up': values,
+                                       'freeradius.freeradius_up': values}), 2)
 
     def test_canary_and_unrelated_hosts_do_not_count(self):
-        self.assertEqual(widget_value({'freeradius.up': {
+        self.assertEqual(widget_value({'cloud8021x.backend.up': {
             'radius-primary': 1, 'radius-secondary': 1,
             'radius-primary-canary': 1, 'unrelated': 1,
         }}), 2)
 
     def test_all_down_nodes_count_as_zero(self):
-        self.assertEqual(widget_value({'freeradius.up': {'radius-primary': 0, 'radius-secondary': 0}}), 0)
+        self.assertEqual(widget_value({'cloud8021x.backend.up': {'radius-primary': 0, 'radius-secondary': 0}}), 0)
 
     def test_current_health_does_not_follow_historical_dashboard_window(self):
         widget = online_widget()

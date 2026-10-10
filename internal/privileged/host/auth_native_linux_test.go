@@ -190,23 +190,41 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, name := range []string{"tampered native hash", "incomplete receipt"} {
+	for _, name := range []string{"tampered native hash", "incomplete receipt", "retirement receipt", "null retirement receipt"} {
 		t.Run(name, func(t *testing.T) {
 			var receipt Receipt
 			if e := json.Unmarshal(completed, &receipt); e != nil {
 				t.Fatal(e)
 			}
-			if receipt.WriterRetirement != nil || receipt.Native["mods-enabled/auth_detail"] == "" {
-				t.Fatal("green auth module must be attested without legacy retirement")
+			if receipt.Native["mods-enabled/auth_detail"] != first.ModuleSHA256 {
+				t.Fatal("native auth module lacks exact independent attestation")
 			}
 			if name == "tampered native hash" {
 				receipt.Native["mods-enabled/auth_detail"] = strings.Repeat("0", 64)
-			} else {
+			} else if name == "incomplete receipt" {
 				receipt.Phase = "prepared"
 			}
 			raw, e := json.Marshal(receipt)
 			if e != nil {
 				t.Fatal(e)
+			}
+			if strings.Contains(name, "retirement") {
+				var fields map[string]json.RawMessage
+				if e = json.Unmarshal(raw, &fields); e != nil {
+					t.Fatal(e)
+				}
+				retirement := json.RawMessage(`null`)
+				if name == "retirement receipt" {
+					retirement, e = json.Marshal(map[string]any{"Transition": strings.Repeat("f", 64), "ReceiptSHA256": strings.Repeat("0", 64), "Native": receipt.Native})
+					if e != nil {
+						t.Fatal(e)
+					}
+				}
+				fields["writer_retirement"] = retirement
+				raw, e = json.Marshal(fields)
+				if e != nil {
+					t.Fatal(e)
+				}
 			}
 			if e = os.WriteFile(receiptPath, raw, 0600); e != nil {
 				t.Fatal(e)

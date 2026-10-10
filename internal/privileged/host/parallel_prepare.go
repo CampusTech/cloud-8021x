@@ -135,7 +135,7 @@ func recoverParallelPrepare(ctx context.Context, c config.Config, release, refer
 		return "", "", err
 	}
 	var saved Receipt
-	if domain.DecodeJSONStrict(raw, &saved) != nil || saved.ID != reference || saved.WasRunning || saved.WriterRetirement != nil {
+	if domain.DecodeJSONStrict(raw, &saved) != nil || saved.ID != reference || saved.WasRunning {
 		return "", "", errors.New("original passive installation receipt rejected")
 	}
 	transaction := &Transaction{receipt: saved, directory: directory}

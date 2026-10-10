@@ -139,11 +139,60 @@ Application cleanup verification:
   in-place Debian instructions and passive-readiness claims were corrected.
 
 These are local component results for the application code in this cleanup
-commit. GitHub CI must independently validate the pushed revision. The PR now
-changes 628 files, down from 1,031 at the oversized-harness checkpoint. No new
+commit. GitHub CI must independently validate the pushed revision. At `82a7a5b`,
+the PR changed 628 files, down from 1,031 at the oversized-harness checkpoint. No new
 VM controller or replacement acceptance framework was added. Broad subsystem
 review does not imply line-by-line approval of every changed file.
 
 Actual cloud IAM/KMS, full systemd lifetime, inherited production CA state and
 physical client/cutover acceptance remain outside the local suite's scope. No
 production deployment, traffic switch, Fleet apply, merge or release was performed.
+
+
+## Bounded size cleanup (2026-10-10)
+
+The approved follow-up removes executable retired-runtime copies and their old
+parity suites, historical implementation reports, unused Debian 12 build assets,
+and in-place writer-retirement/copied-tree recovery machinery. Original source
+fencing still requires exact inode bindings; ordinary green installation rollback
+and independently attested native configuration remain. Strict receipt decoding
+rejects retired fields, including null retirement evidence.
+
+Five independently captured CA/profile golden fixtures replace the old executable
+comparison inputs. The CA templates match the original here-doc bytes; the three
+full profile outputs normalize only the per-issuance OU. Current Go rendering,
+actual mocked Terraform CA adoption, native packet entrypoints and Windows
+PowerShell inventory remain. Mixed configuration tests now exercise current
+Terraform and the real Go issuer, including independent challenge signatures.
+
+The duplicate 2,303-line observability Terraform output is generated on demand
+from the authoritative root monitoring sources. The reviewed provider lock,
+closed ownership inventory and actual mocked owner-plan assertions remain.
+Generation and the ownership guard do not access remote state or transfer owners.
+
+Fresh verification for this cleanup:
+
+- Root race suite: 38 tested packages pass; dashboard tooling race suite passes.
+  Both compatible pinned linters report zero issues. The surviving Python suite
+  passes 76 tests; three opt-in actual monitoring-contract cases are skipped.
+  Its stale online-count evaluator was corrected to accept the current metric
+  name; the dashboard itself did not change.
+- Actual installed ARM64 transaction publication/rollback and private sudo tests
+  pass. Packaged native status, policy activation, package rollback and maintainer
+  suppression also pass. A latent test listener-registration race was reproduced
+  and fixed by synchronously closing its owned socket; runtime checks are unchanged. Native auth retention covers independent attestation, restart/stop,
+  tampering and unsupported retirement receipts. Source fencing, interrupted
+  recovery, original inode restoration and fixed-path read-only guards pass.
+- Owned TLS PostgreSQL source capture, parallel sessions, epoch isolation,
+  signed handoff/activation and aggregate connection budgets pass. The opt-in
+  CA-wrapper test executes the actual mocked Terraform plans and goldens.
+- Independent cross-reviews found no blocker in the reduced receipt/rollback
+  paths or retained compatibility/ownership assertions.
+
+Compared with `82a7a5b`, this removes about 18,900 maintained lines. PR additions
+fall from 71,018 to about 60,400; removing base files still counts as a changed
+file, so the changed-file total falls less sharply. The repository retains five
+small independent goldens rather than the retired executable fixture tree.
+
+The local checks retain the acceptance limits above. No new acceptance framework,
+production change, Fleet apply, merge, release or traffic switch is included.

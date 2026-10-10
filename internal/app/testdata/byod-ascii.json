@@ -1,0 +1,70 @@
+{
+  "PayloadContent": [
+    {
+      "PayloadContent": {
+        "Challenge": "original-challenge",
+        "Key Usage": 5,
+        "KeyIsExtractable": false,
+        "KeyType": "RSA",
+        "Keysize": 2048,
+        "Name": "scep",
+        "Subject": [
+          [
+            [
+              "CN",
+              "device-uuid"
+            ]
+          ],
+          [
+            [
+              "OU",
+              "<per-issuance-ou>"
+            ]
+          ]
+        ],
+        "URL": "https://ca.example/scep/scep"
+      },
+      "PayloadDisplayName": "Wi-Fi device identity",
+      "PayloadIdentifier": "org.cloud8021x.byod.86980A63-31AB-5A5B-AC1F-0872B42917FF",
+      "PayloadType": "com.apple.security.scep",
+      "PayloadUUID": "86980A63-31AB-5A5B-AC1F-0872B42917FF",
+      "PayloadVersion": 1
+    },
+    {
+      "PayloadContent": "AQID",
+      "PayloadDisplayName": "RADIUS server root CA",
+      "PayloadIdentifier": "org.cloud8021x.byod.90F21257-ABBD-51E4-9293-07576C8CCAC8",
+      "PayloadType": "com.apple.security.root",
+      "PayloadUUID": "90F21257-ABBD-51E4-9293-07576C8CCAC8",
+      "PayloadVersion": 1
+    },
+    {
+      "AutoJoin": true,
+      "EAPClientConfiguration": {
+        "AcceptEAPTypes": [
+          13
+        ],
+        "PayloadCertificateAnchorUUID": [
+          "90F21257-ABBD-51E4-9293-07576C8CCAC8"
+        ],
+        "TLSAllowTrustExceptions": false,
+        "TLSTrustedServerNames": [
+          "radius.example"
+        ]
+      },
+      "EncryptionType": "WPA",
+      "PayloadCertificateUUID": "86980A63-31AB-5A5B-AC1F-0872B42917FF",
+      "PayloadDisplayName": "Wi-Fi (Campus)",
+      "PayloadIdentifier": "org.cloud8021x.byod.F1855E4E-D503-5FFD-A571-E7F24418C0A5",
+      "PayloadType": "com.apple.wifi.managed",
+      "PayloadUUID": "F1855E4E-D503-5FFD-A571-E7F24418C0A5",
+      "PayloadVersion": 1,
+      "SSID_STR": "Campus"
+    }
+  ],
+  "PayloadDisplayName": "Wi-Fi (BYOD SCEP)",
+  "PayloadIdentifier": "org.cloud8021x.byod.FDA6C11F-26D6-5B0B-AC54-14D31A13022B",
+  "PayloadType": "Configuration",
+  "PayloadUUID": "FDA6C11F-26D6-5B0B-AC54-14D31A13022B",
+  "PayloadVersion": 1
+}

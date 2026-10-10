@@ -89,5 +89,5 @@ not available.
 signed handoff, native EAP/accounting, CA issuance, Agent checks and Collector
 persistence. Those results do not prove systemd boot/reboot, cloud KMS/IAM,
 production CA adoption, two-node cutover or physical-device renewal. Those remain
-staging gates before production activation. Historical fixtures under `tests/legacy`
-are development evidence and are never installed as a server runtime.
+staging gates before production activation. Retired implementations remain in Git
+history; small independent CA/profile goldens are development-only comparisons.

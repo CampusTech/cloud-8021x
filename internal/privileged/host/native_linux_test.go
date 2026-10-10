@@ -132,20 +132,29 @@ func TestInstalledNativeStatusAndPolicyActivation(t *testing.T) {
 	}
 	expected.Ready = true
 	var local *http.Server
+	var localListener net.Listener
+	closePolicy := func() {
+		// Close the owned socket even when Serve has not registered it yet.
+		if localListener != nil {
+			_ = localListener.Close()
+			localListener = nil
+		}
+		if local != nil {
+			_ = local.Close()
+			local = nil
+		}
+	}
 	startPolicy := func() {
 		t.Helper()
 		listener, e := net.Listen("tcp", "10.9.0.1:18122")
 		if e != nil {
 			t.Fatal(e)
 		}
+		localListener = listener
 		local = &http.Server{Handler: native.ReadinessHandler(secret, []string{"10.9.0.1"}, func(context.Context) (native.Readiness, error) { return expected, nil }), ReadHeaderTimeout: time.Second}
-		go func() { _ = local.Serve(listener) }()
+		go func(server *http.Server) { _ = server.Serve(listener) }(local)
 	}
-	defer func() {
-		if local != nil {
-			_ = local.Close()
-		}
-	}()
+	defer closePolicy()
 	startPolicy()
 	backend := &RadiusBackend{caHealth: func(context.Context) error { return nil }, Local: "10.9.0.1", Peer: "10.9.0.2", Secret: secret, Expected: expected, Companions: true}
 	// The peer authentication protocol is exercised separately; this test controls
@@ -189,8 +198,7 @@ func TestInstalledNativeStatusAndPolicyActivation(t *testing.T) {
 			if process != nil {
 				t.Error("native process still listening during policy restart")
 			}
-			_ = local.Close()
-			local = nil
+			closePolicy()
 			startPolicy()
 		case "start freeradius.service":
 			if e := native.ProbeReadiness(ctx, "http://10.9.0.1:18122", secret, expected); e != nil {

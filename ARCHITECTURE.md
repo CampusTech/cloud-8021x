@@ -8,7 +8,8 @@ OpenTelemetry. The shared application ledger uses HA Cloud SQL PostgreSQL.
 The [deployment guide](docs/deployment/parallel-green.md) describes the new
 parallel stack. [Daemon operations](docs/daemon-operations.md) describes the
 shipping commands. Previous Bash/Python and local MariaDB implementations are
-retained only in Git history and development fixtures under `tests/legacy`.
+retained only in Git history. Small independent CA/profile goldens preserve
+compatibility comparisons without retaining the old runtime.
 
 ## Components and boundaries
 
