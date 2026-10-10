@@ -181,7 +181,7 @@ func TestPostgresRoleIsolationAndHijack(t *testing.T) {
 			t.Fatalf("native privilege accepted: %s", q)
 		}
 	}
-	for _, q := range []string{"UPDATE ledger.legacy_usage_floor SET credit_start='0'", "DELETE FROM ledger.legacy_usage_floor", "INSERT INTO ledger.legacy_usage_floor(singleton,transition,credit_start) VALUES(true,repeat('a',64),'0')", "CREATE TABLE ledger.evil(i int)", "CREATE TEMP TABLE sessions(i int)", "CREATE ROLE evil", "ALTER TABLE ledger.intake ADD evil text", "UPDATE ledger.observations SET reason='rewritten'", "DELETE FROM ledger.intervals"} {
+	for _, q := range []string{"CREATE TABLE ledger.evil(i int)", "CREATE TEMP TABLE sessions(i int)", "CREATE ROLE evil", "ALTER TABLE ledger.intake ADD evil text", "UPDATE ledger.observations SET reason='rewritten'", "DELETE FROM ledger.intervals"} {
 		if _, err := runtime.pool.Exec(ctx, q); err == nil {
 			t.Fatalf("runtime privilege accepted: %s", q)
 		}

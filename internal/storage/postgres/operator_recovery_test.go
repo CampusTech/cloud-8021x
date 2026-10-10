@@ -63,7 +63,7 @@ func TestPostgresOperatorRecoveryRetainsOriginalAndNeverResends(t *testing.T) {
 		t.Fatal(e)
 	}
 	for _, node := range []string{"radius-primary", "radius-secondary"} {
-		raw, _ := json.Marshal(migration.NodeState{Version: 1, Node: node, Inventory: migration.UnavailableInventory(), ClassKeySHA256: hash, ProviderCaches: map[string]json.RawMessage{}})
+		raw, _ := json.Marshal(migration.NodeState{Version: 1, Node: node, Inventory: json.RawMessage(`{"version":2,"updated_at":0,"identities":{},"certificates":{},"hardware_serials":{}}`), ClassKeySHA256: hash, ProviderCaches: map[string]json.RawMessage{}})
 		if e := gate.With(ctx, "fixture-worker", func(ctx context.Context) error { return s.RecordWorkerState(ctx, id, hash, raw) }); e != nil {
 			t.Fatal(e)
 		}

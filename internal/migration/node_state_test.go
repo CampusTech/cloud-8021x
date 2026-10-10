@@ -10,7 +10,7 @@ import (
 )
 
 func TestCurrentExportRetainsTypedProviderAndSourceBindings(t *testing.T) {
-	n := NodeState{Version: 1, Node: "radius-primary", ClassKeySHA256: strings.Repeat("a", 64), Inventory: UnavailableInventory(), ProviderCaches: map[string]json.RawMessage{}}
+	n := NodeState{Version: 1, Node: "radius-primary", ClassKeySHA256: strings.Repeat("a", 64), Inventory: json.RawMessage(`{"version":2,"updated_at":0,"identities":{},"certificates":{},"hardware_serials":{}}`), ProviderCaches: map[string]json.RawMessage{}}
 	for _, bad := range []json.RawMessage{json.RawMessage(`{"Key":"short","Batch":{}}`), json.RawMessage(`{"Key":"` + strings.Repeat("a", 64) + `","Batch":{"ProviderID":"foreign"}}`)} {
 		n.ProviderCaches["p"] = bad
 		raw, _ := json.Marshal(n)
@@ -47,7 +47,7 @@ func TestCurrentExportPositiveOriginalProviderAndSourceRoundTrip(t *testing.T) {
 		ConfigSHA256 string
 		Candidates   []domain.SourceCandidate
 	}{strings.Repeat("c", 64), candidates})
-	original := NodeState{Version: 1, Node: "radius-primary", ClassKeySHA256: strings.Repeat("a", 64), Inventory: UnavailableInventory(), ProviderCaches: map[string]json.RawMessage{"p": cache}, Discovery: discovery, ProtectedSources: protected}
+	original := NodeState{Version: 1, Node: "radius-primary", ClassKeySHA256: strings.Repeat("a", 64), Inventory: json.RawMessage(`{"version":2,"updated_at":0,"identities":{},"certificates":{},"hardware_serials":{}}`), ProviderCaches: map[string]json.RawMessage{"p": cache}, Discovery: discovery, ProtectedSources: protected}
 	raw, _ := json.Marshal(original)
 	decoded, e := DecodeNodeState(raw)
 	if e != nil || !reflect.DeepEqual(decoded, original) {
@@ -56,16 +56,5 @@ func TestCurrentExportPositiveOriginalProviderAndSourceRoundTrip(t *testing.T) {
 	again, _ := json.Marshal(decoded)
 	if string(again) != string(raw) {
 		t.Fatal("roundtrip changed original times/scope/cache binding")
-	}
-}
-
-func TestCurrentLegacyDeviceProjectionKeepsAgeAndAmbiguity(t *testing.T) {
-	raw := []byte(`{"version":2,"updated_at":1791453600.125,"identities":{"known":{"device_id":"fleet:1","enrolled":true,"groups":[]},"ambiguous":null,"unknown":{"device_id":"fleet:2","enrolled":true,"groups":[]}},"certificates":{},"hardware_serials":{},"devices":{"fleet:1":{"serial":"original","device_name":"Current Mac","device_model":"Model","device_owner":"owner@example.invalid"}}}`)
-	out, e := LegacyDevices(raw)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if string(out) != `{"known":{"email":"owner@example.invalid","device_name":"Current Mac","device_model":"Model","ts":1791453600.125}}` {
-		t.Fatal("invented or changed device metadata", string(out))
 	}
 }

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseArtifactsTests(unittest.TestCase):
-    def test_both_architectures_one_binary_aliases_and_mandatory_checksums(self):
+    def test_both_architectures_unified_binary_and_mandatory_checksums(self):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(['bash', str(ROOT / 'scripts/build-release.sh'), directory],
                                     cwd=ROOT, capture_output=True, text=True)
@@ -20,16 +20,14 @@ class ReleaseArtifactsTests(unittest.TestCase):
                 digest, name = line.split()
                 self.assertNotIn(name, checksums)
                 checksums[name] = digest
-            self.assertEqual(len(checksums), 4)
+            self.assertEqual(set(checksums), {'cloud-8021x-linux-amd64', 'cloud-8021x-linux-arm64'})
+            self.assertEqual({path.name for path in outputs.iterdir()}, set(checksums) | {'SHA256SUMS'})
             for arch, machine in [('amd64', 62), ('arm64', 183)]:
                 name = f'cloud-8021x-linux-{arch}'
                 data = (outputs / name).read_bytes()
                 self.assertEqual(data[:4], b'\x7fELF')
                 self.assertEqual(int.from_bytes(data[18:20], 'little'), machine)
-                alias = f'acme-authz-webhook-linux-{arch}'
-                self.assertEqual((outputs / alias).read_bytes(), data)
                 self.assertEqual(checksums[name], hashlib.sha256(data).hexdigest())
-                self.assertEqual(checksums[alias], checksums[name])
                 info = subprocess.check_output(['go', 'version', '-m', str(outputs / name)], text=True)
                 self.assertIn('go1.27.2', info)
                 self.assertIn('CGO_ENABLED=0', info)

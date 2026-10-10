@@ -75,8 +75,4 @@ if [ -e "$incoming" ] || [ -L "$incoming" ]; then
 fi
 mv -T "$stage" "$incoming"
 trap - EXIT
-%{ if parallel ~}
 exec "$incoming/cloud-8021x" bootstrap prepare --incoming
-%{ else ~}
-exec "$incoming/cloud-8021x" bootstrap --incoming
-%{ endif ~}

@@ -8,15 +8,12 @@ mkdir /tmp/cloud8021x-release
 scripts/build-release.sh /tmp/cloud8021x-release
 ```
 
-Each supported architecture has one static application binary. The
-`acme-authz-webhook-linux-amd64` and `acme-authz-webhook-linux-arm64` assets are
-byte-identical copies of their `cloud-8021x` counterpart. Installing or copying
-one under `acme-authz-webhook` selects the existing environment-based webhook
-commands; the canonical name selects the unified YAML-based daemon. No separate
-webhook module, version or executable build exists. The compatibility name is
-for a controlled transition, never a second concurrently enabled server.
+Each supported architecture has one static `cloud-8021x-linux-amd64` or
+`cloud-8021x-linux-arm64` application binary. Executable naming does not change
+its commands: all names use the unified YAML-based daemon. The old standalone
+webhook runtime and its release aliases have been removed.
 
-`SHA256SUMS` covers every binary and alias. Verify its values against trusted,
+`SHA256SUMS` covers both application binaries. Verify its values against trusted,
 pinned release configuration before executing any incoming artifact. Downloading
 an untrusted checksum beside a binary does not establish authenticity. The
 protected bootstrap also verifies its fixed manifest and package checksums.

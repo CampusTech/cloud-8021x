@@ -20,8 +20,7 @@ func createTransitions(ctx context.Context, tx pgx.Tx, r Roles) error {
 		`CREATE TABLE IF NOT EXISTS bootstrap_private.worker_fences(transition text NOT NULL REFERENCES bootstrap_private.transitions(id),node text NOT NULL CHECK(node IN ('radius-primary','radius-secondary')),receipt_sha256 text NOT NULL CHECK(receipt_sha256 ~ '^[0-9a-f]{64}$'),PRIMARY KEY(transition,node))`,
 		`CREATE TABLE IF NOT EXISTS bootstrap_private.worker_states(transition text NOT NULL,node text NOT NULL,receipt_sha256 text NOT NULL,document bytea NOT NULL,PRIMARY KEY(transition,node),FOREIGN KEY(transition,node) REFERENCES bootstrap_private.worker_fences(transition,node))`,
 		`REVOKE ALL ON bootstrap_private.worker_states FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
-		`CREATE TABLE IF NOT EXISTS bootstrap_private.legacy_usage(transition text PRIMARY KEY REFERENCES bootstrap_private.transitions(id),document bytea NOT NULL,hosts text[] NOT NULL)`,
-		`REVOKE ALL ON bootstrap_private.transitions,bootstrap_private.writer_fences,bootstrap_private.worker_fences,bootstrap_private.legacy_usage FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
+		`REVOKE ALL ON bootstrap_private.transitions,bootstrap_private.writer_fences,bootstrap_private.worker_fences FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
 		`CREATE OR REPLACE FUNCTION ledger.workers_allowed(wanted text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$ SELECT EXISTS(SELECT 1 FROM bootstrap_private.transitions t WHERE t.id=wanted AND t.enabled AND NOT t.blocked AND (SELECT count(*) FROM bootstrap_private.writer_fences f WHERE f.transition=t.id)=2) $$`,
 		`CREATE OR REPLACE FUNCTION ledger.lock_worker_transition(wanted text) RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$ DECLARE allowed boolean; BEGIN SELECT t.enabled AND NOT t.blocked AND (SELECT count(*) FROM bootstrap_private.writer_fences f WHERE f.transition=t.id)=2 INTO allowed FROM bootstrap_private.transitions t WHERE t.id=wanted FOR SHARE OF t; RETURN coalesce(allowed,false); END $$`,
 		`REVOKE ALL ON FUNCTION ledger.lock_worker_transition(text) FROM PUBLIC,` + pgx.Identifier{r.Native}.Sanitize(),
@@ -34,7 +33,7 @@ func createTransitions(ctx context.Context, tx pgx.Tx, r Roles) error {
 			return err
 		}
 	}
-	return createLegacyBundle(ctx, tx, r)
+	return createLegacyCollection(ctx, tx, r)
 }
 
 // RecordWriterFence accepts only a live root maintenance transaction. Receipt
@@ -112,21 +111,6 @@ func (s *Store) WorkersAllowed(ctx context.Context, id string) error {
 	}
 	if !allowed {
 		return errors.New("background processing fenced pending migration")
-	}
-	return nil
-}
-func (s *Store) EnableImportedTransition(ctx context.Context, id string) error {
-	if err := s.RequireWriterFences(ctx, id); err != nil {
-		return err
-	}
-	ctx, cancel := s.bounded(ctx)
-	defer cancel()
-	tag, err := s.pool.Exec(ctx, `UPDATE bootstrap_private.transitions SET enabled=true WHERE id=$1 AND NOT blocked AND EXISTS(SELECT 1 FROM ledger.import_markers WHERE id='state:'||$1) AND (SELECT count(*) FROM bootstrap_private.writer_fences f WHERE f.transition=$1)=2`, id)
-	if err != nil {
-		return safeError(err)
-	}
-	if tag.RowsAffected() != 1 {
-		return errors.New("complete shared state import required")
 	}
 	return nil
 }

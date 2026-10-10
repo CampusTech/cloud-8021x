@@ -216,3 +216,16 @@ The latest user direction supersedes the required in-place OS-upgrade path and a
 Green must adopt the exact existing CA state and trust (including signers, decrypters, CA DBs, server identity, provisioners, Class/challenge/broker secrets). It starts accounting at an explicit fresh epoch and the first ongoing-session report is a baseline. Certificate freshness and pending/uncertain external command ownership still require authenticated source handoff; passive preparation does not authorize submissions, renewal, production export or shared network updates. Later activation coordinates single worker authority, NAS auth/accounting, and exactly EC/RSA/broker group replacements by the existing frontdoor owner, preserving stable routes/IPs/certificates and blue rollback.
 
 The thin loader stages authenticated immutable-generation artifacts with independent application/manifest/provenance/config/SQL-CA pins and root ownership; Go performs protected publication/rollback. Actual package/OS/native/two-node acceptance is distinct from synthetic Terraform and loader tests. See [ordered deployment contract](../../deployment/parallel-green.md) and [historical validation index](../../validation/README.md). Historical retired Python/startup/Terraform inputs live only under `tests/legacy` and do not validate the shipping runtime.
+
+
+## Application scope cleanup (2026-10-10)
+
+Parallel deployment is the supported protected installation path. Retire the
+in-place state migrate/export/fence commands, accounting-history import/baseline
+logic and its MySQL dependency, legacy display-cache loading and the separate
+environment-based webhook basename entrypoint. Publish only the canonical Go
+binary for each architecture. Shared webhook protocols, signed original
+certificate observations, pending-command quarantine, exact CA adoption and
+physical worker-fence/rollback receipts remain required. Accounting starts at the
+explicit fresh green epoch; this does not authorize dropping inherited identity
+or uncertain external work. No production deployment is part of this cleanup.

@@ -1,12 +1,15 @@
 # Shared PostgreSQL contract
 
-The application owns `ledger` in the dedicated `cloud8021x` PostgreSQL 16+
-database. FreeRADIUS ships an INSERT adapter, not a schema migrator. There are no
-stock `radcheck`, `radreply`, `radacct`, or SQL authentication/client lookup tables.
+The application owns `ledger` in a dedicated PostgreSQL 16+ database. Parallel
+green deployments use `cloud8021x_<deployment with hyphens replaced by underscores>`
+and separate runtime/native roles; see [parallel adoption](../docs/parallel-adoption.md).
+FreeRADIUS ships an INSERT adapter, not a schema migrator. There are no stock `radcheck`, `radreply`, `radacct`, or SQL authentication/client lookup tables.
 
 Run `postgres.NewMigration(...).Migrate(ctx, Roles{Runtime: ..., Native: ...})`
 with the separate migration credential. Migrations use advisory transaction lock
-`(8021,1)`, reject other database names before DDL, and store schema version 3 (v1 upgrades with collection scope indexes; v2 adds optional termination display metadata).
+`(8021,1)`, reject a database that differs from the configured application identity
+before DDL, and store schema version 4. Version 2 adds collection scope indexes;
+version 3 adds optional termination display metadata; version 4 is reserved.
 The runtime/native roles must already exist without elevated flags, membership,
 or object ownership. Migrations reset grants on application objects and grant:
 
@@ -89,10 +92,10 @@ Google's instance CA mode/certificate before installing that configuration.
 
 `ProcessOne` processes one raw record; call with a valid retained Class key and
 max age. `ResolveIntake` resolves a stable intake identity after uncertainty.
-`accounting.Normalize`/`Apply` are pure; PostgreSQL is authoritative. Usage IDs
+`accounting.Normalize`/`ApplyEpoch` are pure; PostgreSQL is authoritative. Usage IDs
 hash exact session and counter coordinates and exclude receipt/delivery fields.
 Raw observations with invalid Class remain unattributed and are quarantined;
-legacy usage state can retain earlier verified session attribution.
+a native session can retain earlier verified attribution for its exact session key.
 
 `Reserve`, `Claim`, `StartAttempt`, `FinishAttempt`, `LookupWork`, `Renew`, and
 `ReconcileSuccess` support collection and OTLP outbox work. Use `kind="outbox"`
@@ -108,17 +111,23 @@ attempt/quarantine history. It never permits blind resend.
 advances a native final-auth log cursor and appends its outbox record. Conflicting
 stable event content cannot advance a cursor. Use `Cursor` for recovery.
 
-`ImportOnce(id, checksum, callback)` holds advisory transaction lock `(8021,2)`
-and commits callback state plus its import marker atomically. The callback gets a
-`pgx.Tx`, permitting Task 9 to import exact high-water/precision/terminal state and
-pending/ambiguous work using this documented schema. Parse/validate legacy data
-before the callback; stop/fence legacy and new processing workers during import.
-A repeated checksum is a no-op; changing a used marker's checksum is an error.
-The migration/import methods do not fence legacy processes themselves.
+`PrepareCollectionEpoch` requires protected maintenance scope and the exact
+deployment-bound database identity. The epoch, transition and pair manifest are
+immutable. Initial preparation rejects existing accounting intake/sessions,
+observations, intervals, work, auth cursors or import markers. Signed parallel
+handoff preserves certificate observations and pending Fleet command guards;
+it imports no accounting/checkpoint/outbox history.
 
-No retention delete job is installed here: payloads, attempts, reconciliation
-records, and terminal/high-water state remain available for explicit migration,
-rollback and recovery policy. This is not end-to-end exactly-once telemetry.
+`ProcessOne` applies the immutable collection epoch before creating business work.
+Pre-epoch receipts create no credit/export. The first ongoing Interim/Stop learns
+a zero-credit baseline; subsequent measured intervals and new Starts follow
+normal accounting semantics. Legacy accounting import and its per-event baseline
+gate are retired. The `import_markers` table remains an existing-state guard.
+
+Payloads, attempts, reconciliations and current session counters remain available
+for explicit retained-work recovery. Reverse handoff preserves green accounting
+in green; it does not create a compatible legacy archive or merge history back.
+Delivery remains subject to at-least-once telemetry duplicates.
 
 ## Local verification
 
@@ -128,7 +137,7 @@ suite, and remove only that fixture. The script needs local Docker permission;
 it never reads production credentials. Ordinary `go test` without the explicit
 fixture environment skips integration cases, so it is not equivalent evidence.
 
-## Managed certificate collection (Task 4)
+## Managed certificate collection
 
 `ReserveCollection` atomically gates a source/host/enrollment/trust/script key
 under a transaction advisory lock, using the DB clock for cadence >= one hour
@@ -148,7 +157,7 @@ Schema version 2 adds only partial indexes for recent and pending collection
 keys; reviewed v1 installations upgrade under the existing migration lock.
 Accounting/native contracts and privileges are unchanged.
 
-## Discovered RADIUS source work (Task 5)
+## Discovered RADIUS source work
 
 Source work uses `kind=sources:radius-primary` or `sources:radius-secondary`.
 `ClaimSource(ctx, node, owner, lease)` is the only supported claim API for these
@@ -175,8 +184,8 @@ service health. Persist that evidence and retain original attempts/quarantine;
 reconciliation neither performs an apply nor refreshes source TTL. If exact
 success cannot be proven, leave the source resource blocked for explicit recovery.
 
-Task 8/9 additionally own the shared backend-maintenance gate and live peer
-readiness before root-started FreeRADIUS restarts. The source-specific database
+The shared backend-maintenance gate and authenticated peer readiness also apply
+before root-started FreeRADIUS restarts. The source-specific database
 claim isolates each firewall node; it is not permission to restart both HA nodes
 simultaneously. Static configured clients remain independent of dynamic-source
 outages and TTL.
@@ -192,9 +201,7 @@ The normalizer projects only single recognized standard termination values;
 unknown/duplicate/absent values are `N/A` display data, not accounting quarantine
 or authorization inputs. Event IDs and interval arithmetic remain unchanged.
 
-Migration004 retains the original incomplete legacy credit floor in a singleton
-`ledger.legacy_usage_floor` table (migration writes, runtime SELECT only), plus
-the per-session `native_baseline_required` flag. It never exposes protected
-legacy documents to runtime or grants runtime/native schema privileges. The
-full cold export retains these fields; see `docs/daemon-operations.md` for the
-incomplete-history rollback prerequisite.
+`004_reserved.sql` records the existing version number without creating legacy
+usage floors or per-session import flags. It issues no destructive DROP/ALTER
+against previously allocated legacy objects. The supported deployment starts with
+a fresh green application database while preserving existing CA state.

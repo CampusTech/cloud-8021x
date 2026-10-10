@@ -50,7 +50,7 @@ func (s *Store) PrepareCollectionEpoch(ctx context.Context, deployment, id, mani
 		return safeError(err)
 	}
 	var empty bool
-	if err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM ledger.intake) AND NOT EXISTS(SELECT 1 FROM ledger.sessions) AND NOT EXISTS(SELECT 1 FROM ledger.observations) AND NOT EXISTS(SELECT 1 FROM ledger.intervals) AND NOT EXISTS(SELECT 1 FROM ledger.work) AND NOT EXISTS(SELECT 1 FROM ledger.auth_cursors) AND NOT EXISTS(SELECT 1 FROM ledger.import_markers) AND NOT EXISTS(SELECT 1 FROM ledger.legacy_usage_floor)`).Scan(&empty); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM ledger.intake) AND NOT EXISTS(SELECT 1 FROM ledger.sessions) AND NOT EXISTS(SELECT 1 FROM ledger.observations) AND NOT EXISTS(SELECT 1 FROM ledger.intervals) AND NOT EXISTS(SELECT 1 FROM ledger.work) AND NOT EXISTS(SELECT 1 FROM ledger.auth_cursors) AND NOT EXISTS(SELECT 1 FROM ledger.import_markers)`).Scan(&empty); err != nil {
 		return safeError(err)
 	}
 	if !empty {

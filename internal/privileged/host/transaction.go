@@ -62,6 +62,7 @@ const radiusDirectory = radiusParent + "/3.0"
 // Packaged root-owned symlinks are retained in that tree, never followed/rewritten.
 // Private backups remain root-only; neither daemon nor native roles can read them.
 type Receipt struct {
+	Native               map[string]string `json:"native,omitempty"`
 	RadiusManifestSHA256 string            `json:"radius_manifest_sha256,omitempty"`
 	WriterRetirement     *writerRetirement `json:"writer_retirement,omitempty"`
 	PackageBarrier       bool              `json:"package_barrier"`
@@ -202,6 +203,10 @@ func (t *Transaction) Prepare(tree map[string][]byte, files []File) error {
 		return errors.New("installation cannot be staged")
 	}
 	t.tree, t.files = tree, files
+	t.receipt.Native = map[string]string{}
+	for p, data := range tree {
+		t.receipt.Native[p] = digestBytes(data)
+	}
 	if t.receipt.WriterRetirement != nil {
 		t.receipt.WriterRetirement.Native = map[string]string{}
 		for p, data := range tree {

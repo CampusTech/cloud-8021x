@@ -122,7 +122,8 @@ func openParentDescriptor(path string, owner int, create bool) (int, error) {
 	return fd, nil
 }
 
-// stateParentDescriptor is read-only: these inputs never enter AllowedFile.
+// stateParentDescriptor opens fixed capture inputs read-only. Some current
+// installed files also have separate protected write permissions.
 func stateParentDescriptor(path string, owner int) (int, error) {
 	allowed := path == daemonPolicySnapshot || path == legacyDowngradeGuard || path == "/var/lib/cloud-8021x/metadata.json" || path == "/var/lib/cloud-8021x/sources-candidate.json" || path == "/var/lib/cloud-8021x-source-state/state.json"
 	for _, fixed := range legacyStatePaths {

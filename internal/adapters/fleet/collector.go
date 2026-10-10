@@ -199,7 +199,7 @@ func (c *Collector) limits() (time.Duration, time.Duration, int, error) {
 func (c *Collector) Collect(ctx context.Context, request domain.CertificateCollectionRequest) (domain.CertificateObservation, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, binding, err := c.boundHost(ctx, request.DeviceID)
+	current, binding, err := c.boundHost(ctx, request.DeviceID)
 	if err != nil {
 		return domain.CertificateObservation{}, err
 	}
@@ -226,7 +226,11 @@ func (c *Collector) Collect(ctx context.Context, request domain.CertificateColle
 	if err != nil {
 		return domain.CertificateObservation{}, err
 	}
-	var best *domain.CertificateObservation
+	best, _, err := c.inheritedObservation(ctx, current, binding, age)
+	if err != nil {
+		return domain.CertificateObservation{}, err
+	}
+	bestInherited := best != nil
 	for _, work := range works {
 		var r reservation
 		var receipt collectionReceipt
@@ -243,8 +247,9 @@ func (c *Collector) Collect(ctx context.Context, request domain.CertificateColle
 						copy.Fingerprints = append(copy.Fingerprints, fp)
 					}
 				}
-				if best == nil || copy.ObservedAt > best.ObservedAt {
+				if best == nil || copy.ObservedAt > best.ObservedAt || (bestInherited && copy.ObservedAt == best.ObservedAt) {
 					best = &copy
+					bestInherited = false
 				}
 			}
 			continue
@@ -268,8 +273,9 @@ func (c *Collector) Collect(ctx context.Context, request domain.CertificateColle
 		if e = c.Repository.RecordCollectionResult(ctx, work.ID, work.Generation, receiptJSON(next), receiptJSON(evidence)); e != nil {
 			return domain.CertificateObservation{}, e
 		}
-		if ob != nil && (best == nil || ob.ObservedAt > best.ObservedAt) {
+		if ob != nil && (best == nil || ob.ObservedAt > best.ObservedAt || (bestInherited && ob.ObservedAt == best.ObservedAt)) {
 			best = ob
+			bestInherited = false
 		}
 	}
 	if claim != nil && c.selected[request.DeviceID] && c.requests < budget {
@@ -545,7 +551,7 @@ func managedOnlySupported(platform, version string) bool {
 // timestamps. Repeated terminal failures and process restarts cannot reset a
 // host's priority to "never attempted". Result polling/receipt time is not used.
 func (c *Collector) prepareSelection(ctx context.Context) error {
-	cadence, _, budget, err := c.limits()
+	cadence, age, budget, err := c.limits()
 	if err != nil {
 		return err
 	}
@@ -562,7 +568,7 @@ func (c *Collector) prepareSelection(ctx context.Context) error {
 	}
 	candidates := []candidate{}
 	for _, id := range ids {
-		_, binding, err := c.boundHost(ctx, id)
+		current, binding, err := c.boundHost(ctx, id)
 		if errors.Is(err, inventory.ErrIneligible) {
 			continue
 		}
@@ -576,9 +582,13 @@ func (c *Collector) prepareSelection(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		var last time.Time
+		inherited, last, err := c.inheritedObservation(ctx, current, binding, age)
+		if err != nil {
+			return err
+		}
 		pending := 0
-		unstarted, freshObservation := false, false
+		unstarted := false
+		freshObservation := inherited != nil && domain.Fresh(inherited.ObservedAt, c.now(), cadence)
 		for _, work := range works {
 			if work.CreatedAt.After(last) {
 				last = work.CreatedAt

@@ -169,25 +169,3 @@ func CaptureDaemonState(cfg config.Config, a Accounts, class []byte) ([]byte, er
 	}
 	return raw, nil
 }
-func WriteRollbackExport(id string, data []byte) (string, error) {
-	if os.Geteuid() != 0 || len(data) > 256<<20 || !json.Valid(data) {
-		return "", errors.New("bounded root rollback export required")
-	}
-	dir, e := writerReceiptDirectory(id)
-	if e != nil {
-		return "", e
-	}
-	path := filepath.Join(dir, "rollback.json")
-	if prior, e := readPrivateCache(path, 256<<20); e == nil {
-		if !bytes.Equal(prior, data) {
-			return "", errors.New("existing immutable rollback export differs")
-		}
-		return path, nil
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return "", e
-	}
-	if e = privateWrite(path, data, 0600); e != nil {
-		return "", e
-	}
-	return path, syncWriterDirectory(dir)
-}

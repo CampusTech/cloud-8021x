@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,8 +19,11 @@ import (
 
 	"github.com/CampusTech/cloud-8021x/internal/accounting"
 	"github.com/CampusTech/cloud-8021x/internal/accounting/binding"
+	"github.com/CampusTech/cloud-8021x/internal/adapters/fleet"
 	"github.com/CampusTech/cloud-8021x/internal/adoption"
 	"github.com/CampusTech/cloud-8021x/internal/config"
+	"github.com/CampusTech/cloud-8021x/internal/domain"
+	inventoryjob "github.com/CampusTech/cloud-8021x/internal/jobs/inventory"
 	"github.com/CampusTech/cloud-8021x/internal/migration"
 	"github.com/jackc/pgx/v5"
 )
@@ -120,8 +127,43 @@ func TestPostgresParallelSignedHandoffAndActivation(t *testing.T) {
 	}
 	primary, keyPrimary, _ := ed25519.GenerateKey(rand.Reader)
 	secondary, keySecondary, _ := ed25519.GenerateKey(rand.Reader)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	enrolled := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Error("inherited pending command guard allowed a duplicate submission")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		h := map[string]any{"id": 1, "uuid": "host", "platform": "ios", "os_version": "iOS 18.0", "last_mdm_enrolled_at": enrolled, "mdm": map[string]any{"enrollment_status": "On (manual)", "profiles": []any{map[string]any{"profile_uuid": "scep", "status": "verified", "operation_type": "install"}}}}
+		switch r.URL.Path {
+		case "/api/v1/fleet/hosts":
+			_ = json.NewEncoder(w).Encode(map[string]any{"hosts": []any{h}})
+		case "/api/v1/fleet/hosts/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"host": h})
+		default:
+			t.Errorf("unexpected Fleet read %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	trust, _, ca := collectionTrustMaterial(t)
+	trustHash := sha256.Sum256(ca)
+	fp := strings.Repeat("c", 64)
+	observed := domain.Unix(now.Add(-10 * time.Minute))
+	policy := domain.Snapshot{Version: 2, UpdatedAt: domain.Unix(now), Identities: map[string]*domain.DeviceRecord{"host": {DeviceID: "fleet:1", Groups: []domain.GroupID{}, Enrolled: true}}, Certificates: map[string]*domain.DeviceRecord{fp: {DeviceID: "fleet:1", Groups: []domain.GroupID{}, Enrolled: true, ObservedAt: &observed}}, HardwareSerials: map[string]*domain.DeviceRecord{}}
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingJSON := []json.RawMessage{json.RawMessage("1"), json.RawMessage(strconv.FormatFloat(float64(domain.Unix(now.Add(-time.Hour))), 'f', 6, 64)), json.RawMessage("null")}
+	originalCerts := migration.LegacyCertificateState{Version: 1, Source: server.URL, Trust: new(hex.EncodeToString(trustHash[:])), Hosts: map[string]migration.LegacyCertificateHost{"host": {Binding: bindingJSON, Platform: "ios", LastAttempt: json.Number(strconv.FormatFloat(float64(domain.Unix(now.Add(-2*time.Minute))), 'f', 6, 64)), Observation: &migration.LegacyCertificateObservation{Fingerprints: []string{fp}, ObservedAt: json.Number(strconv.FormatFloat(float64(observed), 'f', 6, 64)), TrustVerified: true, ExpiresAt: map[string]json.Number{fp: json.Number(strconv.FormatFloat(float64(domain.Unix(now.Add(24*time.Hour))), 'f', 6, 64))}}}}, Commands: []migration.LegacyCommand{{UUID: "original-command", CreatedAt: json.Number(strconv.FormatFloat(float64(domain.Unix(now.Add(-2*time.Minute))), 'f', 6, 64)), Hosts: map[string][]json.RawMessage{"host": bindingJSON}}}}
+	certificateJSON, err := json.Marshal(originalCerts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.Defaults()
-	cfg.Inventory.Fleet.BaseURL = "https://fleet.example.test"
+	cfg.Inventory.Fleet.BaseURL = server.URL
 	cfg.Database = c
 	cfg.InstanceID = "radius-primary"
 	cfg.StateTransition = strings.Repeat("a", 64)
@@ -148,7 +190,7 @@ func TestPostgresParallelSignedHandoffAndActivation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		doc := adoption.Authorization{Binding: b, CapturedAt: time.Now().UTC(), FenceSHA256: strings.Repeat("e", 64), SourceConfigSHA256: strings.Repeat("f", 64), ClassSHA256: strings.Repeat("1", 64), TrustSHA256: strings.Repeat("7", 64), FingerprintEnforced: true, Policy: json.RawMessage(`{"version":2,"updated_at":1800000000,"identities":{},"certificates":{},"hardware_serials":{}}`), Certificates: json.RawMessage(`{"version":1,"source":"https://fleet.example.test","trust":null,"hosts":{"host":{"binding":[1,1791450000.125,null],"last_attempt":1791450010.25,"platform":"darwin"}},"commands":[{"uuid":"original-command","created_at":1791450010.25,"hosts":{"host":[1,1791450000.125,null]}}]}`)}
+		doc := adoption.Authorization{Binding: b, CapturedAt: time.Now().UTC(), FenceSHA256: strings.Repeat("e", 64), SourceConfigSHA256: strings.Repeat("f", 64), ClassSHA256: strings.Repeat("1", 64), TrustSHA256: strings.Repeat("7", 64), FingerprintEnforced: true, Policy: policyJSON, Certificates: certificateJSON}
 		key := keyPrimary
 		if i == 1 {
 			key = keySecondary
@@ -207,6 +249,30 @@ func TestPostgresParallelSignedHandoffAndActivation(t *testing.T) {
 	}
 	if err = green.WorkersAllowed(ctx, cfg.StateTransition); err != nil {
 		t.Fatal(err)
+	}
+	client, err := fleet.NewClient(server.URL, "synthetic-maintainer", server.Client(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector := &fleet.Collector{Maintainer: client, Repository: green, Trust: trust, Options: fleet.CollectionOptions{SCEPProfiles: []string{"scep"}}, Now: func() time.Time { return now }}
+	store := new(domain.SnapshotStore)
+	if err = store.Set(policy); err != nil {
+		t.Fatal(err)
+	}
+	scope := domain.InventoryScope{ProviderID: "fleet", IDs: []string{"1"}}
+	service := inventoryjob.Service{Provider: handoffInventory{domain.DeviceSnapshot{Scope: scope, Complete: true, ObservedAt: domain.Unix(now), Devices: []domain.Device{{ID: "fleet:1", Identities: []string{"host"}, Groups: []domain.GroupID{}, Enrolled: true}}}}, Certificates: collector, Scope: scope, Store: store, Path: filepath.Join(t.TempDir(), "inventory.json")}
+	if err = service.Sync(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if record := store.View().ByCertificate(fp); record == nil || record.ObservedAt == nil || *record.ObservedAt != observed {
+		t.Fatal("first pending inventory refresh discarded or refreshed inherited certificate authorization")
+	}
+	enrolled = now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	if err = service.Sync(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if store.View().ByCertificate(fp) != nil {
+		t.Fatal("changed enrollment retained inherited authorization")
 	}
 	if err = green.BlockTransition(ctx, cfg.StateTransition); err != nil {
 		t.Fatal(err)
@@ -292,4 +358,11 @@ func TestPostgresParallelSignedHandoffAndActivation(t *testing.T) {
 		t.Fatal("completed activation replayed")
 	}
 
+}
+
+// This inventory capability cannot itself supply authenticated certificates.
+type handoffInventory struct{ batch domain.DeviceSnapshot }
+
+func (p handoffInventory) Fetch(context.Context, domain.InventoryScope) (domain.DeviceSnapshot, error) {
+	return p.batch, nil
 }

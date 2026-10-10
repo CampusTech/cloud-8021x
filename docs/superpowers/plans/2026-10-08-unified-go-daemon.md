@@ -115,7 +115,7 @@ Files: root *.tf, scripts/startup.sh, .github/workflows, VERSION, examples, READ
 - [x] Provision cloud8021x DB/least-privilege roles/secrets on existing HA PostgreSQL without changing step-ca DBs. Non-secret YAML + secret references, daemon/DDOT/native replay config. Preserve opt-out/Wi-Fi scope.
 - [x] Replace 3991-line startup with pinned binary download, mandatory checksum and bootstrap. No generated executable Bash/Python, MySQL/MariaDB, old usage collector or DD read credentials in enabled runtime.
 - [x] Remove all active Okta/Jamf variables/resources/options/examples/docs. Use explicit reviewed Terraform state-removal migration preserving obsolete rollback secrets, not destructive resource deletion.
-- [x] Build one application binary and compatibility aliases plus the narrowly patched native FreeRADIUS artifact/package from exact verified source/ABI; pin versions/mandatory checksums, detect incompatible replacement, update root CI/security/lint and module harnesses. Keep backend as FreeRADIUS. Do not publish a release in this task.
+- [x] Build one application binary plus the narrowly patched native FreeRADIUS artifact/package from exact verified source/ABI; pin versions/mandatory checksums, detect incompatible replacement, update root CI/security/lint and module harnesses. Keep backend as FreeRADIUS. Do not publish a release in this task.
 - [x] Keep development Python parity tests only where useful, Windows PowerShell; retire server Python/Bash files and update docs/profile examples for actual new paths and rollback/HA/ack limitations.
 - [x] Terraform fmt/validate, template/render/checksum/release tests; commit.
 
@@ -132,13 +132,22 @@ this task. Report automated suite results separately; real boot/cloud/office
 cutover remain staging gates, not implied by unit or container tests. See
 [validation scope review](../../validation/scope-review.md).
 
+The application cleanup also retires the in-place state import/export workflow,
+legacy accounting-history baseline gate, environment-configured webhook basename
+and release aliases. Task 9's original in-place checklist records superseded
+implementation history; its shared certificate source capture, pending-command
+quarantine and worker fencing remain required for parallel CA/identity adoption.
+The independent review's renewal, inherited-observation and auth-retention fixes
+require reproducing tests before final verification and push.
+
 Files: tests, docs, all task-owned paths as required for fixes; PR body.
 
-- [ ] Run root race tests, goimports/golangci-lint, govulncheck, existing/new SCEP and disposable FreeRADIUS/PG/Collector/CA integration suites.
-- [ ] Exercise trust-boundary attacks, final packet VLAN/Class parity, native replay progress/failure, concurrent workers/fencing, counter/queue limits, uncertain export/Fleet submission, source/CA atomic recovery and migration rollback.
-- [ ] Check final runtime for Bash/Python/Datadog-readback/Okta/Jamf remnants, module/release pinning and complete commands.
-- [ ] Separate whole-branch spec/security/code review, address findings with tests and re-review. Document genuinely unavailable environment-dependent checks without claiming completion.
-- [ ] Push final verified branch, update PR description around implemented behavior/tests/limits and request review. No merge or production deploy.
+- [x] Run root race tests, goimports/golangci-lint, govulncheck and the disposable component suites. See the scope review for which results ran before and after application cleanup.
+- [x] Exercise the implemented trust, packet/VLAN/Class, replay, concurrency, fencing, queue, uncertain-operation, CA preservation and rollback guards in their owned fixtures. This does not prove whole-system migration acceptance.
+- [x] Check shipping runtime for Bash/Python/Datadog-readback/Okta/Jamf remnants, module/release pinning and complete commands. Remove the obsolete compatibility/in-place/MySQL paths while preserving parallel CA/identity handoff.
+- [x] Run independent subsystem review, reproduce findings before fixes, and complete a bounded final review. Correct stale rollout/readiness documentation and record unavailable acceptance checks.
+- [x] Prepare the final cleanup commit and PR description with actual verification and limits. Push/review publication and current-SHA CI status are reported separately on the PR; no merge or production deploy.
+- [ ] Complete isolated full-system boot/reboot, real cloud IAM/KMS, inherited production CA adoption, two-node cutover/failover and physical client/profile renewal acceptance before deployment.
 
 
 ## Task 10 parallel-deployment amendment (2026-10-08)

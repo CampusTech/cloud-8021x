@@ -17,6 +17,9 @@ import (
 func createParallel(ctx context.Context, tx pgx.Tx, r Roles) error {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS bootstrap_private.parallel_nodes(transition text NOT NULL,role text NOT NULL CHECK(role IN ('radius-primary','radius-secondary')),instance text NOT NULL,manifest text NOT NULL,config text NOT NULL,release_sha256 text NOT NULL,source_digest text NOT NULL,authorization_document bytea NOT NULL,prepared_receipt text NOT NULL DEFAULT '',trust_sha256 text NOT NULL DEFAULT '',ready boolean NOT NULL DEFAULT false,PRIMARY KEY(transition,role))`,
+		`CREATE TABLE IF NOT EXISTS ledger.inherited_certificates(scope text PRIMARY KEY,document bytea NOT NULL)`,
+		`REVOKE ALL ON ledger.inherited_certificates FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
+		`GRANT SELECT ON ledger.inherited_certificates TO ` + pgx.Identifier{r.Runtime}.Sanitize(),
 		`REVOKE ALL ON bootstrap_private.parallel_nodes FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
 	} {
 		if _, err := tx.Exec(ctx, q); err != nil {
@@ -27,8 +30,8 @@ func createParallel(ctx context.Context, tx pgx.Tx, r Roles) error {
 }
 
 // ImportParallelAuthorization verifies the source signature again at the storage
-// boundary. Only original command quarantine is imported; no old accounting
-// state or outbox can be supplied by this closed schema.
+// boundary. Original observations remain in a read-only cache, and pending
+// commands remain quarantined. No old accounting state or outbox is imported.
 func (s *Store) ImportParallelAuthorization(ctx context.Context, c config.Config, release string, raw []byte) error {
 	scope, ok := ctx.Value(maintenanceScopeKey{}).(*maintenanceScope)
 	if !ok || scope.store != s || !scope.active.Load() {
@@ -90,6 +93,9 @@ func (s *Store) ImportParallelAuthorization(ctx context.Context, c config.Config
 		return errors.New("authorization handoff requires passive green authority")
 	}
 	if err = importLegacyCommandGuards(ctx, tx, doc.Certificates); err != nil {
+		return err
+	}
+	if err = importInheritedCollections(ctx, tx, certificates); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO bootstrap_private.parallel_nodes(transition,role,instance,manifest,config,release_sha256,source_digest,authorization_document) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(transition,role) DO UPDATE SET source_digest=EXCLUDED.source_digest,authorization_document=EXCLUDED.authorization_document WHERE parallel_nodes.instance=EXCLUDED.instance AND parallel_nodes.manifest=EXCLUDED.manifest AND parallel_nodes.config=EXCLUDED.config AND parallel_nodes.release_sha256=EXCLUDED.release_sha256 AND (NOT parallel_nodes.ready OR parallel_nodes.source_digest=EXCLUDED.source_digest)`, id, c.InstanceID, c.Deployment.Instance, expected.ManifestSHA256, expected.ConfigSHA256, release, adoption.Digest(raw), public)

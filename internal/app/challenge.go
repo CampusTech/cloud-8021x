@@ -11,11 +11,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// challengeCmd is an administrator/MDM-side issuer. It deliberately exposes no
-// unauthenticated HTTP minting endpoint and never accepts a signing key in argv.
-func challengeCmd() *cobra.Command { return challengeCommand(false, nil) }
-
-func challengeCommand(inheritFlags bool, options *RunOptions) *cobra.Command {
+// challengeCommand is an administrator/MDM-side issuer. It deliberately exposes
+// no unauthenticated HTTP minting endpoint and never accepts a signing key in argv.
+func challengeCommand(options *RunOptions) *cobra.Command {
 	var identity, provisioner, output, keyFile string
 	var ttl time.Duration
 	var dryRun, debug bool
@@ -36,9 +34,6 @@ func challengeCommand(inheritFlags bool, options *RunOptions) *cobra.Command {
 				}
 			}
 			var key []byte
-			if !inheritFlags {
-				key = []byte(os.Getenv("SCEP_CHALLENGE_SIGNING_KEY"))
-			}
 			if keyFile != "" {
 				data, err := os.ReadFile(keyFile)
 				if err != nil {
@@ -78,15 +73,7 @@ func challengeCommand(inheritFlags bool, options *RunOptions) *cobra.Command {
 	cmd.Flags().StringVar(&identity, "identity", "", "Device identity selected from trusted MDM inventory")
 	cmd.Flags().StringVar(&provisioner, "provisioner", "", "Exact step-ca SCEP provisioner name")
 	cmd.Flags().StringVar(&output, "out", "", "New private output file (never overwrites)")
-	keyHelp := "Server-only signing key file; otherwise SCEP_CHALLENGE_SIGNING_KEY"
-	if inheritFlags {
-		keyHelp = "Server-only signing key file; defaults to the configured secret file reference"
-	}
-	cmd.Flags().StringVar(&keyFile, "signing-key-file", "", keyHelp)
+	cmd.Flags().StringVar(&keyFile, "signing-key-file", "", "Server-only signing key file; defaults to the configured secret file reference")
 	cmd.Flags().DurationVar(&ttl, "ttl", 15*time.Minute, "Enrollment validity, maximum 24h; renewal needs a fresh challenge")
-	if !inheritFlags {
-		cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate inputs without writing a challenge")
-		cmd.Flags().BoolVar(&debug, "debug", false, "Log non-secret issuance metadata")
-	}
 	return cmd
 }

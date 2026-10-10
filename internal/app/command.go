@@ -24,7 +24,6 @@ const (
 	OperationParallelPrepare        Operation = "bootstrap prepare"
 	OperationParallelSourceKey      Operation = "bootstrap source-key"
 	OperationParallelCapture        Operation = "bootstrap capture"
-	OperationBootstrap              Operation = "bootstrap"
 	OperationRefreshCredentials     Operation = "bootstrap credentials"
 	OperationInventorySync          Operation = "inventory sync"
 	OperationSitesSync              Operation = "sites sync"
@@ -35,9 +34,6 @@ const (
 	OperationStateRecoverWork       Operation = "state recover-work"
 	OperationStateRecoverAuth       Operation = "state recover-auth"
 	OperationStateRecoverCollection Operation = "state recover-collection"
-	OperationStateFence             Operation = "state fence"
-	OperationStateMigrate           Operation = "state migrate"
-	OperationStateExport            Operation = "state export"
 	OperationDoctor                 Operation = "doctor"
 )
 
@@ -59,7 +55,6 @@ type RunOptions struct {
 	SourceGeneration                                                int64
 	Version                                                         string
 	Incoming                                                        bool
-	FenceOnly                                                       bool
 	SourceCandidateSHA256                                           string
 	ConfigFile                                                      string
 	VerifiedLeaf                                                    *VerifiedLeafOptions
@@ -86,7 +81,7 @@ func NewCommand(options Options) *cobra.Command {
 		processUID = os.Geteuid
 	}
 	var path string
-	var debug, dryRun, incoming, fenceOnly bool
+	var debug, dryRun, incoming bool
 	var policyAddress string
 	var maintenanceAttempt int64
 	var sourceWorkID string
@@ -158,7 +153,7 @@ func NewCommand(options Options) *cobra.Command {
 				return fmt.Errorf("%s: %w", op, ErrUnsupported)
 			}
 			logger.WithFields(logrus.Fields{"operation": string(op), "dry_run": dryRun}).Debug("running operation")
-			run := RunOptions{RecoveryKind: recovery.RecoveryKind, RecoveryWork: recovery.RecoveryWork, RecoveryRequest: recovery.RecoveryRequest, RecoveryPayloadSHA: recovery.RecoveryPayloadSHA, RecoveryGeneration: recovery.RecoveryGeneration, RecoveryExecutions: recovery.RecoveryExecutions, AcceptDuplicates: recovery.AcceptDuplicates, AuthFilename: authFilename, AuthRangeSHA256: authRangeSHA256, AuthOffset: authOffset, LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, FenceOnly: fenceOnly, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
+			run := RunOptions{RecoveryKind: recovery.RecoveryKind, RecoveryWork: recovery.RecoveryWork, RecoveryRequest: recovery.RecoveryRequest, RecoveryPayloadSHA: recovery.RecoveryPayloadSHA, RecoveryGeneration: recovery.RecoveryGeneration, RecoveryExecutions: recovery.RecoveryExecutions, AcceptDuplicates: recovery.AcceptDuplicates, AuthFilename: authFilename, AuthRangeSHA256: authRangeSHA256, AuthOffset: authOffset, LegacyGuardID: legacyGuardID, LegacyExecutionID: legacyExecutionID, SourceWorkID: sourceWorkID, SourceGeneration: sourceGeneration, MaintenanceAttempt: maintenanceAttempt, Version: options.Version, Incoming: incoming, SourceCandidateSHA256: sourceDigest, Debug: cfg.Debug, DryRun: dryRun, Output: cmd.OutOrStdout(), Logger: logger, ConfigFile: path}
 			if op == OperationRadiusVerifyLeaf {
 				copy := leaf
 				run.VerifiedLeaf = &copy
@@ -186,20 +181,11 @@ func NewCommand(options Options) *cobra.Command {
 			cmd.Flags().StringVar(&legacyGuardID, "guard", "", "Exact imported legacy pending guard digest")
 			cmd.Flags().StringVar(&legacyExecutionID, "execution-id", "", "Original Windows execution identity hint, verified against retained nonce and script")
 		}
-		if op == OperationStateExport {
-			cmd.Flags().BoolVar(&fenceOnly, "fence-only", false, "Revoke shared work and physically fence this node for cold rollback")
-		}
-		if op == OperationStateExport || op == OperationParallelDeactivate {
-			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume only the exact interrupted export-fence attempt")
+		if op == OperationParallelDeactivate {
+			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume only the exact interrupted worker-fence attempt")
 		}
 		if op == OperationParallelPrepare || op == OperationParallelActivate {
 			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Recover this exact expired parallel operation after original helper exit proof")
-		}
-		if op == OperationStateMigrate {
-			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Continue exact original committed bundle publication after helper exit proof")
-		}
-		if op == OperationStateFence {
-			cmd.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Resume this exact expired writer fence attempt after protected quiescence proof")
 		}
 		if op == OperationSourcesApply {
 			cmd.Flags().StringVar(&sourceWorkID, "reconcile-work", "", "Reconcile only this quarantined historical source work ID")
@@ -224,9 +210,7 @@ func NewCommand(options Options) *cobra.Command {
 		}
 		return cmd
 	}
-	bootstrap := operation("bootstrap", OperationBootstrap)
-	bootstrap.Flags().Int64Var(&maintenanceAttempt, "resume-attempt", 0, "Prove the exact interrupted fence or pre-install preparation attempt")
-	bootstrap.Flags().BoolVar(&fenceOnly, "fence-only", false, "Prepare only this node’s persistent legacy writer fence using the fixed incoming release")
+	bootstrap := &cobra.Command{Use: "bootstrap", Short: "Prepare and activate a separate green deployment", Args: cobra.NoArgs}
 	bootstrap.PersistentFlags().BoolVar(&incoming, "incoming", false, "Bootstrap the verified release from the fixed protected incoming directory")
 	bootstrap.AddCommand(operation("credentials", OperationRefreshCredentials), operation("prepare", OperationParallelPrepare), operation("source-key", OperationParallelSourceKey), operation("capture", OperationParallelCapture), operation("activate", OperationParallelActivate), operation("deactivate", OperationParallelDeactivate), operation("rollback-proof", OperationParallelRollbackProof), operation("resume-source", OperationParallelResumeSource))
 	root.AddCommand(operation("serve", OperationServe), bootstrap, operation("doctor", OperationDoctor), versionCmd(options.Version))
@@ -264,9 +248,9 @@ func NewCommand(options Options) *cobra.Command {
 		{"state", []struct {
 			name string
 			op   Operation
-		}{{"recover-work", OperationStateRecoverWork}, {"recover-auth", OperationStateRecoverAuth}, {"recover-collection", OperationStateRecoverCollection}, {"fence", OperationStateFence}, {"migrate", OperationStateMigrate}, {"export", OperationStateExport}}},
+		}{{"recover-work", OperationStateRecoverWork}, {"recover-auth", OperationStateRecoverAuth}, {"recover-collection", OperationStateRecoverCollection}}},
 	} {
-		parent := &cobra.Command{Use: group.name}
+		parent := &cobra.Command{Use: group.name, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
 		for _, a := range group.actions {
 			parent.AddCommand(operation(a.name, a.op))
 		}
@@ -288,7 +272,7 @@ func NewCommand(options Options) *cobra.Command {
 	}})
 	root.AddCommand(cfgCmd)
 	challengeOptions := &RunOptions{Logger: logger}
-	challenge := challengeCommand(true, challengeOptions)
+	challenge := challengeCommand(challengeOptions)
 	challenge.PreRunE = func(cmd *cobra.Command, _ []string) error {
 		cfg, err := load(cmd)
 		if err != nil {

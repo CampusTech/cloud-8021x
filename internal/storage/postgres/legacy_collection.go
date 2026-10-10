@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -9,7 +11,60 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/adapters/fleet"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/migration"
+	"github.com/jackc/pgx/v5"
 )
+
+func createLegacyCollection(ctx context.Context, tx pgx.Tx, r Roles) error {
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS ledger.legacy_collection_guards(id text PRIMARY KEY,scope text NOT NULL,source text NOT NULL,host_id numeric(20,0) NOT NULL,host_uuid text NOT NULL,command_uuid text NOT NULL,document bytea NOT NULL,observation bytea NOT NULL,state text NOT NULL DEFAULT 'quarantine' CHECK(state IN ('quarantine','resolved')),evidence bytea,UNIQUE(source,host_uuid,command_uuid))`,
+		`CREATE INDEX IF NOT EXISTS legacy_collection_scope ON ledger.legacy_collection_guards(scope,state)`,
+		`REVOKE ALL ON ledger.legacy_collection_guards FROM PUBLIC,` + pgx.Identifier{r.Runtime}.Sanitize() + `,` + pgx.Identifier{r.Native}.Sanitize(),
+		`GRANT SELECT ON ledger.legacy_collection_guards TO ` + pgx.Identifier{r.Runtime}.Sanitize(),
+	}
+	for _, q := range queries {
+		if _, e := tx.Exec(ctx, q); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+func bundleDigest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+
+func importLegacyCommandGuards(ctx context.Context, tx pgx.Tx, rawCertificates []byte) error {
+	if len(rawCertificates) > 0 {
+		certs, e := migration.DecodeCertificates(rawCertificates)
+		if e != nil {
+			return e
+		}
+		for _, command := range certs.Commands {
+			for uuid := range command.Hosts {
+				host := certs.Hosts[uuid]
+				var hostID uint64
+				if json.Unmarshal(host.Binding[0], &hostID) != nil {
+					return errors.New("legacy host ID invalid")
+				}
+				raw, e := json.Marshal(command)
+				if e != nil {
+					return e
+				}
+				observation, e := json.Marshal(host)
+				if e != nil {
+					return e
+				}
+				scope := migration.LegacyCollectionScope(certs.Source, hostID, uuid)
+				guard := bundleDigest([]byte(scope + "\x00" + command.UUID))
+				tag, e := tx.Exec(ctx, `INSERT INTO ledger.legacy_collection_guards(id,scope,source,host_id,host_uuid,command_uuid,document,observation) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id WHERE legacy_collection_guards.document=EXCLUDED.document AND legacy_collection_guards.observation=EXCLUDED.observation`, guard, scope, certs.Source, strconv.FormatUint(hostID, 10), uuid, command.UUID, raw, observation)
+				if e != nil {
+					return e
+				}
+				if tag.RowsAffected() != 1 {
+					return errors.New("peer pending Fleet evidence differs")
+				}
+			}
+		}
+	}
+	return nil
+}
 
 type LegacyCollectionGuard struct {
 	ID, Source, HostUUID, State string

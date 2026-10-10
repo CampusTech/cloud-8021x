@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -376,17 +375,6 @@ func prepareParallel(ctx context.Context, cfg config.Config, o RunOptions, manif
 	})
 }
 
-func rejectParallelLegacyOperation(op Operation, cfg config.Config) error {
-	if !cfg.Parallel() {
-		return nil
-	}
-	switch op {
-	case OperationBootstrap, OperationStateFence, OperationStateMigrate, OperationStateExport:
-		return fmt.Errorf("%s is an in-place operation; use the closed parallel workflow", op)
-	}
-	return nil
-}
-
 func activateParallel(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
 	if err := host.VerifyParallelDestinationKey(cfg); err != nil {
 		return err
@@ -433,8 +421,7 @@ func activateParallel(ctx context.Context, op Operation, cfg config.Config, o Ru
 		if e != nil {
 			return e
 		}
-		o.FenceOnly = true
-		return protectedStateExport(ctx, cfg, o)
+		return fenceParallelWorkers(ctx, cfg, o)
 	}
 	unlock, err := host.AcquireWriterOperation()
 	if err != nil {

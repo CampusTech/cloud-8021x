@@ -16,11 +16,10 @@ for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -buildvcs=true \
     -ldflags="-s -w -X main.version=$version" \
     -o "$output/cloud-8021x-linux-$arch" ./cmd/cloud-8021x
-  cp -- "$output/cloud-8021x-linux-$arch" "$output/acme-authz-webhook-linux-$arch"
 done
 cd -- "$output"
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum cloud-8021x-linux-* acme-authz-webhook-linux-* > SHA256SUMS
+  sha256sum cloud-8021x-linux-* > SHA256SUMS
 else
-  shasum -a 256 cloud-8021x-linux-* acme-authz-webhook-linux-* > SHA256SUMS
+  shasum -a 256 cloud-8021x-linux-* > SHA256SUMS
 fi

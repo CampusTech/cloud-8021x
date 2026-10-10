@@ -77,7 +77,7 @@ func TestCLIOverridesAndDryRun(t *testing.T) {
 	if !r.called || r.operation != OperationServe || !r.options.Debug || !r.options.DryRun || r.config.Listeners.Policy.Address != "127.0.0.1:9090" {
 		t.Fatalf("missing overrides: %+v", r)
 	}
-	for _, args := range [][]string{{"serve"}, {"--dry-run", "inventory", "sync"}, {"bootstrap"}} {
+	for _, args := range [][]string{{"serve"}, {"--dry-run", "inventory", "sync"}, {"bootstrap", "prepare"}} {
 		_, err = execute(t, context.Background(), nil, args...)
 		if !errors.Is(err, ErrUnsupported) {
 			t.Fatalf("unfinished command must fail explicitly: %v", err)
@@ -207,16 +207,7 @@ func TestUnifiedChallengeHelpDoesNotOfferLegacyEnvironmentFallback(t *testing.T)
 	if strings.Contains(out.String(), "SCEP_CHALLENGE_SIGNING_KEY") {
 		t.Fatal("unified help offers unsupported environment fallback")
 	}
-	legacy := NewCompatibilityCommand("test")
-	out.Reset()
-	legacy.SetOut(&out)
-	legacy.SetArgs([]string{"scep-challenge", "--help"})
-	if err := legacy.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "SCEP_CHALLENGE_SIGNING_KEY") {
-		t.Fatal("lost legacy environment help")
-	}
+
 }
 
 func TestLegacyRecoveryCommandRetainsExactIdentity(t *testing.T) {
@@ -265,5 +256,25 @@ func TestParallelBootstrapCommandsAreClosedAndRetainRecoveryOptions(t *testing.T
 				t.Fatal("parallel command lost its fixed operation/options")
 			}
 		})
+	}
+}
+
+func TestCLIRejectsRetiredInPlaceOperations(t *testing.T) {
+	for _, args := range [][]string{{"state", "fence"}, {"state", "migrate"}, {"state", "export"}, {"bootstrap", "--fence-only"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			r := new(recorder)
+			_, err := execute(t, context.Background(), r, args...)
+			if err == nil || r.called {
+				t.Fatalf("retired operation remains reachable: args=%v called=%v error=%v", args, r.called, err)
+			}
+		})
+	}
+}
+
+func TestBareBootstrapOnlyShowsSupportedWorkflow(t *testing.T) {
+	r := new(recorder)
+	out, err := execute(t, context.Background(), r, "bootstrap")
+	if err != nil || r.called || !strings.Contains(out, "prepare") {
+		t.Fatalf("bare bootstrap must show green workflow without running an operation: called=%v output=%q error=%v", r.called, out, err)
 	}
 }

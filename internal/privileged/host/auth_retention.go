@@ -13,6 +13,7 @@ import (
 
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/events/auth"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 )
 
@@ -88,7 +89,16 @@ func readAuthGeneration(generation string) (AuthGeneration, error) {
 		return out, e
 	}
 	var receipt Receipt
-	if domain.DecodeJSONStrict(data, &receipt) != nil || receipt.Phase != "complete" || receipt.ID != out.Reference || receipt.WriterRetirement == nil || receipt.WriterRetirement.Native["mods-enabled/auth_detail"] != out.ModuleSHA256 {
+	if domain.DecodeJSONStrict(data, &receipt) != nil || receipt.Phase != "complete" || receipt.ID != out.Reference {
+		return out, errors.New("auth generation lacks completed native attestation")
+	}
+	native := receipt.Native
+	// Existing in-place receipts predate independent native attestation. Their
+	// exact completed retirement tree remains valid; its writer guards are unchanged.
+	if native == nil && receipt.WriterRetirement != nil {
+		native = receipt.WriterRetirement.Native
+	}
+	if native["mods-enabled/auth_detail"] != out.ModuleSHA256 {
 		return out, errors.New("auth generation lacks completed native attestation")
 	}
 	return out, nil
@@ -96,7 +106,9 @@ func readAuthGeneration(generation string) (AuthGeneration, error) {
 
 // CaptureAuthGeneration is read-only and runs before replacement of the old
 // native tree. A reboot/manual restart without a protected activation receipt
-// cannot manufacture closure; callers retain all uncertain generations.
+// cannot manufacture closure: a matching attested module returns no prior
+// closure evidence after a producer change or proven stop, so renewal retains
+// uncertain logs while malformed or mismatched attestation remains fatal.
 func CaptureAuthGeneration(ctx context.Context, b *RadiusBackend) (*AuthGeneration, error) {
 	generation, module, e := nativeAuthGeneration()
 	if e != nil {
@@ -109,12 +121,21 @@ func CaptureAuthGeneration(ctx context.Context, b *RadiusBackend) (*AuthGenerati
 	if original.ModuleSHA256 != module {
 		return nil, errors.New("native auth module differs from protected activation")
 	}
+	active, e := b.Running(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if !active {
+		logrus.WithField("auth_generation", generation).Warn("native producer stopped; uncertain authentication logs retained")
+		return nil, nil
+	}
 	producer, e := b.nativeProducer(ctx)
 	if e != nil {
 		return nil, e
 	}
 	if original.Producer != producer {
-		return nil, errors.New("native producer differs from protected activation")
+		logrus.WithField("auth_generation", generation).Warn("native producer changed; uncertain authentication logs retained")
+		return nil, nil
 	}
 	return &original, nil
 }
@@ -206,6 +227,10 @@ func PruneClosedAuthGenerations(ctx context.Context, b *RadiusBackend, host, nex
 	if e = proveNativeProcessesGone(a.NativeUID); e != nil {
 		return out, e
 	}
+	current, _, e := nativeAuthGeneration()
+	if e != nil {
+		return out, e
+	}
 	if e = protectedDirectory(authGenerationRoot, 0, 0, 0700); e != nil {
 		return out, e
 	}
@@ -227,7 +252,7 @@ func PruneClosedAuthGenerations(ctx context.Context, b *RadiusBackend, host, nex
 		if e != nil {
 			return out, e
 		}
-		if record.ClosedPrevious && record.Previous != rollback && record.Previous != next {
+		if record.ClosedPrevious && record.Previous != rollback && record.Previous != next && record.Previous != current {
 			closed[record.Previous] = true
 		}
 	}

@@ -10,9 +10,17 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/adapters/gcp"
 	"github.com/CampusTech/cloud-8021x/internal/adapters/stepca"
 	"github.com/CampusTech/cloud-8021x/internal/config"
+	"github.com/CampusTech/cloud-8021x/internal/events/auth"
 	"github.com/CampusTech/cloud-8021x/internal/privileged/host"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
 )
+
+func setParallelRenewalAuthCleanup(backend *host.RadiusBackend, hostname, next, rollback string, accounts host.Accounts, store auth.CursorBatch) {
+	backend.AuthCleanup = func(ctx context.Context) error {
+		_, err := host.PruneClosedAuthGenerations(ctx, backend, hostname, next, rollback, accounts, store)
+		return err
+	}
+}
 
 // Activated green renewal adopts existing CA material forever. It has no CA
 // initialization/recovery fallback and cannot run before the worker handoff.
@@ -28,7 +36,7 @@ func renewParallel(ctx context.Context, cfg config.Config, o RunOptions) error {
 		return err
 	}
 	if o.DryRun {
-		return bootstrapPlan(cfg, o, true)
+		return renewalPlan(cfg, o)
 	}
 	if err = requireParallelRuntimeReceipt(cfg); err != nil {
 		return err
@@ -87,6 +95,10 @@ func renewParallel(ctx context.Context, cfg config.Config, o RunOptions) error {
 		if err = host.CheckRestart(ctx, backend); err != nil {
 			return err
 		}
+		rollbackAuth, err := host.CurrentAuthGeneration()
+		if err != nil {
+			return err
+		}
 		priorAuth, err := host.CaptureAuthGeneration(ctx, backend)
 		if err != nil {
 			return err
@@ -119,7 +131,8 @@ func renewParallel(ctx context.Context, cfg config.Config, o RunOptions) error {
 				result = errors.Join(result, transaction.Rollback(ctx, backend, false))
 			}
 		}()
-		if err = transaction.CaptureInitialState(ctx, backend, backend); err != nil {
+		rollbackBackend := *backend
+		if err = transaction.CaptureInitialState(ctx, backend, &rollbackBackend); err != nil {
 			return err
 		}
 		files, err := credentialFiles(cfg, values, accounts)
@@ -152,6 +165,7 @@ func renewParallel(ctx context.Context, cfg config.Config, o RunOptions) error {
 		if err = transaction.Prepare(tree, files); err != nil {
 			return err
 		}
+		setParallelRenewalAuthCleanup(backend, cfg.Hostname, transaction.Reference(), rollbackAuth, accounts, repository)
 		if err = transaction.Apply(ctx, backend); err != nil {
 			return err
 		}

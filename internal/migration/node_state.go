@@ -116,39 +116,6 @@ func DecodeNodeState(raw []byte) (NodeState, error) {
 	return n, nil
 }
 
-// RollbackExport is a versioned cold-rollback archive, never an implicit resend
-// instruction. New work stays in its original ledger schema beside compatible
-// legacy files until exact terminal evidence permits a chosen recovery action.
-type RollbackExport struct {
-	Version             int                        `json:"version"`
-	Transition          string                     `json:"transition"`
-	Legacy              map[string]json.RawMessage `json:"legacy"`
-	Current             map[string]json.RawMessage `json:"current"`
-	Usage               json.RawMessage            `json:"usage,omitempty"`
-	LegacyUsageRecovery string                     `json:"legacy_usage_recovery,omitempty"`
-	UsageAbsent         bool                       `json:"usage_absent"`
-	Ledger              LedgerExport               `json:"ledger"`
-	Original            map[string]json.RawMessage `json:"original"`
-	WorkersBlocked      bool                       `json:"workers_blocked"`
-}
-type LedgerExport struct {
-	OperatorRecoveries       []json.RawMessage `json:"operator_recoveries"`
-	OperatorRecoveryOutcomes []json.RawMessage `json:"operator_recovery_outcomes"`
-	AuthQuarantine           []json.RawMessage `json:"auth_quarantine"`
-	LegacyUsageFloor         []json.RawMessage `json:"legacy_usage_floor"`
-	SchemaVersion            int               `json:"schema_version"`
-	Work                     []json.RawMessage `json:"work"`
-	Attempts                 []json.RawMessage `json:"attempts"`
-	Reconciliations          []json.RawMessage `json:"reconciliations"`
-	CollectionGuards         []json.RawMessage `json:"collection_guards"`
-	Sessions                 []json.RawMessage `json:"sessions"`
-	Intake                   []json.RawMessage `json:"intake"`
-	Observations             []json.RawMessage `json:"observations"`
-	Intervals                []json.RawMessage `json:"intervals"`
-	Quarantine               []json.RawMessage `json:"quarantine"`
-	AuthCursors              []json.RawMessage `json:"auth_cursors"`
-}
-
 func validateRetainedCandidates(candidates []domain.SourceCandidate) error {
 	if len(candidates) > 4096 {
 		return errors.New("source candidates exceed bound")
@@ -165,32 +132,4 @@ func validateRetainedCandidates(candidates []domain.SourceCandidate) error {
 		}
 	}
 	return nil
-}
-
-// LegacyDevices projects only unambiguous current aliases with known metadata.
-// Missing or ambiguous entries stay unavailable; the original snapshot lives in
-// the export's original section, and current source time is never reset.
-func LegacyDevices(raw []byte) (json.RawMessage, error) {
-	snapshot, e := domain.DecodeSnapshot(bytes.NewReader(raw))
-	if e != nil {
-		return nil, e
-	}
-	type device struct {
-		Email string           `json:"email"`
-		Name  string           `json:"device_name"`
-		Model string           `json:"device_model"`
-		Time  domain.Timestamp `json:"ts"`
-	}
-	out := map[string]device{}
-	for alias, record := range snapshot.Identities {
-		if record == nil {
-			continue
-		}
-		metadata := snapshot.Devices[record.DeviceID]
-		if metadata == nil {
-			continue
-		}
-		out[alias] = device{metadata.Owner, metadata.Name, metadata.Model, snapshot.UpdatedAt}
-	}
-	return json.Marshal(out)
 }

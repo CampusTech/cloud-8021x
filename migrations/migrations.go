@@ -12,7 +12,7 @@ var Collection string
 //go:embed 003_termination_cause.sql
 var TerminationCause string
 
-//go:embed 004_legacy_baseline.sql
-var LegacyBaseline string
+//go:embed 004_reserved.sql
+var ReservedV4 string
 
 const Version = 4

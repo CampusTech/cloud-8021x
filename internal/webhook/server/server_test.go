@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,9 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CampusTech/cloud-8021x/internal/webhook/authorize"
 	"github.com/CampusTech/cloud-8021x/internal/webhook/challenge"
-	"github.com/CampusTech/cloud-8021x/internal/webhook/fleet"
 )
 
 func sigOf(secret, body string) string {
@@ -167,20 +164,12 @@ func TestSCEPChallengeHandler(t *testing.T) {
 	}
 }
 
-// Exercise the complete SCEP handler -> authorizer -> Fleet HTTP adapter path.
+// Serial-free enrollment identities remain valid protocol identities; the daemon
+// supplies the enrolled-device decision through the shared Decider interface.
 func TestSCEP_BYODEnrollmentIdentity(t *testing.T) {
 	const id = "01234567-89ab-cdef-0123-456789abcdef"
-	fleetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/latest/fleet/hosts/identifier/"+id {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_, _ = w.Write([]byte(`{"host":{"id":42,"uuid":"` + id + `","hardware_serial":"","mdm":{"enrollment_status":"On (personal)"}}}`))
-	}))
-	defer fleetServer.Close()
-	a := authorize.New(fleet.New(fleetServer.URL, "token", time.Second), "")
 	h := New("secret", challengeKey, DeciderFunc(func(identity string) bool {
-		return a.Decide(context.Background(), identity)
+		return identity == id
 	}))
 	for _, tc := range []struct {
 		identity, challenge string

@@ -53,7 +53,7 @@ func TestInstalledParallelSourceCaptureRetainsAuthorizationOnly(t *testing.T) {
 		write(path, []byte("original protected native identity"), 0600)
 	}
 	// Poison history proves this protocol never invokes the accounting decoder.
-	write(legacyStatePaths["usage"], []byte("historical accounting is not imported"), 0600)
+	write("/var/lib/radius-usage/checkpoint.json", []byte("historical accounting is not imported"), 0600)
 	pin, err := ParallelSourceKey()
 	if err != nil {
 		t.Fatal(err)

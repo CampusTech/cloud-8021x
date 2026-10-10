@@ -85,7 +85,7 @@ locals {
 }
 
 resource "google_compute_instance" "radius" {
-  # Existing disks require a separately approved staged in-place OS upgrade.
+  # Preserve existing disks; the Debian 13 rollout uses separate green instances.
   # An image-family edit must never recreate both stateful RADIUS nodes.
   lifecycle {
     prevent_destroy = true
@@ -183,7 +183,7 @@ resource "google_compute_instance" "radius" {
 }
 
 resource "google_compute_instance" "radius_secondary" {
-  # Existing disks require a separately approved staged in-place OS upgrade.
+  # Preserve existing disks; the Debian 13 rollout uses separate green instances.
   # An image-family edit must never recreate both stateful RADIUS nodes.
   lifecycle {
     prevent_destroy = true

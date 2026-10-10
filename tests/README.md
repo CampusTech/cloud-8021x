@@ -69,4 +69,4 @@ collector, machine certificate, pre-login networking and renewal on an actual
 Windows device before rollout.
 
 See [the validation scope review](../docs/validation/scope-review.md) for the
-removed test machinery and the remaining application simplifications.
+removed test machinery, application simplifications and their acceptance limits.

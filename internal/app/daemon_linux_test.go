@@ -36,7 +36,6 @@ import (
 	"github.com/CampusTech/cloud-8021x/internal/config"
 	"github.com/CampusTech/cloud-8021x/internal/domain"
 	"github.com/CampusTech/cloud-8021x/internal/identity"
-	"github.com/CampusTech/cloud-8021x/internal/migration"
 	"github.com/CampusTech/cloud-8021x/internal/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/sirupsen/logrus"
@@ -218,19 +217,16 @@ func TestInstalledAssembledDaemonLedgerOutageAndCancellation(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	for _, node := range []string{"radius-primary", "radius-secondary"} {
-		bundle := migration.Bundle{Version: 1, Node: node, Policy: policyRaw, ClassKeySHA256: stateDigest([]byte(strings.Repeat("k", 32))), UsageAbsent: true, SQL: migration.LegacySQL{Status: "absent"}}
-		raw, _ := json.Marshal(bundle)
-		if e = gate.With(ctx, "fixture-import", func(ctx context.Context) error {
-			if _, e := admin.ImportLegacyBundle(ctx, cfg.StateTransition, raw); e != nil {
-				return e
-			}
-			return admin.ConfirmLegacyPublication(ctx, cfg.StateTransition, node, stateDigest(raw))
-		}); e != nil {
-			t.Fatal(e)
-		}
+	// Signed source handoff is covered by its dedicated integration suite.
+	// This owned fixture seeds worker authority to test the assembled daemon's
+	// behavior during a real database outage.
+	fixtureAdmin, e := pgx.Connect(ctx, adminDSN)
+	if e != nil {
+		t.Fatal(e)
 	}
-	if e = admin.EnableImportedTransition(ctx, cfg.StateTransition); e != nil {
+	_, e = fixtureAdmin.Exec(ctx, "UPDATE bootstrap_private.transitions SET enabled=true WHERE id=$1", cfg.StateTransition)
+	_ = fixtureAdmin.Close(ctx)
+	if e != nil {
 		t.Fatal(e)
 	}
 	listener, e := net.Listen("tcp", "127.0.0.1:0")

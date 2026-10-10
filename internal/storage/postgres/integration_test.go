@@ -44,7 +44,7 @@ func runtimeStore(t *testing.T, _ *Store, c config.Database) *Store {
 }
 func reset(t *testing.T, s *Store) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), "TRUNCATE ledger.legacy_usage_floor,bootstrap_private.auth_quarantine,ledger.legacy_collection_guards,ledger.intake,ledger.sessions,ledger.observations,ledger.intervals,ledger.work,ledger.attempts,ledger.quarantine,ledger.reconciliations,ledger.auth_cursors,ledger.import_markers RESTART IDENTITY CASCADE")
+	_, err := s.pool.Exec(context.Background(), "TRUNCATE bootstrap_private.auth_quarantine,ledger.legacy_collection_guards,ledger.inherited_certificates,ledger.intake,ledger.sessions,ledger.observations,ledger.intervals,ledger.work,ledger.attempts,ledger.quarantine,ledger.reconciliations,ledger.auth_cursors,ledger.import_markers RESTART IDENTITY CASCADE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestPostgresKilledTransactionRecovery(t *testing.T) {
 		t.Fatal("committed identity not recoverable", err)
 	}
 }
-func TestPostgresAuthCursorAndImportAtomicity(t *testing.T) {
+func TestPostgresAuthCursorAndOutboxAtomicity(t *testing.T) {
 	admin, c := integration(t)
 	reset(t, admin)
 	s := runtimeStore(t, admin, c)
@@ -274,32 +274,6 @@ func TestPostgresAuthCursorAndImportAtomicity(t *testing.T) {
 	}
 	if count(t, admin, "work") != 1 {
 		t.Fatal("auth duplicate")
-	}
-	callback := func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, "INSERT INTO ledger.sessions(session_key,initialized,duration,upload,download,bits,marked,stopped) VALUES('legacy',true,20,18446744073709551615,2,64,false,true)")
-		return err
-	}
-	imported, err := s.ImportOnce(ctx, "legacy-v1", "sum", callback)
-	if err != nil || !imported {
-		t.Fatal(imported, err)
-	}
-	imported, err = s.ImportOnce(ctx, "legacy-v1", "sum", callback)
-	if err != nil || imported {
-		t.Fatal("import replay", err)
-	}
-	if _, err = s.ImportOnce(ctx, "legacy-v1", "different", callback); err == nil {
-		t.Fatal("checksum changed")
-	}
-	if _, err = s.ImportOnce(ctx, "rollback", "sum", func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO ledger.sessions(session_key)VALUES('must-rollback')"); err != nil {
-			return err
-		}
-		return errors.New("synthetic failure")
-	}); err == nil {
-		t.Fatal("failed import accepted")
-	}
-	if count(t, admin, "sessions") != 1 || count(t, admin, "import_markers") != 1 {
-		t.Fatal("import partial state")
 	}
 }
 

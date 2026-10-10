@@ -32,6 +32,11 @@ import (
 
 func collectionTrust(t *testing.T) (*fleetadapter.Trust, []byte) {
 	t.Helper()
+	trust, der, _ := collectionTrustMaterial(t)
+	return trust, der
+}
+func collectionTrustMaterial(t *testing.T) (*fleetadapter.Trust, []byte, []byte) {
+	t.Helper()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	now := time.Now()
 	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "fixture CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
@@ -45,11 +50,12 @@ func collectionTrust(t *testing.T) (*fleetadapter.Trust, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trust, err := fleetadapter.NewTrust(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	trust, err := fleetadapter.NewTrust(bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return trust, der
+	return trust, der, bundle
 }
 func TestPostgresFleetWindowsLostResponseReconciliation(t *testing.T) {
 	admin, c := integration(t)

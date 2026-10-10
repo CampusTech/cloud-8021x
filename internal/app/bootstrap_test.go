@@ -12,7 +12,7 @@ import (
 )
 
 func TestRootOperationsRejectAlternateConfigBeforeParsing(t *testing.T) {
-	for _, args := range [][]string{{"bootstrap"}, {"certificates", "renew"}, {"sources", "apply"}} {
+	for _, args := range [][]string{{"bootstrap", "prepare"}, {"certificates", "renew"}, {"sources", "apply"}} {
 		cmd := NewCommand(Options{ProcessUID: func() int { return 0 }})
 		cmd.SetArgs(append(args, "--config", "/tmp/not-protected.yaml"))
 		cmd.SetOut(new(bytes.Buffer))
@@ -24,7 +24,7 @@ func TestRootOperationsRejectAlternateConfigBeforeParsing(t *testing.T) {
 	}
 }
 
-func TestBootstrapDryRunRequiresNoCredentialFilesOrRemoteCalls(t *testing.T) {
+func TestRenewalDryRunRequiresNoCredentialFilesOrRemoteCalls(t *testing.T) {
 	cfg, e := config.Load("../../examples/cloud-8021x.yaml")
 	if e != nil {
 		t.Fatal(e)
@@ -32,7 +32,7 @@ func TestBootstrapDryRunRequiresNoCredentialFilesOrRemoteCalls(t *testing.T) {
 	var output bytes.Buffer
 	// Exercise the pure plan on every platform; root fixed-path parsing has its
 	// separate pre-parse rejection test and actual installed Linux fixture.
-	if e = bootstrapPlan(cfg, RunOptions{DryRun: true, Output: &output}, false); e != nil {
+	if e = renewalPlan(cfg, RunOptions{DryRun: true, Output: &output}); e != nil {
 		t.Fatal(e)
 	}
 	if !strings.Contains(output.String(), "shared-maintenance") {

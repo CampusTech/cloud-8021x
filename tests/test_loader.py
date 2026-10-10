@@ -28,6 +28,13 @@ class LoaderExecution(unittest.TestCase):
             rendered = subprocess.run(['terraform', '-chdir=' + directory, 'console'], text=True, capture_output=True,
                                       input='jsonencode(templatefile(' + json.dumps(str(ROOT / 'scripts/startup.sh')) + ', local.loader))', check=True)
             (fixture / 'loader.sh').write_text(json.loads(json.loads(rendered.stdout)))
+            # A legacy template selector must never invoke the retired bare
+            # bootstrap command, which now only displays the green workflow.
+            values['parallel'] = False
+            (fixture / 'main.tf.json').write_text(json.dumps({'locals': {'loader': values}}))
+            retired = subprocess.run(['terraform', '-chdir=' + directory, 'console'], text=True, capture_output=True,
+                                     input='jsonencode(templatefile(' + json.dumps(str(ROOT / 'scripts/startup.sh')) + ', local.loader))', check=True)
+            (fixture / 'retired-selector.sh').write_text(json.loads(json.loads(retired.stdout)))
             (fixture / 'curl').write_text('''#!/bin/bash
 set -eu
 url=${!#}
@@ -54,7 +61,7 @@ cp "/payload/$name" "$out"
                    '--label', 'cloud8021x.disposable=true', '-v', directory + ':/fixture:ro', 'debian:trixie-slim', 'sleep', 'infinity')
             try:
                 docker('exec', container, 'bash', '-c', 'cp /fixture/curl /usr/bin/curl; chmod 755 /usr/bin/curl')
-                scenarios = [('success', '', True), ('app checksum', 'echo tampered >> /payload/cloud-8021x', False),
+                scenarios = [('success', '', True), ('retired selector', '', True), ('app checksum', 'echo tampered >> /payload/cloud-8021x', False),
                              ('manifest checksum', 'echo tampered >> /payload/manifest.json', False),
                              ('wrong instance', 'echo radius-primary > /instance', False),
                              ('symlink parent', 'ln -s /tmp /var/cache/cloud-8021x', False),
@@ -63,7 +70,8 @@ cp "/payload/$name" "$out"
                 for name, change, success in scenarios:
                     with self.subTest(name=name):
                         docker('exec', container, 'bash', '-c', 'rm -rf /var/cache/cloud-8021x /payload /executed; mkdir /payload; cp /fixture/cloud-8021x /fixture/*.json /fixture/*.yaml /fixture/*.pem /payload/; echo green-test-primary > /instance; ' + change)
-                        result = docker('exec', container, 'bash', '/fixture/loader.sh', ok=False)
+                        loader = '/fixture/retired-selector.sh' if name == 'retired selector' else '/fixture/loader.sh'
+                        result = docker('exec', container, 'bash', loader, ok=False)
                         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
                         execution = docker('exec', container, 'bash', '-c', 'cat /executed 2>/dev/null || true').stdout
                         self.assertEqual(bool(execution), success)

@@ -1,66 +1,29 @@
-# Unified daemon migration and retained-state recovery
+# Unified daemon operations and retained-state recovery
 
-These procedures describe the Go replacement. Deployment, real client EAP/failover
-approval and the signed Debian package release gates are separate. Use the fixed
-protected configuration and the same `state_transition` on `radius-primary` and
-`radius-secondary`. Root commands reject alternate configuration paths and listener
-overrides. Preserve the original incoming artifact, configuration and Class key
-throughout an interrupted operation. Commands below are operator procedures, not
-permission to act on production.
+Use the infrastructure-rendered protected configuration and the same
+`state_transition` on both green nodes. Protected commands reject alternate
+configuration paths and listener overrides. Preserve original incoming artifacts,
+configuration, Class identity and protected receipts through interrupted work.
+Commands below are operator procedures; deployment, traffic switching and real
+client/HA acceptance remain separately reviewed actions.
 
-## Prepare and import the pair
+## Prepare and activate the green pair
 
-Follow [bootstrap preparation](bootstrap-preparation.md) before installing either
-node. Fence-only on both nodes persistently stops the known legacy scheduled
-writers and retains their exact originals; it does not stop native RADIUS or
-capture live SQL. For the first legacy node, separately verify actual client
-EAP/failover on the remaining peer, CA readiness and spool preservation, then stop
-only the migrating node's old native and application listeners. New signed peer
-readiness cannot be inferred from a legacy peer. The protected helper independently
-proves native inactivity, process exit and free ports. This first adoption is
-explicitly disruptive. After the first Go node passes actual client EAP and signed
-readiness, upgrade the second with the normal authenticated peer contract.
+Follow [parallel adoption](parallel-adoption.md) for source key enrollment, signed
+source capture, passive green preparation and two-node activation. The preparation
+requirements are also summarized in [bootstrap preparation](bootstrap-preparation.md).
+Source capture preserves original policy/certificate observations and pending
+Fleet command provenance while original native RADIUS and CA services continue.
+Green preparation adopts the existing CA material and starts an empty accounting
+epoch in its separate application database.
 
-Keep MariaDB running and its data intact until immutable capture/import completes.
-The fixed Go Unix-socket adapter reads `radius.radacct` in a repeatable read-only
-transaction after its old native producer is stopped. A missing socket is unknown,
-not an empty database. SQL-only partial preparation remains quarantined; never
-replace it with a newer snapshot. Fresh hosts instead require positively proven
-absence of all prior native/SQL/state/writer/data footprints, both matching fresh
-seeds and the original Class key. Their initial observer-only Fleet GET must yield
-real usable inventory before local policy readiness; no certificate commands,
-source mutation or shared workers run during that preparation.
-
-After both bootstraps, run on each installed node:
-
-```sh
-sudo /usr/local/bin/cloud-8021x state migrate --dry-run
-sudo /usr/local/bin/cloud-8021x state migrate
-```
-
-Migration validates the complete original bundle before importing under the shared
-migration lock. Original policy age, certificate observation times, ambiguity,
-fingerprint guard, pending collection reservations, SQL counters/nulls and PR38
-checkpoint precision/terminal state survive. Local publication archives the exact
-bundle and binds the original helper/attempt before acknowledging it in private
-PostgreSQL. Both local acknowledgements are required to enable shared workers.
-The first node can report `workers_enabled=false` while waiting for the other.
-An import marker alone is not permission to process. The old Datadog `through`
-checkpoint remains historical data; native spool progress starts independently.
-
-If publication is interrupted, retain its exact reported attempt and use:
-
-```sh
-sudo /usr/local/bin/cloud-8021x state migrate --resume-attempt N
-```
-
-This requires the original helper to have exited, its fixed flock to be available,
-and unchanged original bundle/config/Class/local publication evidence. It resumes
-only that committed import/publication. Short, linked, foreign-owned, substituted
-or uncertain evidence refuses; no deletion/recreation of receipts is a repair.
-Preparation interruptions use the incoming `bootstrap --incoming --resume-attempt N`
-procedure instead. An interrupted fence uses its own command with its original
-`--resume-attempt N`; these attempt selectors are not interchangeable.
+Accounting history, SQL snapshots, checkpoints and outbox records are not imported.
+Pre-epoch records create no credit or export; the first ongoing Interim/Stop
+establishes a zero-credit baseline, and later measured deltas use normal session
+locking and deduplication. Original certificate observation times remain unchanged.
+An interrupted prepare or activation uses its own exact reported
+`--resume-attempt N` in the parallel workflow. Preserve its original helper,
+configuration and installation receipts; expiry alone never proves process exit.
 
 ## Serving and readiness
 
@@ -74,12 +37,12 @@ network, accounting/auth and export work have bounded independent resources.
 Cancellation stops new work, drains within bounds and flushes ordinary telemetry;
 retained business work is not deleted.
 
-The native unit depends on daemon notification readiness. Guarded activation stops
-native before replacing its synchronous Go dependency, retains a runtime mask,
-then checks Go, both CAs, Collector and actual native readiness before release.
-A first legacy failure restores files/ownership but leaves originally stopped
-legacy services stopped. A subsequent Go rollback uses the exact known prior Go
-configuration. Never start an unknown old service merely to clear readiness.
+The native unit depends on daemon notification readiness. Passive preparation
+keeps green services and workers behind persistent activation barriers. Protected
+activation checks both green publications, source fences, CA/Class trust and
+authenticated peer readiness before enabling shared authority. Deactivation
+revokes that authority before physical service fencing; an unavailable peer or
+expired lease never proves that its workers stopped.
 
 Use `doctor` for bounded real dependency observations and `metrics emit` for their
 OTel projection. Unknown values are omitted. The
@@ -88,56 +51,37 @@ PG session/intake/outbox gauges; summing two node reporters doubles the same sta
 Native process/spool/capacity metrics remain host-local. OTLP acceptance is a
 next-hop receipt, not proof that Datadog received or deduplicated an event.
 
-## Cold rollback and retained work
+## Green deactivation and retained work
 
-Cold export deliberately blocks the transition permanently. It is not a pause or
-a general daemon restart mechanism. Plan service disruption and client failover
-before using it. Fence the new native producer and daemon/root workers on each
-node under the protected peer-ready or proven-stopped contract:
+Follow the [reverse handoff](parallel-adoption.md#reverse-handoff) on both green
+hosts:
 
 ```sh
-sudo /usr/local/bin/cloud-8021x state export --fence-only --dry-run
-sudo /usr/local/bin/cloud-8021x state export --fence-only
+sudo /usr/local/bin/cloud-8021x bootstrap deactivate
 ```
 
-The first call revokes shared new work before physical fencing. Each node retains
-its original unit/process/PID-start/flock, configuration, native-file and current
-snapshot evidence. The second node requires its own positive local stop proof if
-the first is already stopped; do not assert that an unavailable peer is ready.
-The helper checks process exit and fixed units, not just lease expiry. If a fence
-is interrupted, repeat `state export --fence-only --resume-attempt N` only for its
-reported attempt. Both actual fences/current-state receipts are needed for export
-or the root new-work recovery modes below.
+Deactivation permanently revokes the shared worker epoch before stopping local
+production services and retaining physical worker/PID/native and current-state
+receipts. Plan disruption and client failover through the reviewed cutover
+procedure. An interrupted fence uses `bootstrap deactivate --resume-attempt N`
+with its original reported attempt. Both actual physical fence/state receipts are
+required by the root work recovery modes below and by rollback proof.
 
-Resolve any deliberately selected retained work **before writing the final cold
-export**. Then, on an installed node:
+Resolve imported original certificate-command guards and all attempted green
+certificate delivery using the exact retained recovery paths. Unknown or pending
+responses remain unresolved. Never-attempted queued/leased work remains retained
+in the revoked green epoch. Green accounting, outbox payloads, attempts,
+reconciliation history and uncertain deliveries stay in PostgreSQL; there is no
+compatible accounting archive export or backwards merge into the original system.
 
-```sh
-sudo /usr/local/bin/cloud-8021x state export --dry-run
-sudo /usr/local/bin/cloud-8021x state export
-```
-
-Output names the root-only immutable file
-`/var/lib/cloud-8021x-bootstrap/writers/<state_transition>/rollback.json`.
-`original` retains exact captured bundles; `legacy` contains the compatible current
-policy/device projection; `current` preserves typed provider caches, protected
-sources and native file identities; `ledger` retains work, attempts, reconciliation,
-operator successor lineage/outcomes, exact sessions/counters, intake and cursors.
-The usage checkpoint retains its original precision, terminal and ambiguous
-batches. Original Class bytes and sticky identity cannot be downgraded. A different
-second export is refused rather than overwriting the first archive.
-
-Legacy code cannot safely interpret new pending/started/unknown work. Keep that
-sidecar and PostgreSQL ledger; do not turn it into a legacy pending-send batch.
-Unstarted pending new work stays retained; normal Go workers can drain eligible
-work before entering the irreversible cold fence. Unknown original deliveries stay
-unknown unless the typed evidence below proves a narrower fact. No command here
-unfences workers or restores old writers. Restoring old executables/units/ownership
-is a separately approved cold rollback using preserved original files/package
-archives and the final compatible export, with the new pair still fenced. Keep
-old MariaDB, both CA databases/keys/KMS references, Class key, fingerprint marker,
-all unknown work, native pending accounting spool and DDOT queue. Never run old and
-new usage writers together or delete spool files on presumed delivery success.
+After both fences and command reconciliation, use `bootstrap rollback-proof` and
+transfer both signed root-only proofs as specified by parallel adoption. Only
+`bootstrap resume-source --incoming` on the original physical hosts verifies
+those proofs and restores their original scheduler/helper files. Traffic
+restoration remains a separate reviewed action. Keep the original deployment,
+CA databases/keys/KMS references, Class identity, fingerprint guard, unknown work,
+native pending accounting spool and DDOT queue intact. Receipt expiry, missing
+nodes or presumed delivery success never justify discarding retained state.
 
 ## Exact retained collection and delivery recovery
 
@@ -156,8 +100,8 @@ only the already committed original terminal resolution.
 
 New Go work uses the closed `state recover-work` modes. Obtain the original work
 ID/generation through approved read-only administrative inspection of `ledger.work`
-and its original attempts before writing the final cold export. Inspection reports the exact PG
-payload digest without writing work or sending anything:
+and its original attempts. Inspection reports the exact PG payload digest without
+writing work or sending anything:
 
 ```sh
 sudo /usr/local/bin/cloud-8021x state recover-work --kind fleet-terminal --work WORK_ID --generation GENERATION --dry-run
@@ -276,40 +220,10 @@ are optional. The stable UUID5 namespace, RSA2048 nonextractable key, exact devi
 CN, pinned root/server, EAP13 and fresh per-issuance OU match the retained Python
 profile. `scep-challenge` retains challenge versions/lifetime and private output;
 dry-run validates without minting or writing. The unified command uses committed
-file references, not the compatibility executable's environment fallback.
+file references.
 
 Fleet observers and maintainers remain distinct. Collection intersects their
 scopes, keeps ACME-only devices exempt and only polls the configured minimum
 SCEP/BYOD scope. Class wire bytes and original receipt-time verification are
-unchanged. Legacy display labels map only when original source/config establishes
-exact provider origin, console/site/location scope. Otherwise historical raw bytes
-remain in export and display is unavailable. Fallback age is capped at the original
-one-hour TTL and the current metadata maximum, independent of inventory/source TTL.
-A successful current VLAN observation, including an empty one, supersedes fallback.
-
-## Interrupted legacy baseline checkpoints
-
-A deployed PR38 version2 checkpoint with `phase: baseline` records an incomplete
-historical source scan. Migration preserves the exact original document,
-`credit_start`, `through`, original timestamps and integer counters. Its scan
-`through` is never a native spool cursor or proof of delivered traffic.
-
-A protected migration-only floor in PostgreSQL suppresses usage intervals for
-original receipts before the original credit floor. Valid reports still update
-counter baselines. Each session then learns its first valid, non-predating native
-observation at or after that floor without credit, preventing a delta across
-unobserved history; subsequent valid intervals use ordinary processing. A delayed
-pre-floor report that advances counters re-arms that baseline requirement. This
-can conservatively undercount a first interval; it does not reconstruct missing
-history or change ordinary version1 checkpoint semantics.
-
-Cold rollback export of an incomplete version2 checkpoint returns its exact
-original baseline state, independently from the advanced sessions, intervals,
-outcomes and floor retained in the full current ledger sidecar. It includes
-`legacy_usage_recovery: incomplete_history_manual_reconciliation`. **Reconcile
-the retained sidecar before reactivating legacy usage writers.** Never combine
-the original scan cursor with advanced native counters, discard the sidecar,
-automatically replay/send events, or mark the legacy scan complete based on a
-native receipt time. Only an actual resumed legacy scan can finish its original
-baseline and return to version1. The new enabled runtime performs no Datadog
-readback.
+unchanged. VLAN/AP display labels come from scoped controller observations;
+failed metadata refreshes do not extend their original age.

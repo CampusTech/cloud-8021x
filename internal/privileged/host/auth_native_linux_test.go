@@ -129,6 +129,23 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 			t.Fatalf("native auth packet: %v %s log=%s", e, out, data)
 		}
 	}
+	startNative := func() {
+		t.Helper()
+		run("/usr/sbin/freeradius", "-XC")
+		log, e := os.OpenFile("/run/task9-auth-native.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if e != nil {
+			t.Fatal(e)
+		}
+		process = exec.Command("/usr/sbin/freeradius", "-d", radiusDirectory, "-f")
+		process.Stdout = log
+		process.Stderr = log
+		process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LD_PRELOAD=" + faketimeLibrary, "FAKETIME_TIMESTAMP_FILE=" + clockFile, "FAKETIME_NO_CACHE=1", "FAKETIME_DONT_FAKE_MONOTONIC=1"}
+		if e = process.Start(); e != nil {
+			t.Fatal(e)
+		}
+		_ = log.Close()
+		time.Sleep(150 * time.Millisecond)
+	}
 	activate := func(generation string, prior *AuthGeneration) *AuthGeneration {
 		t.Helper()
 		tree, e := native.RenderWithSecrets(cfg, generation, secrets)
@@ -149,27 +166,12 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		transaction.receipt.WriterRetirement = &writerRetirement{Native: map[string]string{}}
-		for name, raw := range tree {
-			transaction.receipt.WriterRetirement.Native[name] = digestBytes(raw)
-		}
+		// Green preparation has no retired legacy writer. Its ordinary completed
+		// receipt must independently attest the installed native auth module.
 		if e = transaction.Apply(ctx, &activationFixture{}); e != nil {
 			t.Fatal(e)
 		}
-		run("/usr/sbin/freeradius", "-XC")
-		log, e := os.OpenFile("/run/task9-auth-native.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-		if e != nil {
-			t.Fatal(e)
-		}
-		process = exec.Command("/usr/sbin/freeradius", "-d", radiusDirectory, "-f")
-		process.Stdout = log
-		process.Stderr = log
-		process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LD_PRELOAD=" + faketimeLibrary, "FAKETIME_TIMESTAMP_FILE=" + clockFile, "FAKETIME_NO_CACHE=1", "FAKETIME_DONT_FAKE_MONOTONIC=1"}
-		if e = process.Start(); e != nil {
-			t.Fatal(e)
-		}
-		_ = log.Close()
-		time.Sleep(150 * time.Millisecond)
+		startNative()
 		packet()
 		if e = CompleteAuthGeneration(ctx, backend, transaction.Reference(), generation, prior); e != nil {
 			args, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", process.Process.Pid))
@@ -181,8 +183,44 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 		}
 		return observed
 	}
-	g1, g2, g3 := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32)
+	g1, g2, g3, g4, g5 := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32), strings.Repeat("d", 32), strings.Repeat("e", 32)
 	first := activate(g1, nil)
+	receiptPath := filepath.Join(transactionRoot, first.Reference, "receipt.json")
+	completed, e := os.ReadFile(receiptPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, name := range []string{"tampered native hash", "incomplete receipt"} {
+		t.Run(name, func(t *testing.T) {
+			var receipt Receipt
+			if e := json.Unmarshal(completed, &receipt); e != nil {
+				t.Fatal(e)
+			}
+			if receipt.WriterRetirement != nil || receipt.Native["mods-enabled/auth_detail"] == "" {
+				t.Fatal("green auth module must be attested without legacy retirement")
+			}
+			if name == "tampered native hash" {
+				receipt.Native["mods-enabled/auth_detail"] = strings.Repeat("0", 64)
+			} else {
+				receipt.Phase = "prepared"
+			}
+			raw, e := json.Marshal(receipt)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = os.WriteFile(receiptPath, raw, 0600); e != nil {
+				t.Fatal(e)
+			}
+			defer func() {
+				if e := os.WriteFile(receiptPath, completed, 0600); e != nil {
+					t.Error(e)
+				}
+			}()
+			if _, e = CaptureAuthGeneration(ctx, backend); e == nil {
+				t.Fatal("invalid native activation evidence accepted")
+			}
+		})
+	}
 	firstPath := filepath.Join(authDirectory, "auth-"+g1+"-2026100810.detail")
 	info, e := os.Stat(firstPath)
 	if e != nil {
@@ -228,6 +266,60 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 	if second.Generation == first.Generation || second.Producer == first.Producer {
 		t.Fatal("replacement generation did not bind new real producer")
 	}
+	// An ordinary restart preserves the module and receipt but changes the
+	// actual producer. Renewal may proceed without manufacturing closure.
+	stop()
+	startNative()
+	packet()
+	uncertain, e := CaptureAuthGeneration(ctx, backend)
+	if e != nil || uncertain != nil {
+		t.Fatalf("ordinary restart blocked renewal or invented closure: prior=%+v err=%v", uncertain, e)
+	}
+	persisted, e := readAuthGeneration(g2)
+	if e != nil || persisted.Producer != second.Producer {
+		t.Fatal("restart rewrote protected producer attestation", e)
+	}
+	reader, e = auth.New(auth.Options{Directory: authDirectory, Host: "fixture", ProducerUID: accounts.NativeUID, EventGID: accounts.EventsGID, Store: store})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if n, e := reader.Poll(ctx); e != nil || n != 2 {
+		t.Fatal("restart logs were not consumed to EOF", n, e)
+	}
+	stop()
+	// Proven stop cannot bypass the same attestation validation used while active.
+	stoppedReceipt := filepath.Join(transactionRoot, second.Reference, "receipt.json")
+	originalReceipt, e := os.ReadFile(stoppedReceipt)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(stoppedReceipt, []byte("{"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	_, rejected := CaptureAuthGeneration(ctx, backend)
+	if e = os.WriteFile(stoppedReceipt, originalReceipt, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if rejected == nil || !strings.Contains(rejected.Error(), "completed native attestation") {
+		t.Fatalf("stopped capture bypassed malformed receipt: %v", rejected)
+	}
+	if prior, e := CaptureAuthGeneration(ctx, backend); e != nil || prior != nil {
+		t.Fatalf("proven stopped native blocked renewal or invented closure: prior=%+v err=%v", prior, e)
+	}
+	third := activate(g3, uncertain)
+	if third.ClosedPrevious || third.Previous != "" {
+		t.Fatal("renewal manufactured closure for uncertain producer")
+	}
+	if n, e := reader.Poll(ctx); e != nil || n != 1 {
+		t.Fatal("replacement logs were not consumed to EOF", n, e)
+	}
+	_ = reader.Close()
+	secondPath := filepath.Join(authDirectory, "auth-"+g2+"-2026100810.detail")
+	thirdPath := filepath.Join(authDirectory, "auth-"+g3+"-2026100810.detail")
+	thirdModule, e := os.ReadFile(radiusDirectory + "/mods-enabled/auth_detail")
+	if e != nil {
+		t.Fatal(e)
+	}
 	pending := filepath.Join(authDirectory, "auth-"+g1+"-1999010100.detail")
 	if e = os.WriteFile(pending, []byte("malformed pending\n\n"), 0640); e != nil {
 		t.Fatal(e)
@@ -236,14 +328,48 @@ func TestInstalledAuthGenerationRetentionAndClockRollback(t *testing.T) {
 		t.Fatal(e)
 	}
 	stop()
-	result, e := PruneClosedAuthGenerations(ctx, backend, "fixture", g3, g2, accounts, store)
+	result, e := PruneClosedAuthGenerations(ctx, backend, "fixture", g4, g3, accounts, store)
 	if e != nil || result.Removed != 2 || result.Retained != 1 {
 		t.Fatalf("closed native cleanup=%+v err=%v", result, e)
 	}
 	if _, e = os.Stat(pending); e != nil {
 		t.Fatal("malformed original lost", e)
 	}
-	activate(g3, second)
+	for _, path := range []string{secondPath, thirdPath} {
+		if _, e = os.Stat(path); e != nil {
+			t.Fatal("uncertain or rollback generation removed", path, e)
+		}
+	}
+	activate(g4, third)
+	stop()
+	fourthModule, e := os.ReadFile(radiusDirectory + "/mods-enabled/auth_detail")
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Restore a prior completed auth module while stopped. Its historical
+	// closure cannot authorize deleting the currently configured generation.
+	if e = os.WriteFile(radiusDirectory+"/mods-enabled/auth_detail", thirdModule, 0600); e != nil {
+		t.Fatal(e)
+	}
+	result, e = PruneClosedAuthGenerations(ctx, backend, "fixture", g5, g4, accounts, store)
+	if e != nil || result.Removed != 0 || result.Retained != 1 {
+		t.Fatalf("current generation cleanup=%+v err=%v", result, e)
+	}
+	if _, e = os.Stat(thirdPath); e != nil {
+		t.Fatal("current completed generation lost", e)
+	}
+	if e = os.WriteFile(radiusDirectory+"/mods-enabled/auth_detail", fourthModule, 0600); e != nil {
+		t.Fatal(e)
+	}
+	result, e = PruneClosedAuthGenerations(ctx, backend, "fixture", g5, g4, accounts, store)
+	if e != nil || result.Removed != 1 || result.Retained != 1 {
+		t.Fatalf("later closed generation cleanup=%+v err=%v", result, e)
+	}
+	for _, path := range []string{secondPath, pending, filepath.Join(authDirectory, "auth-"+g4+"-2026100810.detail")} {
+		if _, e = os.Stat(path); e != nil {
+			t.Fatal("uncertain, unconsumed or rollback generation lost", path, e)
+		}
+	}
 	if _, e = os.Stat(firstPath); !os.IsNotExist(e) {
 		t.Fatal("old producer generation reopened after distinct activation", e)
 	}

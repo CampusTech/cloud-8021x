@@ -41,7 +41,7 @@ func NewRuntimeServices() *RuntimeServices { return &RuntimeServices{} }
 // Runtime dispatch keeps privileged actions separate from unprivileged service ownership.
 func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg config.Config, o RunOptions) error {
 	parallelOperation := op == OperationParallelPrepare || op == OperationParallelSourceKey || op == OperationParallelCapture || op == OperationParallelActivate || op == OperationParallelDeactivate || op == OperationParallelRollbackProof || op == OperationParallelResumeSource
-	if (o.Incoming && op != OperationBootstrap && !parallelOperation) || (o.FenceOnly && op != OperationBootstrap && op != OperationStateExport) {
+	if o.Incoming && !parallelOperation {
 		return errors.New("incoming release selector is bootstrap-only")
 	}
 	if err := ctx.Err(); err != nil {
@@ -49,9 +49,6 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	}
 	if parallelOperation {
 		return protectedParallel(ctx, op, cfg, o)
-	}
-	if err := rejectParallelLegacyOperation(op, cfg); err != nil {
-		return err
 	}
 	if op == OperationServe {
 		return serveDaemon(ctx, cfg, o)
@@ -68,23 +65,11 @@ func (services *RuntimeServices) Run(ctx context.Context, op Operation, cfg conf
 	if op == OperationStateRecoverCollection {
 		return protectedLegacyRecovery(ctx, cfg, o)
 	}
-	if op == OperationStateExport {
-		return protectedStateExport(ctx, cfg, o)
-	}
-	if op == OperationStateMigrate {
-		return protectedStateMigrate(ctx, cfg, o)
-	}
-	if op == OperationStateFence {
-		return protectedStateFence(ctx, cfg, o)
-	}
-	if op == OperationBootstrap {
-		return protectedBootstrap(ctx, cfg, o, false)
-	}
-	if op == OperationCertificatesRenew && cfg.Parallel() {
-		return renewParallel(ctx, cfg, o)
-	}
 	if op == OperationCertificatesRenew {
-		return protectedBootstrap(ctx, cfg, o, true)
+		if !cfg.Parallel() {
+			return errors.New("certificate renewal requires a prepared parallel deployment")
+		}
+		return renewParallel(ctx, cfg, o)
 	}
 	if op == OperationRefreshCredentials {
 		return refreshRootCredentials(ctx, cfg, o)

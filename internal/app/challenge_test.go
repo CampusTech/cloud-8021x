@@ -1,7 +1,7 @@
 package app
 
 import (
-	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,14 +13,13 @@ import (
 
 func TestChallengeCommand(t *testing.T) {
 	key := strings.Repeat("secret-key-", 4)
-	t.Setenv("SCEP_CHALLENGE_SIGNING_KEY", key)
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte(key), 0600); err != nil {
+		t.Fatal(err)
+	}
 	output := filepath.Join(t.TempDir(), "challenge")
-	cmd := NewCompatibilityCommand("test")
-	cmd.SetArgs([]string{"scep-challenge", "--identity", "byod-enrollment-id", "--provisioner", "wifi-scep", "--out", output})
-	var stdout bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stdout)
-	if err := cmd.Execute(); err != nil {
+	stdout, err := execute(t, context.Background(), nil, "scep-challenge", "--identity", "byod-enrollment-id", "--provisioner", "wifi-scep", "--signing-key-file", keyFile, "--out", output)
+	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(output)
@@ -38,18 +37,19 @@ func TestChallengeCommand(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("challenge file must be private")
 	}
-	if strings.Contains(stdout.String(), token) || strings.Contains(stdout.String(), key) {
+	if strings.Contains(stdout, token) || strings.Contains(stdout, key) {
 		t.Fatal("secret printed")
 	}
 }
 
 func TestChallengeCommandDryRunAndInvalidTTL(t *testing.T) {
-	t.Setenv("SCEP_CHALLENGE_SIGNING_KEY", strings.Repeat("k", 32))
+	keyFile := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(keyFile, []byte(strings.Repeat("k", 32)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{{"--dry-run"}, {"--ttl", "25h"}} {
 		output := filepath.Join(t.TempDir(), "challenge")
-		cmd := NewCompatibilityCommand("test")
-		cmd.SetArgs(append([]string{"scep-challenge", "--identity", "device", "--provisioner", "wifi-scep", "--out", output}, args...))
-		err := cmd.Execute()
+		_, err := execute(t, context.Background(), nil, append([]string{"scep-challenge", "--identity", "device", "--provisioner", "wifi-scep", "--signing-key-file", keyFile, "--out", output}, args...)...)
 		if (args[0] == "--dry-run") != (err == nil) {
 			t.Fatalf("unexpected result: %v", err)
 		}

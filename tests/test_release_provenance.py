@@ -50,7 +50,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
     def build(self, checkout, temporary):
         workflow = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
         job = workflow['jobs']['build']
-        step = next(step for step in job['steps'] if step.get('name') == 'Build pinned application and byte-identical aliases')
+        step = next(step for step in job['steps'] if step.get('name') == 'Build pinned unified application')
         toolchain = subprocess.check_output(['go', 'env', 'GOROOT'], cwd=ROOT, text=True).strip()
         environment = {**os.environ, 'PATH': str(Path(toolchain) / 'bin') + os.pathsep + os.environ['PATH'],
                        'RUNNER_TEMP': str(temporary), 'GITHUB_ENV': str(temporary / 'github-env'), 'GOTOOLCHAIN': 'go1.27.2',
@@ -65,6 +65,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
         binaries = list(temporary.rglob('cloud-8021x-linux-*'))
         self.assertEqual(len(binaries), 2)
         checksums = dict(line.split()[::-1] for line in (binaries[0].parent / 'SHA256SUMS').read_text().splitlines())
+        self.assertEqual(set(checksums), {'cloud-8021x-linux-amd64', 'cloud-8021x-linux-arm64'})
         metadata = {}
         for binary in binaries:
             architecture = binary.name.rsplit('-', 1)[1]
@@ -75,9 +76,6 @@ class ReleaseProvenanceTests(unittest.TestCase):
             self.assertIn('CGO_ENABLED=0', info)
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
             self.assertEqual(checksums[binary.name], digest)
-            alias = binary.with_name('acme-authz-webhook-linux-' + architecture)
-            self.assertEqual(alias.read_bytes(), binary.read_bytes())
-            self.assertEqual(checksums[alias.name], digest)
         return metadata
 
     def test_scan_checksum_and_upload_consume_the_external_output(self):

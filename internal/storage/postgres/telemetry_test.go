@@ -105,7 +105,7 @@ func TestPostgresTelemetryTerminationMigrationAndImmutableDedup(t *testing.T) {
 	ctx := context.Background()
 	// Recreate the exact v2 column contract in this disposable fixture, leaving a
 	// pending old raw row and an immutable already-reserved payload across upgrade.
-	if _, err := admin.pool.Exec(ctx, "ALTER TABLE ledger.intake DROP COLUMN terminate_cause, DROP COLUMN terminate_cause_count; ALTER TABLE ledger.sessions DROP COLUMN native_baseline_required; DROP TABLE ledger.legacy_usage_floor; DELETE FROM ledger.schema_version WHERE version>=3"); err != nil {
+	if _, err := admin.pool.Exec(ctx, "ALTER TABLE ledger.intake DROP COLUMN terminate_cause, DROP COLUMN terminate_cause_count; DELETE FROM ledger.schema_version WHERE version>=3"); err != nil {
 		t.Fatal(err)
 	}
 	legacy := testRaw("old-stop", "Stop")

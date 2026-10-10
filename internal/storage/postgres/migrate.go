@@ -92,7 +92,7 @@ func (s *Store) Migrate(ctx context.Context, r Roles) error {
 		}
 	}
 	if v <= 3 {
-		if _, err = tx.Exec(ctx, migrations.LegacyBaseline); err != nil {
+		if _, err = tx.Exec(ctx, migrations.ReservedV4); err != nil {
 			return safeError(err)
 		}
 	}

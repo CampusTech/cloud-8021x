@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestPostgresProtectedTransitionRequiresTwoFencesAndImport(t *testing.T) {
+func TestPostgresProtectedTransitionRequiresTwoFencesAndActivation(t *testing.T) {
 	s, c := integration(t)
 	ctx := context.Background()
 	runtime := runtimeStore(t, s, c)
@@ -37,19 +37,14 @@ func TestPostgresProtectedTransitionRequiresTwoFencesAndImport(t *testing.T) {
 	if err = s.RequireWriterFences(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.EnableImportedTransition(ctx, id); err == nil {
-		t.Fatal("activated without import marker")
-	}
 	if err = runtime.RecordWriterFence(ctx, id, "radius-primary", hash, hash); err == nil {
 		t.Fatal("runtime forged root receipt")
 	}
 	if _, err = runtime.pool.Exec(ctx, `UPDATE bootstrap_private.transitions SET enabled=true`); err == nil {
 		t.Fatal("runtime modified private transition")
 	}
-	if _, err = s.pool.Exec(ctx, `INSERT INTO ledger.import_markers(id,checksum) VALUES($1,$2) ON CONFLICT DO NOTHING`, "state:"+id, hash); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.EnableImportedTransition(ctx, id); err != nil {
+	// The protected activation workflow is covered by the parallel suite.
+	if _, err = s.pool.Exec(ctx, `UPDATE bootstrap_private.transitions SET enabled=true WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	if err = runtime.WorkersAllowed(ctx, id); err != nil {
@@ -78,10 +73,7 @@ func TestPostgresTransitionOrdersRevocationAgainstProgress(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO ledger.import_markers(id,checksum) VALUES($1,$2)`, "state:"+id, hash); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.EnableImportedTransition(ctx, id); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE bootstrap_private.transitions SET enabled=true WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	worker := runtimeStore(t, s, c).ForTransition(id)

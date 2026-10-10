@@ -32,12 +32,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: test "$RELEASE_TAG" = "v$(cat VERSION)"
-      - name: Test actual executable aliases
+      - name: Test executable names use the unified CLI
         run: go test ./cmd/cloud-8021x -count=1
       - name: Select external application output
         # Keep generated artifacts outside the checkout for honest VCS metadata.
         run: echo "RELEASE_OUTPUT=$RUNNER_TEMP/cloud-8021x-application-release" >> "$GITHUB_ENV"
-      - name: Build pinned application and byte-identical aliases
+      - name: Build pinned unified application
         run: mkdir "$RELEASE_OUTPUT" && scripts/build-release.sh "$RELEASE_OUTPUT"
       - name: Scan both actual release binaries
         run: |

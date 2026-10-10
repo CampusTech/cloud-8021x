@@ -66,46 +66,6 @@ func (s *Store) Cursor(ctx context.Context, source string) (string, error) {
 	return cursor, safeError(err)
 }
 
-// ImportOnce fences a complete legacy import and marker in ONE transaction.
-// The callback receives a transaction, never an uncoordinated pool. Migration
-// tooling must stop old writers before import; importing cannot fence them.
-func (s *Store) ImportOnce(ctx context.Context, id, checksum string, apply func(context.Context, pgx.Tx) error) (bool, error) {
-	if id == "" || checksum == "" || apply == nil {
-		return false, errors.New("invalid import marker")
-	}
-	ctx, cancel := s.bounded(ctx)
-	defer cancel()
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return false, safeError(err)
-	}
-	defer rollback(tx)
-	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(8021,2)"); err != nil {
-		return false, safeError(err)
-	}
-	var old string
-	err = tx.QueryRow(ctx, "SELECT checksum FROM ledger.import_markers WHERE id=$1", id).Scan(&old)
-	if err == nil {
-		if old != checksum {
-			return false, errors.New("import marker checksum mismatch")
-		}
-		return false, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, safeError(err)
-	}
-	if err = apply(ctx, tx); err != nil {
-		return false, safeError(err)
-	}
-	if _, err = tx.Exec(ctx, "INSERT INTO ledger.import_markers(id,checksum) VALUES($1,$2)", id, checksum); err != nil {
-		return false, safeError(err)
-	}
-	if err = commit(ctx, tx); err != nil {
-		return false, ErrUncertain
-	}
-	return true, nil
-}
-
 // AuthCursors bounds a quiescent root retention pass to one database query.
 func (s *Store) AuthCursors(ctx context.Context, sources []string) (map[string]string, error) {
 	out := map[string]string{}
