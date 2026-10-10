@@ -1,21 +1,18 @@
-"""Exercise private per-device profile delivery through the real issuer CLI."""
+"""Exercise private per-device profile and challenge output through the Go CLI."""
 import base64
-import importlib.util
+import hashlib
+import hmac
 import json
-import os
 from pathlib import Path
 import plistlib
 import shutil
 import ssl
 import subprocess
-import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/byod_profile.py"
 
 
 @unittest.skipUnless(shutil.which("go") and shutil.which("openssl"), "requires Go and OpenSSL")
@@ -24,9 +21,9 @@ class BYODGeneratorTests(unittest.TestCase):
     def setUpClass(cls):
         cls.shared = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.shared.cleanup)
-        cls.binary = Path(cls.shared.name) / "webhook"
+        cls.binary = Path(cls.shared.name) / "cloud-8021x"
         result = subprocess.run(
-            ["go", "build", "-o", str(cls.binary), "."], cwd=ROOT / "webhook",
+            ["go", "build", "-o", str(cls.binary), "./cmd/cloud-8021x"], cwd=ROOT,
             capture_output=True, text=True,
         )
         if result.returncode:
@@ -54,7 +51,8 @@ class BYODGeneratorTests(unittest.TestCase):
 
     def run_cli(self, *extra, success=True):
         result = subprocess.run([
-            sys.executable, str(SCRIPT), "--webhook-bin", str(self.binary),
+            str(self.binary), "--config", str(ROOT / "examples/cloud-8021x.yaml"),
+            "byod-profile",
             "--identity", self.identity, "--provisioner", "wifi-scep",
             "--scep-url", "https://ca.example.com/scep/wifi-scep",
             "--ssid", "Campus & <Guests>", "--radius-server-name", "radius.example.com",
@@ -81,10 +79,7 @@ class BYODGeneratorTests(unittest.TestCase):
         self.assertEqual(config["URL"], "https://ca.example.com/scep/wifi-scep")
         self.assertEqual(config["Name"], "wifi-scep")
         token = config["Challenge"]
-        claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
-        self.assertEqual(claims["identity"], self.identity)
-        self.assertEqual(claims["provisioner"], "wifi-scep")
-        self.assertEqual(claims["exp"] - claims["iat"], 900)
+        self.assert_signed_challenge(token, ttl=900)
         self.assertNotIn(token, result.stdout + result.stderr)
         self.assertNotIn(self.secret.encode(), raw)
         self.assertFalse(config["KeyIsExtractable"])
@@ -119,10 +114,8 @@ class BYODGeneratorTests(unittest.TestCase):
         self.assertNotEqual(first["PayloadIdentifier"], third["PayloadIdentifier"])
 
     def test_dry_run_validates_without_minting_or_files(self):
-        fake = self.directory / "issuer"
-        fake.write_text("#!/bin/sh\necho SHOULD_NOT_RUN >&2\nexit 1\n")
-        fake.chmod(0o700)
-        self.run_cli("--webhook-bin", str(fake), "--dry-run", "--fleet-command-out", str(self.command))
+        result = self.run_cli("--dry-run", "--fleet-command-out", str(self.command))
+        self.assertIn("no challenge issued or files written", result.stdout)
         self.assertFalse(self.profile.exists())
         self.assertFalse(self.command.exists())
 
@@ -159,32 +152,60 @@ class BYODGeneratorTests(unittest.TestCase):
         self.run_cli("--radius-ca-cert", str(der), "--ttl", "1h30m")
         profile = plistlib.loads(self.profile.read_bytes())
         token = profile["PayloadContent"][0]["PayloadContent"]["Challenge"]
-        claims = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
-        self.assertEqual(claims["exp"] - claims["iat"], 5400)
+        self.assert_signed_challenge(token, ttl=5400)
 
-    def test_issuer_failure_is_private_and_leaves_no_profile(self):
-        fake = self.directory / "issuer"
-        fake.write_text("#!/bin/sh\ncat '" + str(self.key) + "' >&2\nexit 1\n")
-        fake.chmod(0o700)
-        self.run_cli("--webhook-bin", str(fake), success=False)
-        self.assertFalse(self.profile.exists())
+    def test_signing_key_must_be_private_and_valid(self):
+        for contents, permissions in ((self.secret, 0o644), ("too-short", 0o600)):
+            with self.subTest(permissions=permissions):
+                self.key.write_text(contents + "\n")
+                self.key.chmod(permissions)
+                self.run_cli(success=False)
+                self.assertFalse(self.profile.exists())
 
-    def test_second_output_failure_removes_first_private_output(self):
-        spec = importlib.util.spec_from_file_location("byod_profile", SCRIPT)
-        generator = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(generator)
-        original_open = os.open
+    def assert_signed_challenge(self, token, *, ttl):
+        version, payload, signature = token.split(".")
+        self.assertEqual(version, "v1")
+        decode = lambda value: base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        claims = json.loads(decode(payload))
+        self.assertEqual(claims["identity"], self.identity)
+        self.assertEqual(claims["provisioner"], "wifi-scep")
+        self.assertEqual(claims["exp"] - claims["iat"], ttl)
+        expected = hmac.new(self.secret.encode(),
+                            b"cloud-8021x/scep-challenge\x00" + (version + "." + payload).encode(),
+                            hashlib.sha256).digest()
+        self.assertEqual(decode(signature), expected)
 
-        def fail_second(path, flags, mode):
-            if path == self.command:
-                raise OSError("disk unavailable")
-            return original_open(path, flags, mode)
+    def run_challenge(self, *extra, success=True):
+        result = subprocess.run([
+            str(self.binary), "--config", str(ROOT / "examples/cloud-8021x.yaml"),
+            "scep-challenge", "--identity", self.identity, "--provisioner", "wifi-scep",
+            "--signing-key-file", str(self.key), "--out", str(self.command), *extra,
+        ], capture_output=True, text=True)
+        if success:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn(self.secret, result.stdout + result.stderr)
+        return result
 
-        with patch.object(generator.os, "open", side_effect=fail_second):
-            with self.assertRaisesRegex(OSError, "disk unavailable"):
-                generator.write_outputs([(self.profile, b"private profile"), (self.command, b"private command")])
-        self.assertFalse(self.profile.exists())
+    def test_challenge_cli_keeps_signed_token_private_and_never_overwrites(self):
+        result = self.run_challenge("--ttl", "1h30m", "--debug")
+        token = self.command.read_text().strip()
+        self.assert_signed_challenge(token, ttl=5400)
+        self.assertEqual(self.command.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(token, result.stdout + result.stderr)
+        self.run_challenge(success=False)
+        self.assertEqual(self.command.read_text().strip(), token)
+
+    def test_challenge_cli_dry_run_and_invalid_bindings_leave_no_output(self):
+        result = self.run_challenge("--dry-run")
+        self.assertIn("no challenge written", result.stdout)
         self.assertFalse(self.command.exists())
+        for args in (("--identity", " "), ("--provisioner", " "),
+                     ("--ttl", "0s"), ("--ttl", "25h"), ("--ttl", "500ms")):
+            with self.subTest(args=args):
+                self.run_challenge(*args, success=False)
+                self.assertFalse(self.command.exists())
 
 
 if __name__ == "__main__":

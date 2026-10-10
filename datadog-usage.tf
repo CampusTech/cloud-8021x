@@ -14,7 +14,7 @@ locals {
   usage_counter_columns = min(4, length(local.usage_counter_sites))
   usage_counter_rows    = ceil(length(local.usage_counter_sites) / local.usage_counter_columns)
   accounting_filter     = "service:radius-acct ${local.radius_log_hosts_filter} @site_name:$site.value"
-  usage_preview_filter  = var.radius_usage_preview_id == "" ? "" : " @preview_id:${var.radius_usage_preview_id}"
+  usage_preview_filter  = ""
   usage_filter          = "service:radius-usage ${local.radius_log_hosts_filter} @site_name:$site.value${local.usage_preview_filter}"
   usage_queries = [
     for direction, metric in { upload = "@input_bytes", download = "@output_bytes" } : {
@@ -65,7 +65,7 @@ locals {
         {
           definition = {
             type             = "note"
-            content          = "**Usage:** Upload/download are from the device’s perspective. Totals include ongoing sessions and deduplicate reports. Totals follow the network’s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. ${var.enable_radius_usage_collector ? "Collection runs every two minutes, with an alert after ten minutes without a successful pass." : "Usage requires an enabled collector."}"
+            content          = "**Usage:** Upload/download are from the device’s perspective. The shared PostgreSQL ledger deduplicates accounting reports and is authoritative for exact totals. These dashboard totals are observed telemetry: downstream at-least-once delivery can duplicate intervals, and stable IDs do not deduplicate sums. Totals follow the network’s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. The Go daemon emits committed PostgreSQL intervals through the local durable OTLP collector."
             background_color = "white"
             font_size        = "14"
             text_align       = "left"

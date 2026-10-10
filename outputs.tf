@@ -10,7 +10,7 @@ output "startup_script_size_bytes" {
 
 output "startup_script_transport" {
   description = "GCE startup metadata key selected for both RADIUS instances"
-  value       = nonsensitive(local.startup_script_uses_gcs ? "startup-script-url" : "startup-script")
+  value       = "startup-script-url"
 }
 
 output "radius_primary_ip" {

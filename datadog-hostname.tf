@@ -23,8 +23,18 @@ locals {
   # Bootstrap consumes only the resolved suffix, avoiding a dependency cycle
   # between the rendered VM metadata and the VM resource names.
   datadog_hostname_suffix = var.datadog_hostname_suffix == null ? google_project.this.project_id : var.datadog_hostname_suffix
-  datadog_radius_hosts = {
+  datadog_radius_hosts = var.datadog_observability_hosts != null ? { for host in var.datadog_observability_hosts : host => host } : {
     for instance_name in [google_compute_instance.radius.name, google_compute_instance.radius_secondary.name] :
     instance_name => local.datadog_hostname_suffix == "" ? instance_name : "${instance_name}-${local.datadog_hostname_suffix}"
+  }
+}
+
+variable "datadog_observability_hosts" {
+  description = "Reviewed exact physical hosts admitted by the observability owner. Null preserves the legacy pair; explicitly list two green hosts or four blue+green hosts for deliberate staging."
+  type        = set(string)
+  default     = null
+  validation {
+    condition     = var.datadog_observability_hosts == null ? true : (contains([2, 4], length(var.datadog_observability_hosts)) && alltrue([for host in var.datadog_observability_hosts : length(host) <= 253 && can(regex("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", host))]))
+    error_message = "Admit exactly two or four reviewed physical DNS hostnames; no wildcard, query syntax or implicit deployments."
   }
 }

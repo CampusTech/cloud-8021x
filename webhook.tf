@@ -1,15 +1,5 @@
-# =============================================================================
-# ACME authorizing webhook — secrets + IAM.
-#
-# The webhook runs as a LOCALHOST systemd service on each RADIUS VM (built from
-# webhook/, released via the webhook-release GitHub Action, downloaded by the VM
-# startup script), NOT as a separate Cloud Run service. step-ca calls it over
-# loopback (https://127.0.0.1:<port>/authorize), with no public authorization hop.
-# Optional inventory mode adds a separate authenticated
-# HTTPS challenge broker through the existing RSA load balancer. This file manages
-# its backend, secrets, and IAM. Gated by var.enable_acme_webhook.
-# =============================================================================
-
+# Unified Go daemon owns loopback mTLS authorization and optional challenge broker.
+# These resources retain the separately owned enrollment frontdoors and credentials.
 locals {
   acme_webhook_enabled = var.enable_acme_webhook ? 1 : 0
   # The fleet-api-token secret is read by the webhook AND by the device-owner
@@ -23,7 +13,7 @@ locals {
 resource "terraform_data" "certificate_inventory_contract" {
   lifecycle {
     precondition {
-      condition     = !local.scep_inventory_enabled || (var.enable_smallstep_ca && var.enable_fleet_certificate_inventory && var.radius_trust_mode != "okta" && try(var.radius_vlan_policy.cache_file == "/etc/freeradius/3.0/device-policy-cache.json", false))
+      condition     = !local.scep_inventory_enabled || (var.enable_smallstep_ca && var.enable_fleet_certificate_inventory && try(var.radius_vlan_policy.cache_file == "/etc/freeradius/3.0/device-policy-cache.json", false))
       error_message = "Dynamic SCEP requires the self-hosted CA, Smallstep RADIUS trust, Fleet certificate collection, and the built-in fingerprint policy cache."
     }
   }
@@ -56,7 +46,7 @@ resource "google_secret_manager_secret_iam_member" "scep_broker_token_radius" {
   count     = local.scep_inventory_enabled ? 1 : 0
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.scep_broker_token[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -175,7 +165,7 @@ resource "google_secret_manager_secret_iam_member" "fleet_api_token_radius" {
   count     = local.fleet_token_needed
   project   = google_project.this.project_id
   secret_id = data.google_secret_manager_secret.fleet_api_token[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -184,7 +174,7 @@ resource "google_secret_manager_secret_iam_member" "fleet_certificate_token_radi
   count     = var.enable_fleet_certificate_inventory && var.fleet_certificate_token_secret_id != "fleet-api-token" ? 1 : 0
   project   = google_project.this.project_id
   secret_id = var.fleet_certificate_token_secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }
 
@@ -221,6 +211,6 @@ resource "google_secret_manager_secret_iam_member" "scep_challenge_signing_key_r
   count     = local.acme_webhook_enabled
   project   = google_project.this.project_id
   secret_id = google_secret_manager_secret.scep_challenge_signing_key[0].secret_id
-  role      = "roles/secretmanager.secretAccessor"
+  role      = google_project_iam_custom_role.runtime_secret_reader.name
   member    = "serviceAccount:${google_service_account.radius.email}"
 }

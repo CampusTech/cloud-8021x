@@ -1,115 +1,81 @@
 # Tests
 
-Certificate tests require Python's `cryptography` package (Debian: `python3-cryptography`). The full suite also
-invokes OpenSSL and Go for certificate fixtures and the profile-generator CLI:
+The supported runtime is the unified Go daemon on Debian 13, with FreeRADIUS,
+step-ca, PostgreSQL and Datadog Agent/DDOT. Development test scripts are not
+installed on servers.
+
+## Fast checks
 
 ```sh
-python3 -m unittest discover -s tests -v
-```
-
-With Terraform installed, the suite also evaluates startup metadata selection
-at the 262,144-byte boundary (including multibyte UTF-8 and the full-feature
-rendered script), certificate-age validation, and the broker's separate rate
-limit. Fleet bulk-refresh tests inject collection failures and verify that
-enrichment and legacy policy continue updating while enforced snapshots keep
-their original age. Null-policy collection staging is covered as well.
-
-The webhook's Go tests include the complete SCEP handler → authorizer → Fleet
-HTTP adapter flow for an enrolled iOS device without a serial:
-
-```sh
-cd webhook
-go test ./...
+go test -race ./...
 golangci-lint run
 ```
 
-All three Go modules require Go 1.27.2 or newer. The `go-security` workflow
-tests and scans imported packages, including test dependencies, on PRs and in
-the merge queue. To run the same vulnerability check locally, run this command
-in `webhook/`, `tests/scep/`, and `tools/dashboard/`:
+Use Go 1.27.2 and the pinned compatible linter from `go-security.yml`. That workflow
+also tests/scans the `tests/scep` and `tools/dashboard` modules. The root race suite
+skips database and installed-package tests unless their explicit fixture inputs
+are present; a passing unit suite is not an integration result.
+
+## Reproducible integration checks
+
+One entrypoint reuses the existing assertions. It fails when required tools or
+inputs are absent. Run from the repository root with Docker, Go, OpenSSL, Terraform 1.14.5,
+Python3 and PyYAML 6.0.3 installed:
 
 ```sh
-go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
+docker pull postgres:16
+tests/integration/run.sh postgres
+tests/integration/run.sh native arm64 /path/to/verified-bundle
+tests/integration/run.sh collector arm64 /path/to/monitoring-packages /tmp/ddot-results
+tests/integration/run.sh monitoring arm64 /path/to/verified-bundle CACHED_IMAGE /tmp/agent-results
+tests/integration/run.sh scep /path/to/step-ca SHA256
 ```
 
-The SCEP harness uses `x/crypto/cryptobyte`; it does not import SSH or OpenPGP.
-Module-only scans can still report the unpatched, unused OpenPGP advisory
-GO-2026-5932. The release workflow separately scans the compiled webhook so
-standard-library findings use the actual build toolchain version.
+Use `amd64` on an amd64 Docker host. The bundle must contain the complete actual
+release package family, `package-manifest.json` and mandatory hashes. Build it
+using the tooling in [releasing](../docs/releasing.md); dummy archives cannot
+satisfy native integration. The collector input is the rebuilt monitoring
+package directory with `SHA256SUMS`. The monitoring image is a cached image built
+from `tests/native_package_fixture.Dockerfile`.
 
-## FreeRADIUS / UniFi packet integration
+| Suite | What it executes |
+| --- | --- |
+| `postgres` | Real TLS PostgreSQL, race-enabled storage and TLS/provisioning suites, concurrent workers, crash/commit ambiguity, epoch isolation, signed handoff, source capture and assembled-daemon outage/cancellation. |
+| `native` | Actual package installation/ABI, ACK/noACK and source freshness, policy activation, interrupted rollback, private auth-log retention, then EAP-TLS, native accounting with PostgreSQL outage/replay and actual step-ca SCEP issuance/renewal on Badger and TLS PostgreSQL. |
+| `collector` | Actual DDOT persistent export queue, restart and full-storage behavior. |
+| `monitoring` | Actual shipped Agent checks and native FreeRADIUS statistics, both CA endpoints and TLS failure visibility. |
+| `scep` | Actual step-ca issuance/renewal with rendered configuration, mutual-TLS webhook and independent CA databases. |
 
-Requires local Docker and Terraform:
+The PostgreSQL/storage and native package suites run in CI; publication remains
+limited to an explicit version tag. PostgreSQL tests use disposable credentials
+and a random localhost-only port. Parallel and native fixtures publish no host
+ports. Native fixture image construction accesses pinned Debian snapshot
+repositories; running native packets uses an isolated container network.
 
-```sh
-python3 tests/radius_integration.py
-python3 tests/radius_integration.py --certificate-inventory
-python3 tests/radius_integration.py --certificate-inventory --attested-acme
-python3 tests/radius_integration.py --certificate-inventory --source-discovery
-```
+These checks do not prove a systemd PID 1 reboot, production KMS/IAM integration,
+physical AP VLAN/DHCP behavior, real Windows/iOS/macOS profile renewal or office
+cutover/failover. Those remain staging gates before deployment. No suite uses
+production secrets, Fleet hosts, Datadog accounts or Terraform state.
 
-This creates a disposable Debian 12 container, installs FreeRADIUS 3.x and
-`eapol_test`, renders the repository's real startup template with dummy values,
-and executes the auth-configuration portions. It generates one-day test CAs and
-certificates, then completes EAP-TLS exchanges through a UDP relay that decodes
-the actual RADIUS packets. No ports are exposed to the host. The container is
-removed on exit; no cloud APIs or production secrets are used.
+## Configuration and compatibility checks
 
-Coverage includes numeric UniFi tunnel attributes, a serial-free certificate
-with a spoofed staff username, another group's assignment, real TLS resumption
-after a group change, rejection after unenrollment during resumption, and
-unknown/unmapped/stale/corrupt inventory rejection. The relay updates the
-inventory **before** delivering the initial Access-Accept, so reauthentication
-cannot race the test's membership change.
+`python3 -m unittest discover -s tests -v` checks current Terraform, profile
+examples, release inputs and development runners. Terraform-backed cases require
+Terraform; installed loader scenarios also require `C8021X_LOADER_FIXTURE=1` and
+an owned Docker fixture. `tests/radius_integration.py` invokes the current native
+runner, including when `--native` is omitted.
 
-The fixture enables a temporary disk TLS cache solely to force actual resumed
-handshakes on Debian's OpenSSL 3 build. Deployment cache settings are preserved.
-The `--certificate-inventory` run uses SHA256 of the actual verified leaf DER.
-It rejects another CA-signed certificate copying a known staff CN, unknown,
-ambiguous and stale certificate observations, and a missing fingerprint hook.
-It verifies full handshakes on reauthentication (resumption is disabled in this
-mode), current group/enrollment changes, and removal of private handoff files.
-Both modes also exercise the same device from NYC and ATL clients with different
-VLAN IDs, reauthentication, a spoofed NAS-Identifier, and an unknown location.
-Certificate mode also reads controller VLAN-name cache fixtures through real
-authentication/accounting packets, checks office isolation and renames, and
-preserves the assigned ID with manual-label fallback when the API cache is corrupt.
-Unit tests exercise UniFi pagination, Meraki appliance/named-VLAN inventory,
-per-office refresh failures, cache expiry and changed controller IDs.
-Both also verify opted-out locations return no VLAN attributes while keeping
-verified identity, and reauthentication follows changes between mapped and
-opted-out policy. Certificate mode checks signed Class accounting with no VLAN.
+Small golden fixtures in `internal/provisioning/testdata` and
+`internal/app/testdata` preserve complete CA configuration and BYOD profile
+comparisons against the independently captured previous outputs. Their provenance
+is recorded beside the comparisons. They contain synthetic public configuration,
+not tenant credentials. The old executable Bash/Python runtime remains in Git
+history. Set `C8021X_TERRAFORM_FIXTURE=1` to execute the actual mocked Terraform
+CA-adoption comparison in the Go provisioning suite.
 
-The `--source-discovery` run uses the generated source guard with local API-state
-fixtures: fresh dynamic sources, stale authentication/accounting rejection,
-static `/24` acceptance despite stale discovery, spoofed NAS rejection, and
-changed console-ID rejection. Unit tests cover discovery pagination, exact host
-matching, address changes, overlap rejection, rollback, and firewall failure.
-GCP PATCH/IAM and physical UniFi WAN behavior still require a deployment pilot.
+Windows inventory assertions use API fixtures. Pilot the retained PowerShell
+collector, machine certificate, pre-login networking and renewal on an actual
+Windows device before rollout.
 
-Accounting's SQL invocation is replaced by `noop` in the fixture; VLAN policy,
-EAP certificate authorization, post-auth and reject configuration come from the rendered startup script.
-This test does not simulate SCEP issuance or physical UniFi VLAN/trunk/DHCP setup.
-
-To inspect logs, create your own disposable test container with the same packages
-and pass `--container <name>`; that mode leaves it available afterward. Logs are
-`/tmp/radius-debug.log` and `/tmp/eap-<case>.log` inside the container.
-
-## Certificate issuance
-
-`python3 tests/scep/run.py` exercises actual step-ca issuance and renewal through
-the mutual-TLS webhook using the rendered CA configuration. See
-[`scep/README.md`](scep/README.md). The normal Python suite also tests the private
-per-device profile generator using a locally built webhook CLI.
-
-## Windows certificate inventory
-
-The Python suite covers authenticated Fleet script results, exact DER hashing,
-CA/expiry checks, host re-enrollment, missing scripts, duplicate or malformed
-responses, second-precision request timestamps, absent results, and bounded
-pending scripts after an uncertain POST. Profile tests check Device-scoped SCEP,
-NDES variables, machine authentication, and server name/root validation.
-
-The automated suite uses API fixtures rather than executing on Windows. Pilot the PowerShell collector,
-Fleet profile installation, pre-login Wi-Fi, NYC VLAN/DHCP, and renewal on a real
-Windows device before enabling fingerprint enforcement.
+See [the validation scope review](../docs/validation/scope-review.md) for the
+removed test machinery, application simplifications and their acceptance limits.

@@ -10,13 +10,18 @@ on:
 permissions:
   contents: read
 
+# Superseded PR revisions must not keep rebuilding/scanning obsolete artifacts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   scan:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: [webhook, tests/scep, tools/dashboard]
+        module: [., tests/scep, tools/dashboard]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -28,12 +33,41 @@ jobs:
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache-dependency-path: |
-            webhook/go.sum
+            go.sum
             tests/scep/go.sum
             tools/dashboard/go.sum
+      - name: Install Terraform for actual mocked dashboard fixtures
+        if: matrix.module == 'tools/dashboard'
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
       - name: Verify dependencies
         run: go mod download && go mod verify
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
       - name: Scan imported packages, including tests
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -scan package -test ./...
+      - name: Lint with the Go 1.27.2-compatible pinned linter
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
+
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install Terraform for isolated database provisioning tests
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+      - name: Prepare disposable PostgreSQL image
+        run: docker pull postgres:16
+      - name: Test real TLS PostgreSQL, concurrent workers and signed green handoff
+        run: tests/integration/run.sh postgres

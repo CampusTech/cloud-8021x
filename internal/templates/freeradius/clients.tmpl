@@ -1,0 +1,9 @@
+{{range .Clients}}{{$c := .}}{{range $i,$cidr := .CIDRs}}
+client static-{{$c.ID}}-{{$i}} {
+ ipaddr = {{$cidr}}
+ secret = {{quote $c.Secret}}
+ shortname = {{quote $c.ID}}
+ nastype = other
+ c8021x_source_kind = static
+}
+{{end}}{{end}}

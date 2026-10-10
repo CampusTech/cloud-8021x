@@ -1,0 +1,65 @@
+# Event-only group: cloud8021x-events. No daemon membership in freerad.
+# Parent freerad:cloud8021x-events 2750; retain every generation until imported.
+detail auth_detail {
+ filename = "{{.AuthDirectory}}/auth-{{.Generation}}-%Y%m%d%H.detail"
+ permissions = 0640
+ group = cloud8021x-events
+ locking = yes
+ dates_as_integer = yes
+ log_packet_header = no
+ suppress {
+  User-Name
+  User-Password
+  CHAP-Password
+  Tunnel-Password
+  EAP-Message
+  EAP-MSK
+  EAP-EMSK
+  EAP-Session-Id
+  REST-HTTP-Status-Code
+  Message-Authenticator
+  MS-MPPE-Send-Key
+  MS-MPPE-Recv-Key
+  MS-MPPE-Encryption-Policy
+  MS-MPPE-Encryption-Types
+  C8021X-Handoff
+  REST-HTTP-Header
+  Reply-Message
+  TLS-Cert-Serial
+  TLS-Cert-Expiration
+  TLS-Cert-Issuer
+  TLS-Cert-Subject
+  TLS-Cert-Common-Name
+  TLS-Cert-Subject-Alt-Name-Email
+  TLS-Cert-Subject-Alt-Name-Dns
+  TLS-Cert-Subject-Alt-Name-Upn
+  TLS-Cert-Subject-Alt-Name-Uri
+  TLS-Cert-Valid-Since
+  TLS-Session-Information
+  TLS-Client-Cert-Serial
+  TLS-Client-Cert-Expiration
+  TLS-Client-Cert-Issuer
+  TLS-Client-Cert-Subject
+  TLS-Client-Cert-Common-Name
+  TLS-Client-Cert-Filename
+  TLS-Client-Cert-Subject-Alt-Name-Email
+  TLS-Client-Cert-X509v3-Extended-Key-Usage
+  TLS-Client-Cert-X509v3-Subject-Key-Identifier
+  TLS-Client-Cert-X509v3-Authority-Key-Identifier
+  TLS-Client-Cert-X509v3-Basic-Constraints
+  TLS-Client-Cert-Subject-Alt-Name-Dns
+  TLS-Client-Cert-Subject-Alt-Name-Upn
+  TLS-Client-Cert-Subject-Alt-Name-Uri
+  TLS-Client-Cert-X509v3-Extended-Key-Usage-OID
+  TLS-Client-Cert-Valid-Since
+  TLS-Client-Cert-X509v3-Certificate-Policies
+  TLS-Session-ID
+  TLS-Session-Data
+  TLS-Session-Version
+  TLS-Session-Cipher-Suite
+  TLS-Session-Cert-File
+  TLS-Session-Cert-Private-Key-File
+  TLS-Cert-CRL-Distribution-Points
+  TLS-Client-Cert-CRL-Distribution-Points
+ }
+}

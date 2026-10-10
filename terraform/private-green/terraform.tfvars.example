@@ -1,0 +1,29 @@
+# Private runner only; no passwords here. Administrator password via PGPASSWORD.
+# Initialize an independently protected backend using backend.hcl.example.
+project_id    = "campus-example"
+deployment_id = "green-20261008"
+runtime_connections_per_node = 8 # aggregate across all runtime pools, including observations
+private_administrator = {
+  host                    = "10.0.2.2"
+  port                    = 5432
+  administrator           = "reviewed-private-administrator"
+  admin_tool              = "/absolute/reviewed/cloud8021x-postgres-admin"
+  ca_file                 = "/absolute/reviewed/postgres-ca.pem"
+  ca_pem_sha256           = "REPLACE-WITH-EXACT-PUBLIC-PEM-SHA256"
+  cloud_sql_instance      = "campus-example:us-central1:smallstep-ca"
+  # Include all existing blue application/CA/client pools plus operational headroom.
+  reserved_ca_connections = 60
+  # Replace with an authenticated exact inventory, never guessed PUBLIC clients.
+  expected_ca_acl = {
+    stepca     = { owner = "REVIEWED-OWNER", grants = [] }
+    stepca_rsa = { owner = "REVIEWED-OWNER", grants = [] }
+  }
+  approved_ca_access = {
+    stepca     = [{ role = "stepca", connect = true, temporary = true }]
+    stepca_rsa = [{ role = "stepca", connect = true, temporary = true }]
+  }
+}
+
+# Only when full CA DSN secrets do not already exist: wrap the exact original
+# CA password version privately; original role/password/CA databases are unchanged.
+# inherited_ca_password = { secret_id = "smallstep-db-password", version = "REVIEWED-NUMERIC-VERSION" }

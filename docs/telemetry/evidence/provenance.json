@@ -1,0 +1,41 @@
+{
+  "release": "7.82.0-full",
+  "registry": "docker.io/datadog/agent",
+  "verification": "Docker registry HTTPS and sha256 content verification; no separate signature verification",
+  "index_digest": "sha256:7e81af7ef6634feea1fc6b8974672391e1ed6c94a4a077317b39ee262d7428e0",
+  "tested_platform": "linux/arm64",
+  "platform_digest": "sha256:d8f8a5271388c6f8eca64afc6864f0dc4ccac4277ac08b9c53f511ad29ea4a86",
+  "resolved_untested_amd64_digest": "sha256:821e779db4209716f7d717387cd4c56c6dfc6791aaf5a1b33576f31adb4c4314",
+  "otel_agent_sha256": "c3e08c8b8c34d9c21ebc7a7f76f941e61492e3728ccb43dfced10d0510fb5314",
+  "agent_commit": "ffd5b5759900f0d00080dab5e2e6aeebc0a9c14d",
+  "collector": "0.155.0",
+  "stable_components": "1.61.0",
+  "agent_go": "1.26.5",
+  "default_image_not_suitable": {
+    "tag": "7.82.0",
+    "arm64_digest": "sha256:0624119a69df213feabe3a458ca1d3c695322ec8e9befe03b7f9d62e6f43cb3f",
+    "amd64_digest": "sha256:3bf5f611cc9f1baf6071f9bdb79273c988854436ef8f254b7601b1064f01d6d4",
+    "observed": "otel-agent executable absent on both inspected default images"
+  },
+  "us5_logs_endpoint": "https://otlp.us5.datadoghq.com/v1/logs",
+  "us5_primary_doc": "https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/logs/?site=us5",
+  "site_selector_asset": "https://docs.datadoghq.com/static/main-dd-js.8a6c9f3a831b0442294f829ee7c5c8c2e04b68bbe2de9790d3058efab3583ac91c49ee491a1dbdb15702f71f46a810e62e90f6742ca180b930cf014fa36228d9.js",
+  "site_selector_sha256": "6256bbb10715e88ec73a586060deaa1c189d595742b9870da8299e3abbc96a03",
+  "evidence_date": "2026-10-08",
+  "fixture_substitutions": {
+    "business_destination": "loopback fake intake",
+    "queue_bytes": 4096,
+    "retry_max_interval": "2s",
+    "timeout": "1s",
+    "consumers": 1,
+    "compression": "none",
+    "credential": "synthetic"
+  },
+  "projection": "Actual protobuf exporter output decoded by TestDDOTWire; tenant-side live intake not called",
+  "full_configuration": {
+    "version": "7.82.0",
+    "command": "otel-agent",
+    "extension_version": "v0.155.0",
+    "byoc": false
+  }
+}

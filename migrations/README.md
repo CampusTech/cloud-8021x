@@ -1,0 +1,207 @@
+# Shared PostgreSQL contract
+
+The application owns `ledger` in a dedicated PostgreSQL 16+ database. Parallel
+green deployments use `cloud8021x_<deployment with hyphens replaced by underscores>`
+and separate runtime/native roles; see [parallel adoption](../docs/parallel-adoption.md).
+FreeRADIUS ships an INSERT adapter, not a schema migrator. There are no stock `radcheck`, `radreply`, `radacct`, or SQL authentication/client lookup tables.
+
+Run `postgres.NewMigration(...).Migrate(ctx, Roles{Runtime: ..., Native: ...})`
+with the separate migration credential. Migrations use advisory transaction lock
+`(8021,1)`, reject a database that differs from the configured application identity
+before DDL, and store schema version 4. Version 2 adds collection scope indexes;
+version 3 adds optional termination display metadata; version 4 is reserved.
+The runtime/native roles must already exist without elevated flags, membership,
+or object ownership. Migrations reset grants on application objects and grant:
+
+- runtime: application reads, specific mutable state updates, append-only
+  observations/intervals/quarantine/reconciliation/import markers; no DDL;
+- native: INSERT on `ledger.intake`, its identity-sequence USAGE, schema USAGE,
+  and the safe generated-key function; no SELECT or UPDATE;
+- migration: ownership of schema/functions/tables. Keep this credential out of
+  the daemon and FreeRADIUS runtime accounts.
+
+Privileged bootstrap must also remove PUBLIC connection access to CA databases,
+retain explicit existing CA-role access, and grant no application roles CA access.
+Application migrations deliberately never modify a CA database. Runtime pgx
+connections reject elevated roles, memberships, DB CREATE/TEMP, and public/ledger
+schema CREATE. Bound total pools across both daemons and native replay to reserve
+CA capacity. Production Cloud SQL capacity/HA validation belongs to rollout.
+
+## Native INSERT contract for the buffered accounting server
+
+Use a plain append-only `INSERT INTO ledger.intake (...) VALUES (...)`. Every
+successful replay must affect exactly one row. Preserve the server-generated
+replay ID and original host namespace across replay/retry; duplicate raw rows are
+expected. Do not use `ON CONFLICT DO NOTHING`, RETURNING, SELECT, or unsafe casts.
+Use native SQL escaping for every expanded scalar.
+
+Required trusted values:
+
+| Columns | Meaning |
+| --- | --- |
+| `received_at` | Original server receipt, `timestamptz`; never NAS time or replay time |
+| `source_ip`, `client_id`, `location_id` | Authenticated transport/client/config context, not packet-selected policy |
+| `host`, `replay_id` | Original server namespace and server-controlled replay identity |
+
+Nullable raw TEXT plus nonnegative occurrence count (zero = absent):
+
+| Raw column | Count column |
+| --- | --- |
+| `status` | `status_count` |
+| `session_id` | `session_count` |
+| `nas_ip` | `nas_count` |
+| `station` | `station_count` |
+| `class` | `class_count` |
+| `input_octets` | `input_octets_count` |
+| `output_octets` | `output_octets_count` |
+| `input_gigawords` | `input_gigawords_count` |
+| `output_gigawords` | `output_gigawords_count` |
+| `session_time` | `session_time_count` |
+
+Preserve the first scalar plus the total count; never collapse duplicate
+attributes into a single trusted value. Optional raw TEXT context columns are
+`event_timestamp`, `delay_time`, `packet_id`, `request_authenticator`,
+`called_station`, and `nas_port`. They are not counter identity coordinates.
+The writer must not supply generated/application columns (`id`, `inserted_at`,
+`session_key`, `processed_at`, `observation_id`).
+
+Missing, duplicate, unknown-status, and malformed counter input can be inserted
+for downstream quarantine. Counters are never SQL-cast during intake. A missing
+Gigawords attribute is zero only for ordinary native 64-bit counter format;
+present malformed high words are invalid. Non-Start requires low words and
+session duration. Processed counters use range-checked `NUMERIC(20,0)`.
+
+The migration-owned, fixed-search-path trigger forces transaction
+`synchronous_commit=on` and queues/creates the session row atomically. Native
+INSERT does not gain general access to sessions. The generated identity uses
+valid source/NAS IP strings, normalized station MAC, and a bounded session ID;
+invalid/ambiguous identities remain raw with NULL session key for quarantine.
+Workers lock a session before selecting its next raw record, prioritize any
+already committed Start, and commit observation/dedup/high-water/interval/outbox
+state together. There is no separate normalization queue that can hide Start.
+
+## Go integration contracts
+
+`postgres.New(ctx, dsn, config.Database)` is a lazy runtime pool;
+`NewMigration` is separate. Both use verified TLS, bounded connections/queries,
+server durability checks, and generic secret-free errors. Pool warm minimum is
+intentionally zero, preserving construction during outages. Hostname verification
+is the default. Instance-CA mode requires the exact PEM SHA-256, one CA, canonical
+instance ID, and complete chain verification; root bootstrap must authenticate
+Google's instance CA mode/certificate before installing that configuration.
+
+`ProcessOne` processes one raw record; call with a valid retained Class key and
+max age. `ResolveIntake` resolves a stable intake identity after uncertainty.
+`accounting.Normalize`/`ApplyEpoch` are pure; PostgreSQL is authoritative. Usage IDs
+hash exact session and counter coordinates and exclude receipt/delivery fields.
+Raw observations with invalid Class remain unattributed and are quarantined;
+a native session can retain earlier verified attribution for its exact session key.
+
+`Reserve`, `Claim`, `StartAttempt`, `FinishAttempt`, `LookupWork`, `Renew`, and
+`ReconcileSuccess` support collection and OTLP outbox work. Use `kind="outbox"`
+for business-event delivery; collectors use their own bounded kind. Start must
+commit before external I/O. Do not submit after an uncertain Start response.
+Expired started attempts become durable quarantine, not retry candidates.
+Unstarted expired claims can be reclaimed with a new generation. Partial,
+uncertain, and rejected outcomes quarantine; success retains payload and receipt.
+`ReconcileSuccess` requires authenticated external success evidence and preserves
+attempt/quarantine history. It never permits blind resend.
+
+`AuthEvent(source, expectedCursor, nextCursor, eventID, payload)` atomically
+advances a native final-auth log cursor and appends its outbox record. Conflicting
+stable event content cannot advance a cursor. Use `Cursor` for recovery.
+
+`PrepareCollectionEpoch` requires protected maintenance scope and the exact
+deployment-bound database identity. The epoch, transition and pair manifest are
+immutable. Initial preparation rejects existing accounting intake/sessions,
+observations, intervals, work, auth cursors or import markers. Signed parallel
+handoff preserves certificate observations and pending Fleet command guards;
+it imports no accounting/checkpoint/outbox history.
+
+`ProcessOne` applies the immutable collection epoch before creating business work.
+Pre-epoch receipts create no credit/export. The first ongoing Interim/Stop learns
+a zero-credit baseline; subsequent measured intervals and new Starts follow
+normal accounting semantics. Legacy accounting import and its per-event baseline
+gate are retired. The `import_markers` table remains an existing-state guard.
+
+Payloads, attempts, reconciliations and current session counters remain available
+for explicit retained-work recovery. Reverse handoff preserves green accounting
+in green; it does not create a compatible legacy archive or merge history back.
+Delivery remains subject to at-least-once telemetry duplicates.
+
+## Local verification
+
+Run `scripts/test_postgres.sh` to create a labeled disposable PostgreSQL 16
+container with generated TLS and synthetic roles, execute the real race-enabled
+suite, and remove only that fixture. The script needs local Docker permission;
+it never reads production credentials. Ordinary `go test` without the explicit
+fixture environment skips integration cases, so it is not equivalent evidence.
+
+## Managed certificate collection
+
+`ReserveCollection` atomically gates a source/host/enrollment/trust/script key
+under a transaction advisory lock, using the DB clock for cadence >= one hour
+and at most two pending/uncertain requests. A successful remote submission has
+`receipt.pending=true`; it continues consuming the budget until authenticated
+terminal evidence is persisted. Payloads include `collection_key`, exact host,
+UUID/enrollment times, locally generated command/nonce, public SYSTEM script and
+public trust digest. Credentials and private keys never enter the ledger.
+
+`ListCollection` returns at most two unresolved plus two latest terminal work
+records; history remains retained. `RecordCollectionResult` transactionally
+persists the adapter's exact authenticated result and reconciliation evidence,
+retaining original attempt/quarantine history. It never permits submission.
+The optional neutral repository contract lives in `internal/inventory`.
+
+Schema version 2 adds only partial indexes for recent and pending collection
+keys; reviewed v1 installations upgrade under the existing migration lock.
+Accounting/native contracts and privileges are unchanged.
+
+## Discovered RADIUS source work
+
+Source work uses `kind=sources:radius-primary` or `sources:radius-secondary`.
+`ClaimSource(ctx, node, owner, lease)` is the only supported claim API for these
+kinds; generic `Claim` rejects them. An advisory transaction lock serializes the
+fixed node across candidate revisions. Active leases/started attempts and all
+unresolved quarantine block another revision; expired started attempts become
+retained uncertainty. Primary and secondary are independent resources. Expired
+unstarted leases may be reclaimed with a new fenced generation. No schema change
+is required.
+
+`jobs/network.ApplyJob` reserves the exact candidate JSON, invokes ClaimSource,
+commits StartAttempt before external I/O, and passes the **persisted claimed**
+candidate to its callback. The installed callback must stage those bytes only in
+the configured private candidate path and invoke the fixed root helper with
+`--candidate-sha256` of canonical `json.Marshal([]domain.SourceCandidate)` bytes.
+A concurrently replaced candidate cannot be applied under another claim. Unknown
+start/finish or application outcomes never authorize automatic resubmission.
+
+Before calling `ReconcileSuccess` for a source work ID/generation, obtain actual
+root-authenticated `sources.Applier.ReconcileApplied` evidence: fresh exact pinned
+controller set, protected config identity, byte-exact expected client include,
+original public applied state, fixed node firewall identity/ranges and actual
+service health. Persist that evidence and retain original attempts/quarantine;
+reconciliation neither performs an apply nor refreshes source TTL. If exact
+success cannot be proven, leave the source resource blocked for explicit recovery.
+
+The shared backend-maintenance gate and authenticated peer readiness also apply
+before root-started FreeRADIUS restarts. The source-specific database
+claim isolates each firewall node; it is not permission to restart both HA nodes
+simultaneously. Static configured clients remain independent of dynamic-source
+outages and TTL.
+
+## Termination display metadata (schema 3)
+
+`003_termination_cause.sql` adds nullable `intake.terminate_cause` and nonnegative
+`terminate_cause_count` (default 0). Existing native writers may omit both; new
+native SQL uses dictionary string expansion and original occurrence count.
+Apply migrations before enabling the new template. Existing raw rows remain
+absent metadata and immutable observations/work payloads are never rewritten.
+The normalizer projects only single recognized standard termination values;
+unknown/duplicate/absent values are `N/A` display data, not accounting quarantine
+or authorization inputs. Event IDs and interval arithmetic remain unchanged.
+
+`004_reserved.sql` records the existing version number without creating legacy
+usage floors or per-session import flags. It issues no destructive DROP/ALTER
+against previously allocated legacy objects. The supported deployment starts with
+a fresh green application database while preserving existing CA state.

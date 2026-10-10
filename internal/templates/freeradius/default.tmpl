@@ -1,0 +1,107 @@
+server default {
+ listen { type = auth
+  ipaddr = *
+  port = 1812
+ }
+ listen { type = acct
+  ipaddr = *
+  port = 1813
+ }
+ {{if .ListenIPv6}}listen { type = auth
+  ipv6addr = ::
+  port = 1812
+ }
+ listen { type = acct
+  ipv6addr = ::
+  port = 1813
+ }
+ {{end}}
+ authorize {
+  update control {
+   C8021X-Client := "%{client:shortname}"
+   C8021X-Source := "%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}"
+   C8021X-Receipt := "%l"
+  }
+  if ("%{client:c8021x_source_kind}" == "dynamic") {
+   if ("%{client:c8021x_config}" != "{{.SourceConfigSHA256}}" || "%{source_fresh:}" != "1") {
+   reject
+  }
+  }
+  elsif ("%{client:c8021x_source_kind}" != "static") {
+   reject
+  }
+  {{range .Clients}}if (&control:C8021X-Client == {{quote .ID}}) {
+   update control { C8021X-Location := {{quote .Location}} }
+  }
+  {{end}}
+  if (!&control:C8021X-Location) {
+   reject
+  }
+  if (!&session-state:C8021X-Handoff) {
+   update session-state { C8021X-Handoff := "%{randstr:hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh}" }
+  }
+  eap
+ }
+ authenticate {
+   eap
+  }
+ preacct {
+  if ("%{client:c8021x_source_kind}" == "dynamic") {
+   if ("%{client:c8021x_config}" != "{{.SourceConfigSHA256}}" || "%{source_fresh:}" != "1") {
+   fail
+  }
+  }
+  elsif ("%{client:c8021x_source_kind}" != "static") {
+   fail
+  }
+  update request {
+   C8021X-Client := "%{client:shortname}"
+   C8021X-Source := "%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}"
+   C8021X-Receipt := "%l"
+   C8021X-Host := {{quote .Host}}
+   C8021X-Replay := "%{randstr:hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh}"
+   C8021X-Packet-ID := "%I"
+   C8021X-Authenticator := "%{Packet-Authentication-Vector}"
+   C8021X-Delay := "%{Acct-Delay-Time}"
+  }
+  {{range .Clients}}if (&C8021X-Client == {{quote .ID}}) {
+   update request { C8021X-Location := {{quote .Location}} }
+  }
+  {{end}}
+  if (!&C8021X-Location) {
+   fail
+  }
+ }
+ accounting {
+  accounting_detail {
+   fail = 1
+   noop = 1
+  }
+  if (!(ok || updated)) {
+   fail
+  }
+ }
+ post-auth {
+  {{template "final-auth-context" .}}
+  auth_detail { fail = 1 }
+  ok
+  Post-Auth-Type REJECT {
+   {{template "final-auth-context" .}}
+   auth_detail { fail = 1 }
+   reject
+  }
+ }
+}
+{{define "final-auth-context"}}update reply {
+   C8021X-Cert-Expiration := "%{request:TLS-Client-Cert-Expiration}"
+   C8021X-Cert-Issuer := "%{request:TLS-Client-Cert-Issuer}"
+   C8021X-Client := &control:C8021X-Client
+   C8021X-Location := &control:C8021X-Location
+   C8021X-Source := &control:C8021X-Source
+   C8021X-Receipt := &control:C8021X-Receipt
+   C8021X-Station += &request:Calling-Station-Id[*]
+   C8021X-Called += &request:Called-Station-Id[*]
+   C8021X-Port-Type += &request:NAS-Port-Type[*]
+   C8021X-Port-Count := "%{NAS-Port-Type[#]}"
+   C8021X-Station-Count := "%{Calling-Station-Id[#]}"
+  }{{end}}

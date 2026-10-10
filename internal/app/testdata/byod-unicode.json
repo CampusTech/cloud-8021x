@@ -1,0 +1,70 @@
+{
+  "PayloadContent": [
+    {
+      "PayloadContent": {
+        "Challenge": "original-challenge",
+        "Key Usage": 5,
+        "KeyIsExtractable": false,
+        "KeyType": "RSA",
+        "Keysize": 2048,
+        "Name": "scep",
+        "Subject": [
+          [
+            [
+              "CN",
+              "uuid-é-😀"
+            ]
+          ],
+          [
+            [
+              "OU",
+              "<per-issuance-ou>"
+            ]
+          ]
+        ],
+        "URL": "https://ca.example/scep/scep"
+      },
+      "PayloadDisplayName": "Wi-Fi device identity",
+      "PayloadIdentifier": "org.cloud8021x.byod.42E0EBF5-2755-5037-AA82-53870001B486",
+      "PayloadType": "com.apple.security.scep",
+      "PayloadUUID": "42E0EBF5-2755-5037-AA82-53870001B486",
+      "PayloadVersion": 1
+    },
+    {
+      "PayloadContent": "AQID",
+      "PayloadDisplayName": "RADIUS server root CA",
+      "PayloadIdentifier": "org.cloud8021x.byod.42FDFB28-3EA3-5073-995E-C2479DB4C2EF",
+      "PayloadType": "com.apple.security.root",
+      "PayloadUUID": "42FDFB28-3EA3-5073-995E-C2479DB4C2EF",
+      "PayloadVersion": 1
+    },
+    {
+      "AutoJoin": true,
+      "EAPClientConfiguration": {
+        "AcceptEAPTypes": [
+          13
+        ],
+        "PayloadCertificateAnchorUUID": [
+          "42FDFB28-3EA3-5073-995E-C2479DB4C2EF"
+        ],
+        "TLSAllowTrustExceptions": false,
+        "TLSTrustedServerNames": [
+          "radius.example"
+        ]
+      },
+      "EncryptionType": "WPA",
+      "PayloadCertificateUUID": "42E0EBF5-2755-5037-AA82-53870001B486",
+      "PayloadDisplayName": "Wi-Fi (Campus)",
+      "PayloadIdentifier": "org.cloud8021x.byod.BE29BB6F-D84E-5D1A-A28C-D54E32B66815",
+      "PayloadType": "com.apple.wifi.managed",
+      "PayloadUUID": "BE29BB6F-D84E-5D1A-A28C-D54E32B66815",
+      "PayloadVersion": 1,
+      "SSID_STR": "Campus"
+    }
+  ],
+  "PayloadDisplayName": "Wi-Fi (BYOD SCEP)",
+  "PayloadIdentifier": "org.cloud8021x.byod.4222848A-3D25-5F0B-8137-38E5C8D5FAED",
+  "PayloadType": "Configuration",
+  "PayloadUUID": "4222848A-3D25-5F0B-8137-38E5C8D5FAED",
+  "PayloadVersion": 1
+}

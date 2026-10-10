@@ -1,0 +1,55 @@
+{
+  "native_version": "3.2.10+dfsg-2~bookworm+campus3",
+  "architecture": "arm64",
+  "fixture_image": "sha256:a82acd9e4605610298154ecc2548eeed4b58e48a4d13610706540538a3fb8e3c",
+  "fixture_provenance": "Read-only no-pause snapshot of retained Task6 matched native package installation; only separate Task7 clone and new synthetic TLS PostgreSQL were modified.",
+  "native_host_ports": {},
+  "postgres_host_ports": {},
+  "command": "python3 tests/radius_integration.py --native --container cloud8021x-task7-native-r1 --native-mode termination",
+  "results": [
+    {
+      "case": "known",
+      "raw": "User-Request",
+      "count": 1,
+      "projection": "User-Request",
+      "event_id": "cef21336e1c65db19c53faebb0080ba0ec1732c45c186070bb4f94ee62eedd6b"
+    },
+    {
+      "case": "legacy",
+      "raw": null,
+      "count": 0,
+      "projection": "N/A",
+      "event_id": "f89ed6b8708d59cdbf88695586e096dc71dea497a36e568df91c5916373d24b0"
+    },
+    {
+      "case": "duplicate",
+      "raw": "User-Request",
+      "count": 2,
+      "projection": "N/A",
+      "event_id": "2b79c62d11f65ec78efca193231cd1bff16947cb7e049335f4d713d1367a48b1"
+    },
+    {
+      "case": "unknown",
+      "raw": "9999",
+      "count": 1,
+      "projection": "N/A",
+      "event_id": "21070c4c13a165994b6a2feb30e5adf46cb73647e5747fbadd8bd9279a05d240"
+    },
+    {
+      "case": "dot1x",
+      "raw": "Reauthentication-Failure",
+      "count": 1,
+      "projection": "Reauthentication-Failure",
+      "event_id": "fe8bcc46bba96256ec83225ff99ebb9f9a4ed3488c665301191c741e1fc5a555"
+    }
+  ],
+  "packages": {
+    "freeradius": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "libfreeradius3": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "freeradius-common": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "freeradius-config": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "freeradius-rest": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "freeradius-postgresql": "install ok installed 3.2.10+dfsg-2~bookworm+campus3",
+    "freeradius-utils": "install ok installed 3.2.10+dfsg-2~bookworm+campus3"
+  }
+}

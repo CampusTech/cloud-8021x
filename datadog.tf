@@ -13,9 +13,11 @@ provider "datadog" {
 }
 
 locals {
-  datadog_enabled         = var.datadog_app_key != ""
-  radius_hosts_filter     = "$host AND (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
-  radius_log_hosts_filter = "host:$host.value (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
+  monitor_hosts_filter     = "(${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
+  monitor_log_hosts_filter = local.monitor_hosts_filter
+  datadog_enabled          = var.datadog_app_key != ""
+  radius_hosts_filter      = "$host AND (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
+  radius_log_hosts_filter  = "host:$host.value (${join(" OR ", [for host in values(local.datadog_radius_hosts) : "host:${host}"])})"
   dashboard_content = {
     title       = "FreeRADIUS 802.1X"
     description = "RADIUS authentication, assigned VLANs, devices, accounting, and infrastructure. The VLAN filter applies to the VLAN Assignments section; other sections retain unassigned and rejected events."
@@ -37,13 +39,10 @@ locals {
         defaults         = ["*"]
       },
       {
-        name   = "host"
-        prefix = "host"
-        available_values = [
-          local.datadog_radius_hosts[google_compute_instance.radius.name],
-          local.datadog_radius_hosts[google_compute_instance.radius_secondary.name]
-        ]
-        defaults = ["*"]
+        name             = "host"
+        prefix           = "host"
+        available_values = sort(values(local.datadog_radius_hosts))
+        defaults         = ["*"]
       }
     ]
     widgets = concat(
@@ -68,7 +67,7 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "online", query = "max:freeradius.up{${local.radius_hosts_filter}} by {host}.fill(last,60)", aggregator = "last" }
+                        { data_source = "metrics", name = "online", query = "max:cloud8021x.backend.up{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius} by {host}.fill(last,60)", aggregator = "last" }
                       ]
                       response_format = "scalar"
                       formulas = [
@@ -93,12 +92,11 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_access_requests.count{${local.radius_hosts_filter}}.as_rate()", aggregator = "avg" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_access_requests.count{${local.radius_hosts_filter}}.as_rate()", aggregator = "avg" }
+                        { data_source = "metrics", name = "a", query = "sum:cloud8021x.radius.total_access_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()", aggregator = "avg" },
                       ]
                       response_format = "scalar"
                       formulas = [
-                        { formula = "(default_zero(a) + default_zero(b)) * 60" }
+                        { formula = "(a) * 60" }
                       ]
                     }
                   ]
@@ -226,13 +224,12 @@ locals {
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_access_challenges.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_access_challenges.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "e", query = "sum:cloud8021x.radius.total_access_challenges{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
                       style           = { palette = "orange" }
-                      formulas        = [{ formula = "default_zero(e) + default_zero(f)", alias = "Challenges" }]
+                      formulas        = [{ formula = "e", alias = "Challenges" }]
                     }
                   ]
                 }
@@ -752,23 +749,21 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_acct_requests.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_acct_requests.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "a", query = "sum:cloud8021x.radius.total_acct_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
                       style           = { palette = "blue" }
-                      formulas        = [{ formula = "default_zero(a) + default_zero(b)", alias = "Requests" }]
+                      formulas        = [{ formula = "a", alias = "Requests" }]
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_acct_responses.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_acct_responses.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "c", query = "sum:cloud8021x.radius.total_acct_responses{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
                       style           = { palette = "green" }
-                      formulas        = [{ formula = "default_zero(c) + default_zero(d)", alias = "Responses" }]
+                      formulas        = [{ formula = "c", alias = "Responses" }]
                     }
                   ]
                 }
@@ -928,7 +923,7 @@ locals {
                   type        = "timeseries"
                   show_legend = true
                   requests = [for queue, label in { auth = "Auth", acct = "Acct", internal = "Internal" } : {
-                    queries         = [{ data_source = "metrics", name = "depth", query = "max:freeradius.queue_len_${queue}{${local.radius_hosts_filter}} by {host}" }]
+                    queries         = [{ data_source = "metrics", name = "depth", query = "max:cloud8021x.radius.queue_len_${queue}{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius} by {host}" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     formulas        = [{ formula = "depth", alias = label }]
@@ -941,7 +936,7 @@ locals {
                   type        = "timeseries"
                   show_legend = true
                   requests = [for metric, label in { total_access_requests = "Access requests / sec", total_acct_requests = "Accounting requests / sec" } : {
-                    queries         = [{ data_source = "metrics", name = "requests", query = "sum:freeradius.${metric}.count{${local.radius_hosts_filter}} by {host}.as_rate()" }]
+                    queries         = [{ data_source = "metrics", name = "requests", query = "sum:cloud8021x.radius.${metric}{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius} by {host}.as_rate()" }]
                     response_format = "timeseries"
                     display_type    = "line"
                     formulas        = [{ formula = "requests", alias = label }]
@@ -956,43 +951,39 @@ locals {
                   requests = [
                     {
                       queries = [
-                        { data_source = "metrics", name = "a", query = "sum:freeradius.total_auth_malformed_requests.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "b", query = "sum:freeradius.freeradius_total_auth_malformed_requests.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "a", query = "sum:cloud8021x.radius.total_auth_malformed_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
                       style           = { palette = "red" }
-                      formulas        = [{ formula = "default_zero(a) + default_zero(b)", alias = "Malformed" }]
+                      formulas        = [{ formula = "a", alias = "Malformed" }]
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "c", query = "sum:freeradius.total_auth_invalid_requests.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "d", query = "sum:freeradius.freeradius_total_auth_invalid_requests.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "c", query = "sum:cloud8021x.radius.total_auth_invalid_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
                       style           = { palette = "orange" }
-                      formulas        = [{ formula = "default_zero(c) + default_zero(d)", alias = "Invalid" }]
+                      formulas        = [{ formula = "c", alias = "Invalid" }]
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "e", query = "sum:freeradius.total_auth_dropped_requests.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "f", query = "sum:freeradius.freeradius_total_auth_dropped_requests.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "e", query = "sum:cloud8021x.radius.total_auth_dropped_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "bars"
                       style           = { palette = "yellow" }
-                      formulas        = [{ formula = "default_zero(e) + default_zero(f)", alias = "Dropped" }]
+                      formulas        = [{ formula = "e", alias = "Dropped" }]
                     },
                     {
                       queries = [
-                        { data_source = "metrics", name = "g", query = "sum:freeradius.total_auth_duplicate_requests.count{${local.radius_hosts_filter}}.as_rate()" },
-                        { data_source = "metrics", name = "h", query = "sum:freeradius.freeradius_total_auth_duplicate_requests.count{${local.radius_hosts_filter}}.as_rate()" }
+                        { data_source = "metrics", name = "g", query = "sum:cloud8021x.radius.total_auth_duplicate_requests{${local.radius_hosts_filter} AND service:cloud-8021x AND component:freeradius}.as_rate()" },
                       ]
                       response_format = "timeseries"
                       display_type    = "line"
                       style           = { palette = "grey" }
-                      formulas        = [{ formula = "default_zero(g) + default_zero(h)", alias = "Duplicate" }]
+                      formulas        = [{ formula = "g", alias = "Duplicate" }]
                     }
                   ]
                 }

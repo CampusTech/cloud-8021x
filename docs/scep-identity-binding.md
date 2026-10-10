@@ -65,74 +65,43 @@ switches.
 
 ## Configuration and staging
 
-Ensure the **webhook-v2.0.1** release and checksum assets exist before applying
-the `webhook_release_version` pin. The release workflow runs on relevant merges
-to main (or manual dispatch); wait for it to succeed. Merging alone does not
-apply Terraform or deliver profiles.
+Use the [parallel deployment guide](deployment/parallel-green.md),
+[protected bootstrap](bootstrap/README.md) and
+[validated YAML example](../examples/cloud-8021x.yaml). The unified application
+release includes the broker and CA authorization handlers; there is no separately
+installed webhook release or executable alias. Merging a PR does not activate
+workers, change enrollment backends or deliver Fleet profiles.
 
-First enable collection to measure existing certificate coverage:
+Configure the Fleet observer and scoped certificate collector as separate
+credentials in Secret Manager. The collector needs host/result reads, managed
+Apple `CertificateList` commands and Windows script execution/result reads.
+Windows requires fleetd with scripts enabled. An observer account alone cannot
+issue commands; scope maintainer access to the required fleets.
 
-```hcl
-enable_fleet_lookup                = true
-enable_fleet_certificate_inventory = true
-fleet_api_base_url                 = "https://fleet.example.com"
-```
+Stage the RADIUS server root and DNS name in client profiles before cutover.
+Existing CA identities and server trust must match the signed adoption source;
+this deployment supports the preserved Smallstep CA and does not add an Okta
+trust mode. CA HTTPS hostnames need their existing working enrollment frontdoors.
+AP RADIUS addresses can be IPs. See
+[trust roots](../examples/README.md#choose-the-correct-trust-root).
 
-The `fleet-api-token` service account needs permission to read hosts and command
-results, run `CertificateList`, and run/read Windows scripts. Windows needs
-fleetd with scripts enabled. Fleet's observer role cannot issue commands;
-a maintainer scoped to the managed fleets (or a global maintainer) supports both
-operations. Store the token directly in Secret Manager, not Terraform variables.
+Fingerprint enforcement requires fresh bindings for every SCEP client in scope.
+Attested ACME has a separate verified-serial path and can avoid certificate
+polling when the configured ACME profile is verified and no relevant SCEP
+profile is installed. The collector supports Apple macOS, iOS and iPadOS, and
+Windows machine certificates; Windows user-store certificates are excluded.
+Never resolve missing bindings with an untrusted subject fallback.
 
-After coverage is complete, enable fingerprint authorization and the self-hosted
-dynamic broker. The following builds on the collection settings above:
+Certificate commands/scripts use configured cadence and a durable PostgreSQL
+pending budget shared by both nodes. Results are polled during inventory sync.
+Freshness uses original MDM response time or Windows request creation time, not
+when the result is reread. Offline devices can remain pending. A Windows POST
+with a lost response remains quarantined even if no execution ID is known.
+Investigate retained reservations rather than deleting them to resend.
 
-```hcl
-enable_smallstep_ca          = true
-smallstep_ca_dns_name        = "ca.example.com"
-smallstep_ca_rsa_dns_name    = "ca-rsa.example.com"
-enable_acme_webhook          = true
-acme_authorizing_webhook_url = "" # managed loopback HTTPS endpoint
-radius_trust_mode           = "smallstep" # "both" also trusts legacy Okta clients
-
-radius_vlan_policy = {
-  certificate_inventory = true
-  certificate_max_age   = 86400
-  cache_max_age         = 3600
-  group_vlans = {
-    "fleet:1" = 100
-    "fleet:2" = 200
-  }
-}
-```
-
-The CA hostnames need working HTTPS and DNS pointing at their load balancers,
-as described by the Terraform outputs. This is separate from AP RADIUS server
-addresses, which can be IPs. `smallstep` and `both` also switch the RADIUS
-**server certificate** to the EC Smallstep chain: stage that root and the server
-name in client Wi-Fi profiles before cutover. See [trust roots](../examples/README.md#choose-the-correct-trust-root).
-
-Fingerprint mode applies to **every client using these RADIUS servers**, including
-existing ACME certificates. The built-in collector supports Apple macOS, iOS,
-and iPadOS, plus Windows machine certificates through Fleet scripts. It does not
-collect Windows user-store or Jamf certificates. Do not enable it until every
-required client has a supported binding or separate authentication path. Do not
-solve missing bindings with a CN fallback.
-
-TLS session resumption is disabled in this mode so every authentication obtains
-the actual certificate fingerprint. Fleet membership refreshes every five
-minutes; certificate commands/scripts run hourly and results are polled during
-each refresh. Apple freshness uses the MDM response time; Windows uses the script
-request creation time, never the time an old response is reread. Offline hosts have a bounded number of pending commands or scripts. A Windows
-POST timeout can leave a reservation without an execution ID; it remains counted
-to avoid unbounded retries. Investigate unresolved reservations before resetting
-collector state.
-Both VMs keep their own private collection state and must have coverage.
-
-The broker is automatically enabled by `enable_acme_webhook` plus
-`radius_vlan_policy.certificate_inventory`; it requires the built-in Fleet
-collector and self-hosted CA. There is no separate broker toggle; Terraform rejects an unsafe combination. Collection alone does not
-enable neutral challenge issuance.
+The broker requires the self-hosted CA and certificate inventory authorization.
+Collection alone does not authorize neutral SCEP issuance. Preparation remains
+passive until the protected activation and frontdoor cutover succeed.
 
 ## Register the CA and deliver one profile
 
@@ -171,8 +140,8 @@ and Wi-Fi server trust is restricted to the configured name and root.
 Configure Fleet's Microsoft NDES integration with the same RSA SCEP URL and
 Basic credentials above, using Terraform output `fleet_ndes_admin_url` as its
 Admin URL. No NDES server or Fleet patch is required: cloud-8021x serves the
-compatible challenge response. Fleet's single NDES integration is also used by
-Okta, so check existing profiles before replacing it.
+compatible challenge response. Check existing Fleet profiles and integrations
+before replacing the single NDES configuration.
 
 Deliver [the Windows SCEP profile](../examples/fleet/wifi-scep.xml),
 [the machine Wi-Fi profile](../examples/fleet/wifi-8021x.xml), and the
@@ -200,15 +169,15 @@ protocol tests do not substitute for that Windows pilot.
 3. Deliver the profile through Fleet. Devices need internet through home Wi-Fi,
    cellular, or an onboarding network until their new certificate is observed.
    A queued command or elapsed weekend is not proof that a device is ready.
-4. During Monday connectivity, refresh and inspect each VM's coverage report:
+4. During Monday connectivity, refresh and inspect each VM's current authorization snapshot and readiness:
 
    ```sh
-   sudo /usr/local/bin/fleet-device-cache.sh
-   sudo cat /var/lib/cloud-8021x/certificate-readiness.json
+   sudo /usr/local/bin/cloud-8021x inventory sync --config /etc/cloud-8021x/config.yaml
+   sudo /usr/local/bin/cloud-8021x doctor --config /etc/cloud-8021x/config.yaml
    ```
 
-   Resolve missing, unsupported, ambiguous, stale, or unenrolled hosts. The
-   report distinguishes certificate coverage and VLAN policy readiness. A
+   Resolve missing, unsupported, ambiguous, stale, or unenrolled hosts. Inspect Fleet command results and the published snapshot for exact certificate
+   bindings and original timestamps. A
    certificate can be observed without a Wi-Fi profile selecting it, so confirm
    Fleet's profile installation status as well. Validate an actual connection
    before treating any cohort as complete.
@@ -237,8 +206,8 @@ The normalized certificate cache remains MDM-independent. Another trusted MDM
 adapter can publish exact certificate fingerprints and device groups without
 embedding Fleet concepts in RADIUS.
 
-The older `webhook scep-challenge` CLI and `scripts/byod_profile.py` remain
-available for integrations that deliberately mint identity-bound profiles. They
+The unified `cloud-8021x scep-challenge` and `cloud-8021x profile` commands support
+integrations that deliberately mint identity-bound profiles. They
 are not required for this Fleet-managed workflow. With fingerprint enforcement
 disabled, the webhook continues to reject neutral challenges and requires the
 older identity-bound token plus current enrollment.

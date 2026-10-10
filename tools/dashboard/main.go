@@ -56,6 +56,7 @@ func newCommand() *cobra.Command {
 	root.Short = "Export or check a dashboard from a Terraform plan JSON"
 	root.AddCommand(exportCommand("json", "datadog_dashboard_json", "datadog_dashboard_json.smallstep[0]", "datadog-smallstep-dashboard.json"))
 	root.AddCommand(syncCommand())
+	root.AddCommand(observabilityCommand())
 	return root
 }
 

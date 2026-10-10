@@ -1,0 +1,92 @@
+# Nonsecret template. Replace every fixture identity and pin from reviewed inventories.
+# Save as terraform.tfvars.json (JSON syntax); never put secret values here.
+{
+  "config_validator": "/absolute/reviewed/cloud-8021x-host",
+  "deployment_id": "green-20261008",
+  "blue": {
+    "id": "blue-test",
+    "primary": "radius-primary",
+    "secondary": "radius-secondary"
+  },
+  "collection_epoch": "2026-10-08T00:00:00Z",
+  "region": "us-central1",
+  "nodes": {
+    "primary": {
+      "zone": "us-central1-a",
+      "address": "10.0.1.20",
+      "peer_dns": "green-test-secondary.example.edu"
+    },
+    "secondary": {
+      "zone": "us-central1-b",
+      "address": "10.0.1.21",
+      "peer_dns": "green-test-primary.example.edu"
+    }
+  },
+  "foundation": {
+    "project_id": "campus-example",
+    "project_number": "123456789012",
+    "network": "radius-network",
+    "subnet": "radius-subnet",
+    "sql_instance": "smallstep-ca",
+    "sql_private_ip": "10.0.2.2",
+    "postgres_ca_file": "/absolute/reviewed/postgres-ca.pem",
+    "postgres_ca_sha256": "<exact original instance CA PEM sha256>",
+    "ec_kms_version": "projects/campus-example/locations/us-central1/keyRings/radius/cryptoKeys/ec-intermediate/cryptoKeyVersions/1",
+    "rsa_kms_version": "projects/campus-example/locations/us-central1/keyRings/radius/cryptoKeys/rsa-intermediate/cryptoKeyVersions/1",
+    "ca_dsn_secret_ids": {"ec":"green-20261008-stepca-dsn","rsa":"green-20261008-stepca-rsa-dsn"},
+    "secret_ids": [
+      "datadog-api-key",
+      "fleet-maintainer-token",
+      "fleet-api-token",
+      "meraki-api-key",
+      "green-20261008-peer-health",
+      "green-20261008-policy-token",
+      "green-20261008-postgres-migration-dsn",
+      "green-20261008-postgres-native-dsn",
+      "green-20261008-postgres-runtime-dsn",
+      "radius-accounting-key",
+      "radius-nyc-secret",
+      "radius-sacramento-secret",
+      "scep-challenge-signing-key",
+      "green-20261008-stepca-dsn",
+      "green-20261008-stepca-rsa-dsn",
+      "unifi-api-key",
+      "smallstep-ca-cert",
+      "smallstep-intermediate-cert",
+      "smallstep-scep-decrypter-cert",
+      "smallstep-scep-decrypter-key",
+      "smallstep-rsa-root-cert",
+      "smallstep-rsa-intermediate-cert",
+      "smallstep-rsa-scep-decrypter-cert",
+      "smallstep-rsa-scep-decrypter-key",
+      "radius-smallstep-server-cert",
+      "radius-smallstep-server-key",
+      "scep-broker-token"
+    ],
+    "frontdoors": {
+      "ec": "smallstep-ca-backend",
+      "rsa": "smallstep-rsa-backend",
+      "broker": "scep-broker-backend"
+    }
+  },
+  "base_config_file": "../../examples/cloud-8021x-green.yaml",
+  "package_directory": "/absolute/reviewed/bundle",
+  "package_manifest_file": "/absolute/reviewed/bundle/package-manifest.json",
+  "package_manifest_sha256": "<reviewed sha256>",
+  "application_file": "/absolute/reviewed/cloud-8021x",
+  "application_sha256": "<reviewed sha256>",
+  "provenance_file": "/absolute/reviewed/provenance.json",
+  "provenance_sha256": "<reviewed sha256>",
+  "image": "projects/debian-cloud/global/images/debian-13-trixie-v20261001",
+  "state_transition": "<independent 64 lowercase hex transition>",
+  "application_version": "<reviewed application version>"
+}
+
+# Exact reviewed nonsecret output of the separately applied private-green state.
+application_capacity = {
+  deployment_id = "green-20261008"
+  runtime_connections_per_node = 8
+  runtime_role_limit = 16
+  native_role_limit = 4
+  migration_role_limit = 16
+}

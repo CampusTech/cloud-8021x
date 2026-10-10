@@ -88,7 +88,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
                 aggregator  = "last"
                 data_source = "metrics"
                 name        = "online"
-                query       = "max:freeradius.up{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.fill(last,60)"
+                query       = "max:cloud8021x.backend.up{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.fill(last,60)"
               }
             }
           }
@@ -107,22 +107,14 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
           precision = 1
           request {
             formula {
-              formula_expression = "(default_zero(a) + default_zero(b)) * 60"
+              formula_expression = "(a) * 60"
             }
             query {
               metric_query {
                 aggregator  = "avg"
                 data_source = "metrics"
                 name        = "a"
-                query       = "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                aggregator  = "avg"
-                data_source = "metrics"
-                name        = "b"
-                query       = "sum:freeradius.freeradius_total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_access_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
           }
@@ -325,20 +317,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "line"
             formula {
               alias              = "Challenges"
-              formula_expression = "default_zero(e) + default_zero(f)"
+              formula_expression = "e"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "e"
-                query       = "sum:freeradius.total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "f"
-                query       = "sum:freeradius.freeradius_total_access_challenges.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_access_challenges{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -1159,7 +1144,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
       widget {
         note_definition {
           background_color = "white"
-          content          = "**Usage:** Upload/download are from the device’s perspective. Totals include ongoing sessions and deduplicate reports. Totals follow the network’s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. Usage requires an enabled collector."
+          content          = "**Usage:** Upload/download are from the device’s perspective. The shared PostgreSQL ledger deduplicates accounting reports and is authoritative for exact totals. These dashboard totals are observed telemetry: downstream at-least-once delivery can duplicate intervals, and stable IDs do not deduplicate sums. Totals follow the network’s accounting report cadence; throughput is an interval average. Missing baselines or counter resets leave gaps. N/A measured-client coverage means no measured interval.\n\nEarlier usage is not reconstructed. The Go daemon emits committed PostgreSQL intervals through the local durable OTLP collector."
           font_size        = "14"
           show_tick        = false
           text_align       = "left"
@@ -2124,20 +2109,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "line"
             formula {
               alias              = "Requests"
-              formula_expression = "default_zero(a) + default_zero(b)"
+              formula_expression = "a"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "a"
-                query       = "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "b"
-                query       = "sum:freeradius.freeradius_total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_acct_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -2148,20 +2126,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "line"
             formula {
               alias              = "Responses"
-              formula_expression = "default_zero(c) + default_zero(d)"
+              formula_expression = "c"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "c"
-                query       = "sum:freeradius.total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "d"
-                query       = "sum:freeradius.freeradius_total_acct_responses.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_acct_responses{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -2396,7 +2367,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
               metric_query {
                 data_source = "metrics"
                 name        = "depth"
-                query       = "max:freeradius.queue_len_acct{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                query       = "max:cloud8021x.radius.queue_len_acct{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
               }
             }
           }
@@ -2410,7 +2381,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
               metric_query {
                 data_source = "metrics"
                 name        = "depth"
-                query       = "max:freeradius.queue_len_auth{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                query       = "max:cloud8021x.radius.queue_len_auth{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
               }
             }
           }
@@ -2424,7 +2395,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
               metric_query {
                 data_source = "metrics"
                 name        = "depth"
-                query       = "max:freeradius.queue_len_internal{$host AND (host:radius-primary OR host:radius-secondary)} by {host}"
+                query       = "max:cloud8021x.radius.queue_len_internal{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}"
               }
             }
           }
@@ -2450,7 +2421,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
               metric_query {
                 data_source = "metrics"
                 name        = "requests"
-                query       = "sum:freeradius.total_access_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_access_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.as_rate()"
               }
             }
           }
@@ -2464,7 +2435,7 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
               metric_query {
                 data_source = "metrics"
                 name        = "requests"
-                query       = "sum:freeradius.total_acct_requests.count{$host AND (host:radius-primary OR host:radius-secondary)} by {host}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_acct_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius} by {host}.as_rate()"
               }
             }
           }
@@ -2484,20 +2455,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "bars"
             formula {
               alias              = "Malformed"
-              formula_expression = "default_zero(a) + default_zero(b)"
+              formula_expression = "a"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "a"
-                query       = "sum:freeradius.total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "b"
-                query       = "sum:freeradius.freeradius_total_auth_malformed_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_auth_malformed_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -2508,20 +2472,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "bars"
             formula {
               alias              = "Invalid"
-              formula_expression = "default_zero(c) + default_zero(d)"
+              formula_expression = "c"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "c"
-                query       = "sum:freeradius.total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "d"
-                query       = "sum:freeradius.freeradius_total_auth_invalid_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_auth_invalid_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -2532,20 +2489,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "bars"
             formula {
               alias              = "Dropped"
-              formula_expression = "default_zero(e) + default_zero(f)"
+              formula_expression = "e"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "e"
-                query       = "sum:freeradius.total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "f"
-                query       = "sum:freeradius.freeradius_total_auth_dropped_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_auth_dropped_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {
@@ -2556,20 +2506,13 @@ resource "datadog_dashboard_v2" "radius_native_companion" {
             display_type = "line"
             formula {
               alias              = "Duplicate"
-              formula_expression = "default_zero(g) + default_zero(h)"
+              formula_expression = "g"
             }
             query {
               metric_query {
                 data_source = "metrics"
                 name        = "g"
-                query       = "sum:freeradius.total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
-              }
-            }
-            query {
-              metric_query {
-                data_source = "metrics"
-                name        = "h"
-                query       = "sum:freeradius.freeradius_total_auth_duplicate_requests.count{$host AND (host:radius-primary OR host:radius-secondary)}.as_rate()"
+                query       = "sum:cloud8021x.radius.total_auth_duplicate_requests{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:freeradius}.as_rate()"
               }
             }
             style {

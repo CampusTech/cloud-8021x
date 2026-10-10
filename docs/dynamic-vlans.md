@@ -29,9 +29,8 @@ radius_vlan_policy = {
 
 Use Fleet **fleet/team IDs**, not host IDs or names. `fleet:0` is Unassigned.
 The Fleet adapter accepts both `fleet_id` and the older `team_id` API field.
-The existing Jamf computer inventory adapter maps sites as `jamf:site:<id>`;
-it does not fetch Jamf mobile-device inventory or smart-group membership.
-Enable one existing inventory integration or supply a custom snapshot as below.
+Fleet is the built-in device inventory adapter. Other providers can supply
+the normalized inventory contract without changing RADIUS policy.
 
 ### Different VLAN IDs at each location
 
@@ -276,8 +275,7 @@ policy or prolong authorization. A newly enrolled device may wait until the
 next complete refresh. To refresh immediately on each RADIUS VM:
 
 ```sh
-sudo /usr/local/bin/fleet-device-cache.sh
-# Or, for Jamf: sudo /usr/local/bin/jamf-device-cache.sh
+sudo /usr/local/bin/cloud-8021x inventory sync --config /etc/cloud-8021x/config.yaml
 ```
 
 Membership changes take effect on the next authentication after refresh. Legacy CN mode also rechecks policy on TLS resumption using restored certificate

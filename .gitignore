@@ -6,10 +6,20 @@ terraform.tfvars
 *.auto.tfvars
 crash.log
 .DS_Store
-freeradius/
+/freeradius/
 out/
 tfplan
 *.cert
 .claude/
 
 __pycache__/
+
+# Reviewed provider locks; provider caches and state remain excluded.
+!/.terraform.lock.hcl
+!/terraform/green/.terraform.lock.hcl
+!/terraform/private-green/.terraform.lock.hcl
+!/terraform/postgres/.terraform.lock.hcl
+!/terraform/observability/.terraform.lock.hcl
+
+# Generated from the authoritative datadog*.tf sources before owner validation.
+/terraform/observability/observability.tf

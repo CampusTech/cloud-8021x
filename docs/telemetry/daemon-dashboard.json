@@ -1,0 +1,180 @@
+{
+  "title": "cloud-8021x daemon migration and capacity",
+  "description": "Shared PostgreSQL gauges use max by cluster; local spool/auth capacity stays per host. Missing values remain unavailable.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "cluster",
+      "prefix": "cluster",
+      "default": "*"
+    },
+    {
+      "name": "host",
+      "prefix": "host",
+      "default": "*"
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "title": "Active shared sessions",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.ledger.sessions{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Pending shared intake",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.ledger.intake{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Shared quarantined work",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.ledger.quarantine{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Pending shared delivery",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.outbox.depth{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Oldest shared delivery age",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.outbox.oldest_age{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Shared usage processing age",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.usage.age{scope:shared,$cluster} by {cluster}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local retained auth files",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.auth.files{$host} by {host}",
+            "display_type": "line"
+          }
+        ],
+        "markers": [
+          {
+            "value": "y = 2048",
+            "display_type": "warning dashed",
+            "label": "soft capacity"
+          },
+          {
+            "value": "y = 3584",
+            "display_type": "warning dashed",
+            "label": "critical capacity"
+          },
+          {
+            "value": "y = 4096",
+            "display_type": "warning dashed",
+            "label": "reader hard bound"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local auth capacity level",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.auth.capacity{$host} by {host}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local native accounting backlog bytes",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.spool.bytes{$host} by {host}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local native spool free bytes",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.spool.free_bytes{$host} by {host}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local inventory age",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.inventory.age{$host} by {host}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Local discovered source age",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "max:cloud8021x.source.age{$host} by {host}",
+            "display_type": "line"
+          }
+        ]
+      }
+    }
+  ]
+}

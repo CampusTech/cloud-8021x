@@ -75,7 +75,7 @@ resource "google_compute_firewall" "allow_ssh" {
   target_tags   = ["radius-server"]
 }
 
-# Outbound — needed for package installs, Okta API calls, etc.
+# Outbound — authenticated pinned artifact and required service APIs.
 resource "google_compute_firewall" "allow_egress" {
   project   = google_project.this.project_id
   name      = "allow-egress"

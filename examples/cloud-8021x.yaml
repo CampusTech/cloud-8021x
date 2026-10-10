@@ -1,0 +1,200 @@
+# Non-secret configuration. Bootstrap provisions protected credential files;
+# the daemon cannot read CA keys or the migration/native-writer credentials.
+# Durations use Go duration syntax (for example 1h, 15m, 120s).
+schema_version: 1
+debug: false
+# Separate from root and freerad; bootstrap creates this dedicated account.
+runtime_user: cloud8021x
+instance_id: radius-example
+environment: development
+hostname: radius-example
+
+listeners:
+  policy:
+    address: 127.0.0.1:9080
+    token: {file: /run/cloud-8021x/credentials/policy-token}
+    max_concurrency: 64
+    max_body_bytes: 16384
+    timeout: 2s
+  webhook:
+    enabled: true
+    address: 127.0.0.1:9444
+    cert_file: /etc/cloud-8021x/webhook.crt
+    key_file: {file: /run/cloud-8021x/credentials/webhook.key}
+    client_ca_files: [/etc/cloud-8021x/client-cas.pem]
+    client_dns_names: [ca.example.edu, scep.example.edu]
+  broker:
+    enabled: false
+  health_address: 127.0.0.1:9082
+  metrics_address: 127.0.0.1:9083
+
+inventory:
+  enabled: true
+  provider: fleet
+  fleet:
+    base_url: https://fleet.example.edu
+    observer_token: {file: /run/cloud-8021x/credentials/fleet-observer-token}
+    maintainer_token: {file: /run/cloud-8021x/credentials/fleet-maintainer-token}
+    managed_certificates: true
+    client_ca_file: /etc/cloud-8021x/client-cas.pem
+    timeout: 5s
+    poll_interval: 1h
+    max_pending_age: 24h
+    cache_file: /var/cache/cloud-8021x/runtime/fleet.json
+    challenge_signing_key: {file: /run/cloud-8021x/credentials/scep-challenge-key}
+    scep_provisioner: wifi-scep
+    acme_profile_uuids: []
+    # null/omitted: collect all eligible non-exempt hosts; []: queue no hosts.
+    scep_profile_uuids: null
+
+policy:
+  identity_mode: fingerprint
+  inventory_max_age: 1h
+  certificate_max_age: 24h
+  handoff_max_age: 120s
+  class_max_age: 720h
+  class_signing_key: {file: /run/cloud-8021x/credentials/accounting-class-key}
+  attested_acme:
+    enabled: false
+  rules:
+    - {group_id: 'fleet:1', location_id: nyc, vlan: 20}
+
+network:
+  metadata_max_age: 1h # Display metadata only; independent from inventory and discovery freshness.
+  providers:
+    - id: campus-unifi
+      kind: unifi
+      base_url: https://unifi.example.edu
+      credential: {file: /run/cloud-8021x/credentials/unifi-token}
+      scopes: [nyc-site]
+      timeout: 5s
+    - id: campus-meraki
+      kind: meraki
+      base_url: https://api.meraki.com
+      credential: {file: /run/cloud-8021x/credentials/meraki-token}
+      scopes: [campus-organization]
+      timeout: 5s
+  locations:
+    - {id: nyc, provider_id: campus-unifi, site_id: nyc-site, vlan_enabled: true}
+    - {id: sacramento, provider_id: campus-meraki, site_id: sacramento-network, vlan_enabled: false}
+  discovery:
+    enabled: false
+    max_age: 15m
+    candidate_file: /var/lib/cloud-8021x/sources-candidate.json
+
+# Authenticated configured clients supply the trusted location. NAS packet
+# attributes and controller display metadata do not select this mapping.
+radius_clients:
+  - id: nyc-wifi
+    location_id: nyc
+    cidrs: [192.0.2.10/32]
+    secret: {file: /run/cloud-8021x-root/radius-nyc-secret}
+    medium: wifi
+    signaling_profile: unifi-numeric
+  - id: sacramento-wifi
+    location_id: sacramento
+    cidrs: [192.0.2.11/32]
+    secret: {file: /run/cloud-8021x-root/radius-sacramento-secret}
+    medium: wifi
+
+database:
+  runtime_dsn: {file: /run/cloud-8021x/credentials/postgres-runtime-dsn}
+  migration_dsn: {file: /run/cloud-8021x-root/postgres-migration-dsn}
+  native_writer_dsn: {file: /run/cloud-8021x-root/postgres-native-dsn}
+  ca_file: /etc/cloud-8021x/postgres-ca.pem
+  tls_mode: verify-full
+  # Incoming bootstrap also requires instance_ca_pem_sha256 to equal the exact
+  # public postgres-ca.pem SHA256 in its protected artifact manifest, for either TLS mode.
+  # Existing Cloud SQL internal per-instance CA/private-IP deployments may use
+  # tls_mode: cloudsql-instance-ca only with both fields below. Bootstrap verifies
+  # the instance's CA mode; runtime verifies the exact CA PEM pin and certificate chain.
+  # cloud_sql_instance: campus-dev:us-central1:shared-postgres
+  # instance_ca_pem_sha256: <exact 64-hex SHA-256 of the trusted CA PEM file>
+  min_connections: 0
+  max_connections: 8
+  connect_timeout: 5s
+  query_timeout: 5s
+
+telemetry:
+  enabled: false
+  endpoint: http://127.0.0.1:4318
+  transport: http
+  logs: true
+  metrics: true
+  traces: true
+  trace_sample_ratio: 0.1
+  queue_size: 1024
+  timeout: 5s
+  shutdown_timeout: 10s
+
+ca:
+  provider: step-ca
+  url: https://ca.example.edu
+  root_files: [/etc/cloud-8021x/client-cas.pem]
+  intermediate_files: [/etc/cloud-8021x/ec-intermediate.pem, /etc/cloud-8021x/rsa-intermediate.pem]
+  config_file: /etc/step-ca/config/ca.json
+  server_cert_file: /etc/freeradius/3.0/certs/server-cert.pem
+  server_key_file: {file: /etc/freeradius/3.0/certs/server-key.pem}
+  readiness_file: /var/lib/step-ca/ready
+
+# The constrained root verify-leaf hook reads FreeRADIUS public leaf files here
+# and exclusively writes/chowns handoffs into the app-owned 0700 directory.
+backends:
+  # Root-owned, non-writable ancestry; final directory freerad-owned 0700.
+  # Public leaf inputs must be freerad-owned single-link regular files, mode 0600.
+  radius_verify_leaf_dir: /run/radius-verified-leaves
+
+paths:
+  handoff_dir: /run/radius-certificate-bindings
+  downgrade_guard_file: /var/lib/cloud-8021x/fingerprint-enforced
+
+schedules:
+  inventory: 5m
+  certificates: 1h
+  sites: 5m
+  sources: 1m
+  metrics: 1m
+  accounting_workers: 2
+  export_workers: 1
+
+# Root installation only. Terraform supplies these nonsecret identities and
+# root-only Secret Manager grants; no credentials are embedded here.
+bootstrap:
+  project: campus-example
+  project_number: '123456789012'
+  ca_name: Campus
+  ec_kms: cloudkms:projects/campus-example/locations/us-central1/keyRings/radius/cryptoKeys/ec-intermediate/cryptoKeyVersions/1
+  rsa_kms: cloudkms:projects/campus-example/locations/us-central1/keyRings/radius/cryptoKeys/rsa-intermediate/cryptoKeyVersions/1
+  ec_staging_secret: projects/campus-example/secrets/smallstep-ec-bootstrap-staging
+  rsa_staging_secret: projects/campus-example/secrets/smallstep-rsa-bootstrap-staging
+  ec_dns: ca.example.edu
+  rsa_dns: scep.example.edu
+  server_dns: radius.example.edu
+  acme_provisioner: wifi-acme
+  scep_provisioner: wifi-scep
+  ec_database_dsn: {file: /run/cloud-8021x-root/stepca-dsn}
+  rsa_database_dsn: {file: /run/cloud-8021x-root/stepca-rsa-dsn}
+  runtime_role: cloud8021x_runtime
+  native_role: cloud8021x_native
+  local_address: 10.0.0.10
+  peer_address: 10.0.0.11
+  peer_dns: radius-secondary.example.edu
+  health_secret: {file: /run/cloud-8021x/credentials/peer-health}
+  datadog_site: us5.datadoghq.com
+  secrets:
+    - {resource: projects/campus-example/secrets/policy-token, file: /run/cloud-8021x/credentials/policy-token, owner: runtime}
+    - {resource: projects/campus-example/secrets/fleet-observer-token, file: /run/cloud-8021x/credentials/fleet-observer-token, owner: runtime}
+    - {resource: projects/campus-example/secrets/fleet-maintainer-token, file: /run/cloud-8021x/credentials/fleet-maintainer-token, owner: runtime}
+    - {resource: projects/campus-example/secrets/scep-challenge-key, file: /run/cloud-8021x/credentials/scep-challenge-key, owner: runtime}
+    - {resource: projects/campus-example/secrets/radius-accounting-key, file: /run/cloud-8021x/credentials/accounting-class-key, owner: runtime}
+    - {resource: projects/campus-example/secrets/unifi-token, file: /run/cloud-8021x/credentials/unifi-token, owner: runtime}
+    - {resource: projects/campus-example/secrets/meraki-token, file: /run/cloud-8021x/credentials/meraki-token, owner: runtime}
+    - {resource: projects/campus-example/secrets/postgres-runtime-dsn, file: /run/cloud-8021x/credentials/postgres-runtime-dsn, owner: runtime}
+    - {resource: projects/campus-example/secrets/peer-health, file: /run/cloud-8021x/credentials/peer-health, owner: runtime}
+    - {resource: projects/campus-example/secrets/postgres-migration-dsn, file: /run/cloud-8021x-root/postgres-migration-dsn, owner: root}
+    - {resource: projects/campus-example/secrets/postgres-native-dsn, file: /run/cloud-8021x-root/postgres-native-dsn, owner: root}
+    - {resource: projects/campus-example/secrets/stepca-dsn, file: /run/cloud-8021x-root/stepca-dsn, owner: root}
+    - {resource: projects/campus-example/secrets/stepca-rsa-dsn, file: /run/cloud-8021x-root/stepca-rsa-dsn, owner: root}
+    - {resource: projects/campus-example/secrets/radius-nyc-secret, file: /run/cloud-8021x-root/radius-nyc-secret, owner: root}
+    - {resource: projects/campus-example/secrets/radius-sacramento-secret, file: /run/cloud-8021x-root/radius-sacramento-secret, owner: root}
+    - {resource: projects/campus-example/secrets/datadog-api-key, file: /run/cloud-8021x-collector/datadog-api-key, owner: collector}

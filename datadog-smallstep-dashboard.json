@@ -36,33 +36,106 @@
           {
             "definition": {
               "check": "http.can_connect",
+              "group_by": [
+                "host"
+              ],
               "grouping": "cluster",
               "tags": [
-                "instance:stepca-health"
+                "service:smallstep-ca",
+                "instance:stepca_health",
+                "ca_instance:ec",
+                "host:radius-primary",
+                "$host"
               ],
-              "title": "EC CA Health (/health)",
+              "title": "radius-primary: EC CA Health",
               "type": "check_status"
             }
           },
           {
             "definition": {
               "check": "http.can_connect",
+              "group_by": [
+                "host"
+              ],
               "grouping": "cluster",
               "tags": [
-                "instance:stepca-rsa-health"
+                "service:smallstep-ca",
+                "instance:stepca_rsa_health",
+                "ca_instance:rsa",
+                "host:radius-primary",
+                "$host"
               ],
-              "title": "RSA CA Health (/health)",
+              "title": "radius-primary: RSA CA Health",
               "type": "check_status"
             }
           },
           {
             "definition": {
               "check": "process.up",
+              "group_by": [
+                "host"
+              ],
               "grouping": "cluster",
               "tags": [
-                "process:step-ca"
+                "service:smallstep-ca",
+                "process:step-ca",
+                "host:radius-primary",
+                "$host"
               ],
-              "title": "step-ca Process Up",
+              "title": "radius-primary: step-ca Processes",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "check": "http.can_connect",
+              "group_by": [
+                "host"
+              ],
+              "grouping": "cluster",
+              "tags": [
+                "service:smallstep-ca",
+                "instance:stepca_health",
+                "ca_instance:ec",
+                "host:radius-secondary",
+                "$host"
+              ],
+              "title": "radius-secondary: EC CA Health",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "check": "http.can_connect",
+              "group_by": [
+                "host"
+              ],
+              "grouping": "cluster",
+              "tags": [
+                "service:smallstep-ca",
+                "instance:stepca_rsa_health",
+                "ca_instance:rsa",
+                "host:radius-secondary",
+                "$host"
+              ],
+              "title": "radius-secondary: RSA CA Health",
+              "type": "check_status"
+            }
+          },
+          {
+            "definition": {
+              "check": "process.up",
+              "group_by": [
+                "host"
+              ],
+              "grouping": "cluster",
+              "tags": [
+                "service:smallstep-ca",
+                "process:step-ca",
+                "host:radius-secondary",
+                "$host"
+              ],
+              "title": "radius-secondary: step-ca Processes",
               "type": "check_status"
             }
           },
@@ -74,12 +147,12 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_red",
                       "value": 1
                     },
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_green",
                       "value": 1
                     }
@@ -94,7 +167,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.scep.decrypter_ready{$host,$ca_instance}"
+                      "query": "min:cloud8021x.scep.decrypter_ready{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:step-ca AND ca_instance:rsa AND $ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -121,7 +194,7 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "max:smallstep.uptime{$host,$ca_instance}"
+                      "query": "max:smallstep.uptime{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
@@ -147,7 +220,7 @@
                       "aggregator": "avg",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "scalar"
@@ -181,7 +254,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance} by {provisioner,ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -206,7 +279,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,success}.as_rate()"
+                      "query": "sum:smallstep.x509.signed.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance} by {provisioner,success}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -234,7 +307,7 @@
                       "aggregator": "sum",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.x509.signed.count{$host,$ca_instance} by {provisioner,ca_instance}.as_count()"
+                      "query": "sum:smallstep.x509.signed.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance} by {provisioner,ca_instance}.as_count()"
                     }
                   ],
                   "response_format": "scalar"
@@ -250,7 +323,7 @@
     {
       "definition": {
         "layout_type": "ordered",
-        "title": "Webhook & KMS",
+        "title": "Webhook \u0026 KMS",
         "type": "group",
         "widgets": [
           {
@@ -268,7 +341,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.x509.webhook_authorized.count{$host,$ca_instance} by {provisioner}.as_rate()"
+                      "query": "sum:smallstep.x509.webhook_authorized.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance} by {provisioner}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries"
@@ -294,7 +367,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "sum:smallstep.kms.signed.count{$host,$ca_instance}.as_rate()"
+                      "query": "sum:smallstep.kms.signed.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -314,7 +387,7 @@
                     {
                       "data_source": "metrics",
                       "name": "b",
-                      "query": "sum:smallstep.kms.errors.count{$host,$ca_instance}.as_rate()"
+                      "query": "sum:smallstep.kms.errors.count{$host AND (host:radius-primary OR host:radius-secondary) AND service:smallstep-ca AND $ca_instance}.as_rate()"
                     }
                   ],
                   "response_format": "timeseries",
@@ -346,17 +419,17 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_red",
                       "value": 30
                     },
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_yellow",
                       "value": 90
                     },
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_green",
                       "value": 90
                     }
@@ -371,13 +444,13 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{cert:intermediate,$host,$ca_instance}"
+                      "query": "min:cloud8021x.certificate.days_until_expiry{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:step-ca AND cert:intermediate AND $ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "Intermediate CA \u2014 days until expiry",
+              "title": "Intermediate CA — days until expiry",
               "type": "query_value"
             }
           },
@@ -390,17 +463,17 @@
                 {
                   "conditional_formats": [
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_red",
                       "value": 30
                     },
                     {
-                      "comparator": "<",
+                      "comparator": "\u003c",
                       "palette": "white_on_yellow",
                       "value": 90
                     },
                     {
-                      "comparator": ">=",
+                      "comparator": "\u003e=",
                       "palette": "white_on_green",
                       "value": 90
                     }
@@ -415,13 +488,13 @@
                       "aggregator": "last",
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{cert:decrypter,$host,$ca_instance}"
+                      "query": "min:cloud8021x.certificate.days_until_expiry{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:step-ca AND cert:decrypter AND $ca_instance}"
                     }
                   ],
                   "response_format": "scalar"
                 }
               ],
-              "title": "SCEP Decrypter \u2014 days until expiry",
+              "title": "SCEP Decrypter — days until expiry",
               "type": "query_value"
             }
           },
@@ -439,7 +512,7 @@
                     {
                       "data_source": "metrics",
                       "name": "a",
-                      "query": "min:smallstep.cert.days_until_expiry{$host,$ca_instance} by {cert,ca_instance}"
+                      "query": "min:cloud8021x.certificate.days_until_expiry{$host AND (host:radius-primary OR host:radius-secondary) AND service:cloud-8021x AND component:step-ca AND $ca_instance} by {cert,ca_instance}"
                     }
                   ],
                   "response_format": "timeseries"
@@ -473,7 +546,7 @@
                 "*"
               ],
               "message_display": "inline",
-              "query": "service:smallstep-ca $host",
+              "query": "service:smallstep-ca host:$host.value (host:radius-primary OR host:radius-secondary)",
               "sort": {
                 "column": "timestamp",
                 "order": "desc"
@@ -495,7 +568,7 @@
                 "*"
               ],
               "message_display": "expanded-md",
-              "query": "service:smallstep-ca $host (status:error OR status:warn OR @level:error OR @level:warn)",
+              "query": "service:smallstep-ca host:$host.value (host:radius-primary OR host:radius-secondary) (status:error OR status:warn OR @level:error OR @level:warn)",
               "sort": {
                 "column": "timestamp",
                 "order": "desc"

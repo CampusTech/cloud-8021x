@@ -1,0 +1,42 @@
+prefix = /usr
+localstatedir = /var
+logdir = /var/log/freeradius
+run_dir = /run/freeradius
+libdir = /usr/lib/freeradius
+radacctdir = {{quote .SpoolDirectory}}
+raddbdir = {{quote .ConfigDir}}
+modconfdir = ${raddbdir}/mods-config
+name = freeradius
+pidfile = ${run_dir}/freeradius.pid
+max_request_time = 10
+cleanup_delay = 2
+max_requests = 4096
+hostname_lookups = no
+log {
+ destination = files
+ file = ${logdir}/radius.log
+ auth = no
+ auth_badpass = no
+ auth_goodpass = no
+}
+security {
+ user = freerad
+ group = freerad
+ allow_core_dumps = no
+ max_attributes = 200
+ reject_delay = 0
+ status_server = no
+}
+thread pool {
+ start_servers = 4
+ max_servers = 16
+ min_spare_servers = 2
+ max_spare_servers = 4
+ max_requests_per_server = 0
+}
+$INCLUDE clients.conf
+{{if .SourcesInclude}}$INCLUDE /etc/cloud-8021x/sources/clients.conf{{end}}
+modules {
+ $INCLUDE mods-enabled/
+}
+$INCLUDE sites-enabled/
