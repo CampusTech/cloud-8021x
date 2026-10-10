@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., tests/scep, tools/dashboard]
+        module: [., tests/scep, tools/dashboard, tests/runtime/task11-scenarios]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -31,6 +31,7 @@ jobs:
             go.sum
             tests/scep/go.sum
             tools/dashboard/go.sum
+            tests/runtime/task11-scenarios/go.sum
       - name: Install Terraform for actual mocked dashboard fixtures
         if: matrix.module == 'tools/dashboard'
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
