@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Development-only disposable PostgreSQL16 TLS fixture. Never uses production DSNs.
 set -euo pipefail
-fixture=$(mktemp -d /private/tmp/cloud8021x-pg.XXXXXX)
+fixture=$(mktemp -d "${TMPDIR:-/tmp}/cloud8021x-pg.XXXXXX")
 fixture_task=${C8021X_PG_FIXTURE_TASK:-task3}
 [[ "$fixture_task" =~ ^task[0-9]+$ ]] || exit 2
 fixture_package=${C8021X_PG_FIXTURE_PACKAGE:-./internal/storage/postgres}

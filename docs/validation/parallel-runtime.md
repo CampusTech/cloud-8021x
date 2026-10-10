@@ -23,7 +23,7 @@ Branch: codex/unified-go-daemon; shared isolated worktree. No cloud/prod/Fleet/D
 - Real TLS PostgreSQL16, owned labelled container, no host ports: `TestPostgresParallelSessionsAndConcurrentCreation`, `TestPostgresParallelEpochIsolation`, `TestPostgresParallelSignedHandoffAndActivation` pass. New fixture covers a distinct green app database, blue untouched, immutable epoch, pre-epoch suppression/ongoing baseline/exact delta, both source signatures/preparations, duplicate pending guard preservation, both-node activation, epoch revocation, missing physical reverse proof, unresolved original/green command refusal, and exact expired prepare/activation recovery identity/replay refusal. Negative peer release/trust/config publication mutations also refuse readiness.
 - Owned Linux source fixture: `TestInstalledParallelSourceCaptureRetainsAuthorizationOnly` passes with actual root files, freerad UID, process/lock scanning and key signing. It proves original timestamps/guard preserved, poisoned accounting never imported, no native/CA stop, missing command cache rejected, wrong physical source rejected, zero/one destination proof rejected, two signatures restore original scheduler files, live helper rejected, dead PID-start helper accepted only under matching config, and passive barrier bytes retained. Service calls are injected; no production host service runs.
 - Packaging peer reports actual ARM64 and AMD64 62-archive native/package acceptance plus Debian13 `systemd-analyze verify` for six rendered base units and passive condition files, and actual ConditionPathExists negative/positive marker evaluation. Evidence: `/private/tmp/cloud8021x-task10-closure62-arm64-units.log`; packaging owns its final evidence/report. This is explicitly not PID1 reboot proof.
-- Reproducible owned fixture harness added: `sh tests/runtime/parallel-fixtures.sh`; cached postgres16 only, unique names/labels, readonly host input mounts, no published ports, automatic owned cleanup. The final committed-harness run passed source/reverse Linux (0.38s), default parallel accounting (0.30s), preserved original whole-bundle pending guards (0.14s), isolated epoch (0.69s), and signed handoff/activation/recovery (0.33s).
+- Reproducible owned fixture harness added: `sh tests/integration/parallel.sh`; cached postgres16 only, unique names/labels, readonly host input mounts, no published ports, automatic owned cleanup. The final committed-harness run passed source/reverse Linux (0.38s), default parallel accounting (0.30s), preserved original whole-bundle pending guards (0.14s), isolated epoch (0.69s), and signed handoff/activation/recovery (0.33s).
 - Meaningful RED→GREEN: clean uninstalled systemd units initially prevented passive prepare; focused synthetic reproducer failed then passed after fixed absent-file/property proof. App database-outage test retained its real local socket outage while correcting its synthetic DSN to the newly explicit default cloud8021x namespace.
 
 ## Self-review and review boundaries
@@ -39,7 +39,7 @@ Ownership preserved: infrastructure owns internal/provisioning/Terraform/loader/
 ## Runtime paths for exact staging
 
 - docs/parallel-adoption.md
-- tests/runtime/parallel-fixtures.sh
+- tests/integration/parallel.sh
 - internal/accounting/epoch.go, epoch_test.go
 - internal/adapters/freeradius/native/readiness.go, readiness_test.go
 - internal/adapters/gcp/firewall.go

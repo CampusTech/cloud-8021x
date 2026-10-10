@@ -18,3 +18,6 @@ Current contracts live in [daemon operations](../daemon-operations.md),
 actual shipping artifact evidence for deployment decisions.
 
 [Parallel runtime validation](parallel-runtime.md) records the Task 10 local Linux and TLS PostgreSQL fixtures. It does not establish production readiness or full systemd PID 1 acceptance; those remain separate deployment gates.
+
+[Validation scope review](scope-review.md) records the PR39 harness reduction,
+the small reproducible integration entrypoint and remaining staging gates.

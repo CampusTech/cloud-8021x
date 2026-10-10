@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR revisions must not keep rebuilding/scanning obsolete artifacts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -136,18 +141,12 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           python3 tests/package_binary_inventory.py bundle binary-evidence --scanner "$(go env GOPATH)/bin/govulncheck"
-      - name: Actual clean-image install, failed-write/source packets and interrupted rollback
+      - name: Prepare disposable PostgreSQL image
+        run: docker pull postgres:16
+      - name: Native packages, EAP policy packets, buffering and interrupted rollback
         env:
           BUILD_ARCH: ${{ matrix.architecture }}
-        run: tests/native_package_acceptance.sh "$BUILD_ARCH" bundle
-      - name: Existing native bootstrap status, activation and maintainer rollback
-        env:
-          BUILD_ARCH: ${{ matrix.architecture }}
-        run: scripts/test_bootstrap_native.sh "$BUILD_ARCH" bundle
-      - name: Existing native auth privacy, clock rollback and retention
-        env:
-          BUILD_ARCH: ${{ matrix.architecture }}
-        run: scripts/test_auth_retention.sh "$BUILD_ARCH" bundle
+        run: tests/integration/run.sh native "$BUILD_ARCH" bundle
       - name: Actual unprivileged host checks and durable monitoring handoff
         env:
           BUILD_ARCH: ${{ matrix.architecture }}

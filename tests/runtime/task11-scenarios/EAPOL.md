@@ -1,9 +1,0 @@
-# Cached EAP peer interface evidence (not actual execution)
-
-The development-only authenticated Debian archive `eapoltest_2.10-24_arm64.deb`, package version `2:2.10-24`, is retained at `/private/tmp/cloud8021x-task11-debian-20261001.d5B0lJ/prerequisites/archives/`. Its actual SHA256 is `5077933a510724de12bb2725ef811f213745819e3dc273b45c5e2014b9c20d97`, byte size1053144; these match the exact entry in `prerequisites/dev-prerequisites.lock.json`. This archive remains development-only, separate from the unchanged shipping62 closure.
-
-Read-only in-memory ar/xz/tar/gzip inspection found `./usr/share/man/man8/eapol_test.8.gz`. Its decompressed manpage SHA256 is `f0afc6f47d5cf10435aec80d8ae80c9d7b27bcaa4d2922c8b7249c0ede68e01f`. The documented `-M` option sets the client MAC used for Calling-Station-Id; the default is `02:00:00:00:00:01`. `-A` selects the client IP address. No archive acquisition, installation, helper invocation, network socket or actual native packet execution occurred for this observation.
-
-The future fixed NAS invocation can pass immutable-plan Station using `-M`, force independently enrolled NAS source `.40` using `-A`, and preserve the existing local relay `.40:18120`, fixed EAP config, timeout and Framed-Protocol attribute. Before forwarding any actual Access-Request, the relay must require exactly one attribute31 equal to that prechosen canonical station and exactly the pinned NAS source. It must never rewrite station or other packet bytes. Outgoing authenticators and actual response authenticators remain genuine; Class verification and immutable client fingerprint must complete before accounting expectation IDs are derived or accounting packets are transmitted.
-
-This confirms a cached package's documented interface only. The actual installed binary descriptor/version, real namespace/source address, outgoing attribute and final native EAP/Class/accounting behavior remain later installed acceptance gates.

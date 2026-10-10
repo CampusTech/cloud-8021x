@@ -125,6 +125,13 @@ has occurred. Full installed migration and HA acceptance remain open in Task 11.
 
 ## Task 11: Integration, security and final review
 
+**Recovery amendment (2026-10-10):** the custom installed-VM harness was removed
+following the approved scope review. Use `tests/integration/run.sh` and the
+existing product assertions. Do not rebuild a VM/controller framework to satisfy
+this task. Report automated suite results separately; real boot/cloud/office
+cutover remain staging gates, not implied by unit or container tests. See
+[validation scope review](../../validation/scope-review.md).
+
 Files: tests, docs, all task-owned paths as required for fixes; PR body.
 
 - [ ] Run root race tests, goimports/golangci-lint, govulncheck, existing/new SCEP and disposable FreeRADIUS/PG/Collector/CA integration suites.

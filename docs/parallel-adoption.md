@@ -99,6 +99,6 @@ The receiver verifies both pinned green signatures and its original physical sch
 
 ## Verification boundary
 
-Run `sh tests/runtime/parallel-fixtures.sh` with the already cached `postgres:16` image to reproduce the owned no-host-port Linux and TLS PostgreSQL checks. The harness never pulls images and removes only its own labelled containers and temporary files.
+Run `sh tests/integration/parallel.sh` with the already cached `postgres:16` image to reproduce the owned no-host-port Linux and TLS PostgreSQL checks. The harness never pulls images and removes only its own labelled containers and temporary files.
 
 Tests cover real TLS PostgreSQL epoch isolation, signed authorization publication, duplicate pending-command guards, two-node activation, revoked worker authority, unresolved-delivery refusal and exact expired preparation/activation recovery. Owned Linux fixtures cover root file/process capture, private key pins, original timestamp preservation, absence of accounting import, refusal of zero/one reverse receipt, original scheduler restoration, live-helper refusal and persistent passive files. The package fixture verifies the rendered conditions with actual Debian 13 `systemd-analyze verify` and evaluates marker absence/presence. This is not a claim of a real PID1 reboot or production cloud/HA cutover acceptance.

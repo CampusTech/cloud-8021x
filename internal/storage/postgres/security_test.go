@@ -241,7 +241,9 @@ func TestPostgresRoleIsolationAndHijack(t *testing.T) {
 	// Independent privileged connection proves the pre-existing CA sentinel unchanged.
 	u, _ := url.Parse(os.Getenv("C8021X_PG_TEST_DSN"))
 	u.Path = "/ca_sentinel"
-	ca, err := NewMigration(ctx, u.String(), c)
+	caConfig := c
+	caConfig.Name = "ca_sentinel"
+	ca, err := NewMigration(ctx, u.String(), caConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,13 +283,24 @@ func TestPostgresMigrationRejectsWrongDatabase(t *testing.T) {
 	ctx := context.Background()
 	u, _ := url.Parse(os.Getenv("C8021X_PG_TEST_DSN"))
 	u.Path = "/ca_sentinel"
-	wrong, err := NewMigration(ctx, u.String(), c)
+	if wrong, err := NewMigration(ctx, u.String(), c); err == nil {
+		wrong.Close()
+		t.Fatal("constructor accepted database identity mismatch")
+	} else if !strings.Contains(err.Error(), "database identity differs from protected configuration") {
+		t.Fatal("constructor rejected wrong database for an unrelated reason", err)
+	}
+	caConfig := c
+	caConfig.Name = "ca_sentinel"
+	wrong, err := NewMigration(ctx, u.String(), caConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer wrong.Close()
-	if err = wrong.Migrate(ctx, Roles{Runtime: "app_runtime", Native: "app_native"}); err == nil {
-		t.Fatal("migration created application schema in CA database")
+	// Exercise the migration's independent guard with a valid fixture pool
+	// whose database differs from the protected application identity.
+	wrong.databaseName = databaseName(c)
+	if err = wrong.Migrate(ctx, Roles{Runtime: "app_runtime", Native: "app_native"}); err == nil || !strings.Contains(err.Error(), "application migrations require the dedicated cloud8021x database") {
+		t.Fatal("migration did not reject the CA database identity", err)
 	}
 	var exists bool
 	if err = wrong.pool.QueryRow(ctx, "SELECT to_regnamespace('ledger') IS NOT NULL").Scan(&exists); err != nil || exists {
