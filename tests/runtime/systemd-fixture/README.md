@@ -107,7 +107,7 @@ OWNED_CACHE zero-nic-vm.swift -o OWNED_BINARY`, then ad-hoc codesign using only
 `zero-nic-vm.entitlements`. Its three arguments are owned disk, read-only seed
 and owned EFI. It has physically0NIC/0socket/0share devices, serial output only,
 CPU2/RAM3GiB, a maximum16GiB task-owned disk and a240s default canary deadline; the optional fourth argument
-`600` is reserved for an explicitly approved bounded installation stage. No new host trust or installed helper. The full four-node assembly requires at least5,570,035,712 bytes free after prerequisites and staged inputs; the prior8GiB canary disk does not meet that admission. Use a fresh task-owned disk, preserving the canary disk and evidence unchanged. The larger disk ceiling does not waive measured capacity or any assembly check.
+`600` is reserved for an explicitly approved bounded preparation stage; fixed `3600` permits the approved same-boot installed acceptance chain. Arbitrary durations remain refused. No new host trust or installed helper. The full four-node assembly requires at least5,570,035,712 bytes free after prerequisites and staged inputs; the prior8GiB canary disk does not meet that admission. Use a fresh task-owned disk, preserving the canary disk and evidence unchanged. The larger disk ceiling does not waive measured capacity or any assembly check.
 
 The final seed logs first-boot ID, requests a real reboot, verifies a different
 ID and retained loop-file contents on the second boot, then powers off. Its

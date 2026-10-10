@@ -28,8 +28,8 @@ func ownedRegularURL(_ path: String, maximum: UInt64) throws -> URL {
 
 setbuf(stdout, nil)
 let args = CommandLine.arguments
-guard args.count == 4 || (args.count == 5 && args[4] == "600") else {
-    fputs("usage: zero-nic-vm OWNED_DISK OWNED_READONLY_SEED OWNED_EFI [600]\n", stderr)
+guard args.count == 4 || (args.count == 5 && (args[4] == "600" || args[4] == "3600")) else {
+    fputs("usage: zero-nic-vm OWNED_DISK OWNED_READONLY_SEED OWNED_EFI [600|3600]\n", stderr)
     exit(2)
 }
 let delegate = StopDelegate()
@@ -71,7 +71,7 @@ do {
         case .failure(let error): fputs("TASK11_VZ_START_FAILED \(error)\n", stderr); exit(1)
         }
     }
-    let watchdogSeconds: Double = args.count == 5 ? 600 : 240
+    let watchdogSeconds: Double = args.count == 5 ? (args[4] == "3600" ? 3600 : 600) : 240
     DispatchQueue.main.asyncAfter(deadline: .now() + watchdogSeconds) {
         fputs("TASK11_VZ_TIMEOUT\n", stderr)
         exit(2)
