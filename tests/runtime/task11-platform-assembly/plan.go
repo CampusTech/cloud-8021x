@@ -136,3 +136,13 @@ func (b budget) validate() error {
 	}
 	return nil
 }
+
+// Revalidate current free capacity against the same pinned workload and reserve
+// requirements. Only a value copy's measurements change; the plan stays fixed.
+func (b budget) available(free, inodes int64) error {
+	if e := b.validate(); e != nil {
+		return e
+	}
+	b.FreeBytes, b.FreeInodes = free, inodes
+	return b.validate()
+}

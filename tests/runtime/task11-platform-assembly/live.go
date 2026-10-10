@@ -72,8 +72,8 @@ func (o operation) preflight() error {
 	if e != nil {
 		return e
 	}
-	if free < o.in.Plan.Budget.FreeBytes || inodes < o.in.Plan.Budget.FreeInodes {
-		return errors.New("actual capacity below independently measured admission")
+	if e := o.in.Plan.Budget.available(free, inodes); e != nil {
+		return e
 	}
 	// All executable paths are verified before any operation can indirectly use them.
 	for _, p := range o.in.Plan.Tools {
