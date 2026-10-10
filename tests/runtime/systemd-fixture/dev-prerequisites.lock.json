@@ -1,0 +1,242 @@
+{
+  "schema": 1,
+  "development_only": true,
+  "base": "debian-13-generic-arm64-20261001-2618",
+  "snapshot": "20261008T000000Z",
+  "packages": [
+    {
+      "name": "eapoltest",
+      "version": "2:2.10-24",
+      "architecture": "arm64",
+      "size": 1053144,
+      "installed_kib": 3047,
+      "sha256": "5077933a510724de12bb2725ef811f213745819e3dc273b45c5e2014b9c20d97",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/w/wpa/eapoltest_2.10-24_arm64.deb"
+    },
+    {
+      "name": "libgcrypt20",
+      "version": "1.11.0-7+deb13u1",
+      "architecture": "arm64",
+      "size": 741128,
+      "installed_kib": 1522,
+      "sha256": "243a42b879c6675348279a3f9a40e535d57185af00dbfd51b7481e777f163da6",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libg/libgcrypt20/libgcrypt20_1.11.0-7+deb13u1_arm64.deb"
+    },
+    {
+      "name": "libgdbm-compat4t64",
+      "version": "1.24-2",
+      "architecture": "arm64",
+      "size": 50320,
+      "installed_kib": 127,
+      "sha256": "266b9a9e8d1ecc4393ebd29bec7e7c0fe1505b1d8755033af9e15df161316627",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/g/gdbm/libgdbm-compat4t64_1.24-2_arm64.deb"
+    },
+    {
+      "name": "libgpg-error0",
+      "version": "1.51-4",
+      "architecture": "arm64",
+      "size": 78544,
+      "installed_kib": 236,
+      "sha256": "f9a8ee3f325360dbbb1c98331c60c7aa454a054a8a4564bc36b3e52fb53e019e",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libg/libgpg-error/libgpg-error0_1.51-4_arm64.deb"
+    },
+    {
+      "name": "libicu76",
+      "version": "76.1-4",
+      "architecture": "arm64",
+      "size": 9523672,
+      "installed_kib": 37547,
+      "sha256": "62eb15577c881b7d02aa861e3eb860902335630cc8174daf525b48c2fa39298f",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/i/icu/libicu76_76.1-4_arm64.deb"
+    },
+    {
+      "name": "libio-pty-perl",
+      "version": "1:1.20-1+b3",
+      "architecture": "arm64",
+      "size": 34004,
+      "installed_kib": 136,
+      "sha256": "cbee5c41ee44b758cbb91f9b771f4e2f73db7247f601ca4187a1730ffb199376",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libi/libio-pty-perl/libio-pty-perl_1.20-1+b3_arm64.deb"
+    },
+    {
+      "name": "libipc-run-perl",
+      "version": "20231003.0-2",
+      "architecture": "all",
+      "size": 101224,
+      "installed_kib": 267,
+      "sha256": "5f12071d638763274feb77774aefbd2fa90b44427f5699578c1a485696273d75",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libi/libipc-run-perl/libipc-run-perl_20231003.0-2_all.deb"
+    },
+    {
+      "name": "libjansson4",
+      "version": "2.14-2+b3",
+      "architecture": "arm64",
+      "size": 39228,
+      "installed_kib": 108,
+      "sha256": "7938472b1ddfa8b0c8f58d5f44406ae7a77a342dbb502a02f6bf292b4f853ab0",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/j/jansson/libjansson4_2.14-2+b3_arm64.deb"
+    },
+    {
+      "name": "libjson-perl",
+      "version": "4.10000-1",
+      "architecture": "all",
+      "size": 87516,
+      "installed_kib": 244,
+      "sha256": "db1c2e7465d8fe9f5e7e19ee3603446ee3310e672c2a92b6b3754281d4ef92e2",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libj/libjson-perl/libjson-perl_4.10000-1_all.deb"
+    },
+    {
+      "name": "libllvm19",
+      "version": "1:19.1.7-3+b1",
+      "architecture": "arm64",
+      "size": 23285344,
+      "installed_kib": 120416,
+      "sha256": "8a48e1a49f7fcc3be74e697767d72902f4b03041401d1529bcfad1849df39148",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/l/llvm-toolchain-19/libllvm19_19.1.7-3+b1_arm64.deb"
+    },
+    {
+      "name": "libnftables1",
+      "version": "1.1.3-1",
+      "architecture": "arm64",
+      "size": 310092,
+      "installed_kib": 1104,
+      "sha256": "260b0790a8f567ef27d293e15c722d867de113d579c330be17d13354cd61c356",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/n/nftables/libnftables1_1.1.3-1_arm64.deb"
+    },
+    {
+      "name": "libpcsclite1",
+      "version": "2.3.3-1",
+      "architecture": "arm64",
+      "size": 54996,
+      "installed_kib": 181,
+      "sha256": "e406cfd8f918cbe868c14a9d0dfbc0967f98861e679bcb0f30df6a49d80936f1",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/pcsc-lite/libpcsclite1_2.3.3-1_arm64.deb"
+    },
+    {
+      "name": "libperl5.40",
+      "version": "5.40.1-6+deb13u1",
+      "architecture": "arm64",
+      "size": 4137968,
+      "installed_kib": 31049,
+      "sha256": "b3cf688efb6096b2f3d95e96ad5b216602146ad11f792c1f3b2f66b5556241d9",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/perl/libperl5.40_5.40.1-6+deb13u1_arm64.deb"
+    },
+    {
+      "name": "libpq5",
+      "version": "17.11-0+deb13u1",
+      "architecture": "arm64",
+      "size": 229628,
+      "installed_kib": 1121,
+      "sha256": "1eb5e3126a6978446a4f02f53ce74c7ce4b7f13e48ec45adddcce1881d233458",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-17/libpq5_17.11-0+deb13u1_arm64.deb"
+    },
+    {
+      "name": "libxslt1.1",
+      "version": "1.1.35-1.2+deb13u3",
+      "architecture": "arm64",
+      "size": 222332,
+      "installed_kib": 590,
+      "sha256": "590a5d177dcfa2bf432f0d7db80b936ac7afadfebdb7f077d0c3305da20d1897",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/libx/libxslt/libxslt1.1_1.1.35-1.2+deb13u3_arm64.deb"
+    },
+    {
+      "name": "libz3-4",
+      "version": "4.13.3-1",
+      "architecture": "arm64",
+      "size": 7506868,
+      "installed_kib": 26286,
+      "sha256": "29a7b924a5a38c9ac4e2a64aa11586a9c54f26b579b18e4f75adf8f7c1106e45",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/z/z3/libz3-4_4.13.3-1_arm64.deb"
+    },
+    {
+      "name": "nftables",
+      "version": "1.1.3-1",
+      "architecture": "arm64",
+      "size": 75728,
+      "installed_kib": 225,
+      "sha256": "6cced5fccfbd80a25dfbd4bd17cc16372d08cb76c9d1159532ba0f668aa77c37",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/n/nftables/nftables_1.1.3-1_arm64.deb"
+    },
+    {
+      "name": "perl",
+      "version": "5.40.1-6+deb13u1",
+      "architecture": "arm64",
+      "size": 267732,
+      "installed_kib": 841,
+      "sha256": "7f15c34267346a0da41b9fe36d509d70dfb8d39561d275c4f4c53d429290f6d2",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/perl/perl_5.40.1-6+deb13u1_arm64.deb"
+    },
+    {
+      "name": "perl-modules-5.40",
+      "version": "5.40.1-6+deb13u1",
+      "architecture": "all",
+      "size": 3013728,
+      "installed_kib": 19993,
+      "sha256": "4c46cdd8f3135aa1c95f07e817f8e5d9be590687441ac1c27e3a8c49400f35ce",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/perl/perl-modules-5.40_5.40.1-6+deb13u1_all.deb"
+    },
+    {
+      "name": "postgresql-17",
+      "version": "17.11-0+deb13u1",
+      "architecture": "arm64",
+      "size": 16181424,
+      "installed_kib": 60927,
+      "sha256": "7565afa5ba192ed8dc5a8e25d6392c45f2ff22d5acbb4eeea80906196bce82fe",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-17/postgresql-17_17.11-0+deb13u1_arm64.deb"
+    },
+    {
+      "name": "postgresql-client-17",
+      "version": "17.11-0+deb13u1",
+      "architecture": "arm64",
+      "size": 2018616,
+      "installed_kib": 11144,
+      "sha256": "681864141a87da77cb1d1ff26dc4d53c6277974eea01ce57fd15ea57593543b7",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-17/postgresql-client-17_17.11-0+deb13u1_arm64.deb"
+    },
+    {
+      "name": "postgresql-client-common",
+      "version": "278",
+      "architecture": "all",
+      "size": 47080,
+      "installed_kib": 153,
+      "sha256": "023e5b37cdeecedcd32b7ea0d799c9696310c4fc659b8123c494e1ad3ca9e726",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-common/postgresql-client-common_278_all.deb"
+    },
+    {
+      "name": "postgresql-common",
+      "version": "278",
+      "architecture": "all",
+      "size": 112028,
+      "installed_kib": 355,
+      "sha256": "6c9e44d4864ab764785d8c40fe51cc51ddc0d36ac9a46bd383db20a4fc5f1e76",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-common/postgresql-common_278_all.deb"
+    },
+    {
+      "name": "postgresql-common-dev",
+      "version": "278",
+      "architecture": "all",
+      "size": 72428,
+      "installed_kib": 329,
+      "sha256": "4fdedb2786487319ee6e944e4a8bf4f65ae8bb63845213a0027bc7ca4f61c57b",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/p/postgresql-common/postgresql-common-dev_278_all.deb"
+    },
+    {
+      "name": "ssl-cert",
+      "version": "1.1.3",
+      "architecture": "all",
+      "size": 16816,
+      "installed_kib": 61,
+      "sha256": "1a14ad1f12472402a305efbc8d4e9f772bdc55292e38ca7cd7f32feb835d5e60",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/s/ssl-cert/ssl-cert_1.1.3_all.deb"
+    },
+    {
+      "name": "systemd-container",
+      "version": "257.13-1~deb13u1",
+      "architecture": "arm64",
+      "size": 622212,
+      "installed_kib": 2549,
+      "sha256": "964370b0fae077827fc48fe51d682a831fd1990c24aa927175f654d31d950598",
+      "url": "https://snapshot.debian.org/archive/debian/20261008T000000Z/pool/main/s/systemd/systemd-container_257.13-1~deb13u1_arm64.deb"
+    }
+  ]
+}

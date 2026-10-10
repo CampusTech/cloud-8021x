@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "lock_sha256": "ac9c459fbc700c11017ae8159a1153883051c0b79d647f9087688796a2f247d0",
+  "receiver": "libc-bin",
+  "trigger": "ldconfig",
+  "activation": "activate-noawait",
+  "packages": [
+    {
+      "name": "libgcrypt20",
+      "version": "1.11.0-7+deb13u1",
+      "architecture": "arm64",
+      "sha256": "243a42b879c6675348279a3f9a40e535d57185af00dbfd51b7481e777f163da6"
+    },
+    {
+      "name": "libgdbm-compat4t64",
+      "version": "1.24-2",
+      "architecture": "arm64",
+      "sha256": "266b9a9e8d1ecc4393ebd29bec7e7c0fe1505b1d8755033af9e15df161316627"
+    },
+    {
+      "name": "libgpg-error0",
+      "version": "1.51-4",
+      "architecture": "arm64",
+      "sha256": "f9a8ee3f325360dbbb1c98331c60c7aa454a054a8a4564bc36b3e52fb53e019e"
+    },
+    {
+      "name": "libicu76",
+      "version": "76.1-4",
+      "architecture": "arm64",
+      "sha256": "62eb15577c881b7d02aa861e3eb860902335630cc8174daf525b48c2fa39298f"
+    },
+    {
+      "name": "libjansson4",
+      "version": "2.14-2+b3",
+      "architecture": "arm64",
+      "sha256": "7938472b1ddfa8b0c8f58d5f44406ae7a77a342dbb502a02f6bf292b4f853ab0"
+    },
+    {
+      "name": "libllvm19",
+      "version": "1:19.1.7-3+b1",
+      "architecture": "arm64",
+      "sha256": "8a48e1a49f7fcc3be74e697767d72902f4b03041401d1529bcfad1849df39148"
+    },
+    {
+      "name": "libnftables1",
+      "version": "1.1.3-1",
+      "architecture": "arm64",
+      "sha256": "260b0790a8f567ef27d293e15c722d867de113d579c330be17d13354cd61c356"
+    },
+    {
+      "name": "libpcsclite1",
+      "version": "2.3.3-1",
+      "architecture": "arm64",
+      "sha256": "e406cfd8f918cbe868c14a9d0dfbc0967f98861e679bcb0f30df6a49d80936f1"
+    },
+    {
+      "name": "libperl5.40",
+      "version": "5.40.1-6+deb13u1",
+      "architecture": "arm64",
+      "sha256": "b3cf688efb6096b2f3d95e96ad5b216602146ad11f792c1f3b2f66b5556241d9"
+    },
+    {
+      "name": "libpq5",
+      "version": "17.11-0+deb13u1",
+      "architecture": "arm64",
+      "sha256": "1eb5e3126a6978446a4f02f53ce74c7ce4b7f13e48ec45adddcce1881d233458"
+    },
+    {
+      "name": "libxslt1.1",
+      "version": "1.1.35-1.2+deb13u3",
+      "architecture": "arm64",
+      "sha256": "590a5d177dcfa2bf432f0d7db80b936ac7afadfebdb7f077d0c3305da20d1897"
+    },
+    {
+      "name": "libz3-4",
+      "version": "4.13.3-1",
+      "architecture": "arm64",
+      "sha256": "29a7b924a5a38c9ac4e2a64aa11586a9c54f26b579b18e4f75adf8f7c1106e45"
+    }
+  ]
+}
