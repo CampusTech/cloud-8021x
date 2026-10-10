@@ -134,6 +134,9 @@ func decodeNASInputCore(raw []byte) (decodedNASInput, error) {
 	return out, nil
 }
 func validateCaseRequest(p scenarioPlan, r scenariocontract.Request) error {
+	if r.Action == "probe-owned-cleanup" && (p.Case != "native-accounting" || r.Sequence != 2) {
+		return errors.New("owned cleanup is fixed to native accounting sequence two")
+	}
 	authority := caseAuthority(p)
 	if authority != "" {
 		switch r.Action {

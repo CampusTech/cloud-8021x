@@ -11,7 +11,7 @@ func TestDriverRequestsKeepControllerPinsAndBoundedActions(t *testing.T) {
 	attempt := "task11-" + strings.Repeat("1", 32)
 	planPin := strings.Repeat("9", 64)
 	cases := map[string][]string{
-		"native-accounting": {"probe-active-pair", "read-accounting", "nas-native", "read-accounting"},
+		"native-accounting": {"probe-active-pair", "probe-owned-cleanup", "read-accounting", "nas-native", "read-accounting"},
 		"ongoing-baseline":  {"probe-active-pair", "read-accounting", "nas-ongoing", "read-accounting"},
 		"duplicate-pair":    {"probe-active-pair", "read-accounting", "nas-duplicates", "read-accounting"},
 		"ha-primary":        {"probe-active-pair", "read-accounting", "stop-green-primary", "nas-native", "start-green-primary", "probe-active-pair", "read-accounting", "reboot-green-primary", "probe-active-pair"},

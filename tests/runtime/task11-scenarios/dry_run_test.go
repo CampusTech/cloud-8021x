@@ -29,7 +29,7 @@ func TestRunDryRunValidatesExactPrivatePlanWithoutRuntimeAndEmitsOnlyClosedActio
 	if e := strictJSON(out.Bytes(), 4096, &projected); e != nil {
 		t.Fatal("bounded public plan projection absent", e)
 	}
-	if projected.Kind != "scenario-plan" || projected.Schema != 1 || projected.Case != p.Scenario.Case || projected.PlanSHA256 != pin || strings.Join(projected.Actions, ",") != "probe-active-pair,read-accounting,nas-native,read-accounting" {
+	if projected.Kind != "scenario-plan" || projected.Schema != 1 || projected.Case != p.Scenario.Case || projected.PlanSHA256 != pin || strings.Join(projected.Actions, ",") != "probe-active-pair,probe-owned-cleanup,read-accounting,nas-native,read-accounting" {
 		t.Fatal("dry-run inferred state or lost closed actions")
 	}
 	for _, name := range []string{"radius-secret", "class-key", "materials", "client.key", "attempt_id", "retired", "pass"} {

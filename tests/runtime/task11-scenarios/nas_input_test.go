@@ -19,7 +19,7 @@ func pureNASInput(t *testing.T) nasPrivateInput {
 	if e != nil {
 		t.Fatal(e)
 	}
-	request := scenariocontract.Request{Schema: 1, AttemptID: "task11-" + strings.Repeat("1", 32), Sequence: 3, Action: "nas-native", Pins: scenariocontract.Pins{PlanSHA256: digestBytes(raw), PlatformSHA256: p.Scenario.PlatformSHA256, EnrollmentSHA256: p.Scenario.EnrollmentSHA256, ApplicationSHA256: p.Scenario.ApplicationSHA256, ScenarioSHA256: p.Scenario.SelfSHA256}}
+	request := scenariocontract.Request{Schema: 1, AttemptID: "task11-" + strings.Repeat("1", 32), Sequence: 4, Action: "nas-native", Pins: scenariocontract.Pins{PlanSHA256: digestBytes(raw), PlatformSHA256: p.Scenario.PlatformSHA256, EnrollmentSHA256: p.Scenario.EnrollmentSHA256, ApplicationSHA256: p.Scenario.ApplicationSHA256, ScenarioSHA256: p.Scenario.SelfSHA256}}
 	requestBytes, e := json.MarshalIndent(request, "", " ")
 	if e != nil {
 		t.Fatal(e)

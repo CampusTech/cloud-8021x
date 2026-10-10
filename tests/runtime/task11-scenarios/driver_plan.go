@@ -18,7 +18,7 @@ func accountingRequests(p scenarioPlan, attempt, planPin string) ([]scenariocont
 	actions := []string{"probe-active-pair", "read-accounting"}
 	switch p.Scenario {
 	case "native-accounting":
-		actions = append(actions, "nas-native", "read-accounting")
+		actions = []string{"probe-active-pair", "probe-owned-cleanup", "read-accounting", "nas-native", "read-accounting"}
 	case "ongoing-baseline":
 		actions = append(actions, "nas-ongoing", "read-accounting")
 	case "duplicate-pair":

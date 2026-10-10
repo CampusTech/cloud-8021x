@@ -30,6 +30,13 @@ func validateResponse(packet, request, secret []byte, want byte) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if want == 3 {
+		for _, kind := range []byte{25, 64, 65, 81} {
+			if len(attrs[kind]) != 0 {
+				return "", errors.New("Access-Reject cannot carry Class or VLAN assignment")
+			}
+		}
+	}
 	if want != 2 {
 		return "", nil
 	}

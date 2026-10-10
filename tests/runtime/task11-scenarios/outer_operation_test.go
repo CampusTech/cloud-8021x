@@ -58,7 +58,7 @@ func TestOuterOperationUsesExclusiveRequestStageAndSoleRetiredDecoder(t *testing
 	if e != nil {
 		t.Fatal(e)
 	}
-	r := requests[1]
+	r := requests[2]
 	f := &pureControllerRoute{}
 	result, raw, e := submitOperation(context.Background(), f, r)
 	if e != nil {

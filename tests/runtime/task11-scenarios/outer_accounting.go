@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -105,6 +106,16 @@ func executeAccountingActions(ctx context.Context, p nasPrivatePlan, a outerAtte
 					return nil, errors.New("uncontrolled active pair change")
 				}
 				nodes[name] = after
+			}
+		case "probe-owned-cleanup":
+			// Reuse the sole strict body/retirement decoder with the exact
+			// request bytes published by submitOperation before any traffic.
+			rawRequest, err := json.Marshal(request)
+			if err != nil || result.Cleanup == nil {
+				return nil, errors.New("actual owned cleanup observation missing")
+			}
+			if _, err = sc.DecodeResult(op.raw, request, digestBytes(rawRequest)); err != nil {
+				return nil, errors.New("bound retired cleanup evidence differs")
 			}
 		case "stop-green-primary", "start-green-primary", "reboot-green-primary":
 			lifecycle := result.Lifecycle
