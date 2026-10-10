@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CampusTech/cloud-8021x/internal/accounting"
+	"github.com/CampusTech/cloud-8021x/internal/accounting/binding"
 	sc "github.com/CampusTech/cloud-8021x/tests/runtime/task11-acceptance/scenariocontract"
 )
 
@@ -90,7 +91,7 @@ func reconcileNativeLedger(p nasPrivatePlan, nas sc.NASResult, l sc.LedgerObserv
 			}
 			eventIndex++
 		}
-		if eventIndex >= len(plan.Events) || event.Key != key || event.Bits != 64 || !event.Marked || event.Location != "task11" || event.TerminateCause != "N/A" || event.CalledStation != "" || event.NASPort != "" || event.AttributionIssue != "" || event.Identity == nil || !reflect.DeepEqual(*event.Identity, nas.Attribution) {
+		if eventIndex >= len(plan.Events) || event.Key != key || event.Bits != 64 || !event.Marked || event.Location != "task11" || event.TerminateCause != "N/A" || event.CalledStation != "" || event.NASPort != "" || event.AttributionIssue != "" || event.Identity == nil || !sameLedgerAttribution(event.Identity, &nas.Attribution) {
 			return fail()
 		}
 		within := false
@@ -116,7 +117,7 @@ func reconcileNativeLedger(p nasPrivatePlan, nas sc.NASResult, l sc.LedgerObserv
 		workPayload["accounting:"+eventID] = event
 		if interval != nil {
 			actual, ok := intervals[interval.ID]
-			if !ok || actual.EventID != eventID || actual.SessionKey != session || !reflect.DeepEqual(actual.Interval, *interval) {
+			if !ok || actual.EventID != eventID || actual.SessionKey != session || !sameLedgerInterval(actual.Interval, *interval) {
 				return fail()
 			}
 			usageIDs = append(usageIDs, interval.ID)
@@ -126,7 +127,7 @@ func reconcileNativeLedger(p nasPrivatePlan, nas sc.NASResult, l sc.LedgerObserv
 			workPayload["usage:"+interval.ID] = *interval
 		}
 	}
-	if !slices.Equal(usageIDs, nas.Expected.UsageIDs) || upload != nas.Expected.UploadBytes || download != nas.Expected.DownloadBytes || seconds != nas.Expected.Seconds || !reflect.DeepEqual(l.Sessions[0].State, state) || len(l.Outbox) != len(workPayload) {
+	if !slices.Equal(usageIDs, nas.Expected.UsageIDs) || upload != nas.Expected.UploadBytes || download != nas.Expected.DownloadBytes || seconds != nas.Expected.Seconds || !sameLedgerState(l.Sessions[0].State, state) || len(l.Outbox) != len(workPayload) {
 		return fail()
 	}
 	used := map[string]bool{}
@@ -140,12 +141,14 @@ func reconcileNativeLedger(p nasPrivatePlan, nas sc.NASResult, l sc.LedgerObserv
 		// slice, including PostgreSQL JSON whitespace and all uint64 values.
 		if strings.HasPrefix(w.ID, "accounting:") {
 			var body accounting.Event
-			if strictJSON(w.Payload, 1<<20, &body) != nil || !reflect.DeepEqual(body, expected) {
+			want, ok := expected.(accounting.Event)
+			if !ok || strictJSON(w.Payload, 1<<20, &body) != nil || !sameLedgerEvent(body, want) {
 				return fail()
 			}
 		} else {
 			var body accounting.Interval
-			if strictJSON(w.Payload, 1<<20, &body) != nil || !reflect.DeepEqual(body, expected) {
+			want, ok := expected.(accounting.Interval)
+			if !ok || strictJSON(w.Payload, 1<<20, &body) != nil || !sameLedgerInterval(body, want) {
 				return fail()
 			}
 		}
@@ -153,7 +156,7 @@ func reconcileNativeLedger(p nasPrivatePlan, nas sc.NASResult, l sc.LedgerObserv
 	return nil
 }
 func preserveLedgerWork(before, after sc.LedgerObservation) error {
-	if before.Deployment != after.Deployment || before.Database != after.Database || !before.Epoch.Equal(after.Epoch) || before.ConfigSHA256 != after.ConfigSHA256 || !reflect.DeepEqual(before.Sessions, after.Sessions) || !reflect.DeepEqual(before.Observations, after.Observations) || !reflect.DeepEqual(before.Intervals, after.Intervals) || len(before.Outbox) != len(after.Outbox) {
+	if before.Deployment != after.Deployment || before.Database != after.Database || !before.Epoch.Equal(after.Epoch) || before.ConfigSHA256 != after.ConfigSHA256 || !sameLedgerRows(before, after) || len(before.Outbox) != len(after.Outbox) {
 		return errors.New("preserved native ledger identity or rows changed")
 	}
 	stored := map[string]sc.WorkObservation{}
@@ -181,7 +184,7 @@ func preserveLedgerWork(before, after sc.LedgerObservation) error {
 			if prior.Generation != current.Generation || prior.Owner != current.Owner || !prior.StartedAt.Equal(current.StartedAt) {
 				return errors.New("original attempt immutable identity changed")
 			}
-			if prior.FinishedAt != nil && !reflect.DeepEqual(prior, current) {
+			if prior.FinishedAt != nil && !sameLedgerAttempt(prior, current) {
 				return errors.New("original completed attempt evidence changed")
 			}
 			if prior.Outcome != nil && !reflect.DeepEqual(prior.Outcome, current.Outcome) {
@@ -199,4 +202,91 @@ func preserveLedgerWork(before, after sc.LedgerObservation) error {
 		}
 	}
 	return nil
+}
+
+// Typed records compare timestamp instants; location pointers and monotonic
+// clock metadata do not survive PostgreSQL/JSON. All other fields remain exact.
+// These helpers do not modify records or opaque stored payload/receipt bytes.
+func sameLedgerAttribution(a, b *binding.Attribution) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	x, y := *a, *b
+	if !x.IssuedAt.Equal(y.IssuedAt) {
+		return false
+	}
+	x.IssuedAt, y.IssuedAt = time.Time{}, time.Time{}
+	return reflect.DeepEqual(x, y)
+}
+func sameLedgerEvent(a, b accounting.Event) bool {
+	if !a.Received.Equal(b.Received) || !sameLedgerAttribution(a.Identity, b.Identity) {
+		return false
+	}
+	a.Received, b.Received = time.Time{}, time.Time{}
+	a.Identity, b.Identity = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+func sameLedgerState(a, b accounting.State) bool {
+	if !a.LastSeen.Equal(b.LastSeen) || !sameLedgerAttribution(a.Identity, b.Identity) {
+		return false
+	}
+	a.LastSeen, b.LastSeen = time.Time{}, time.Time{}
+	a.Identity, b.Identity = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+func sameLedgerInterval(a, b accounting.Interval) bool {
+	if !a.Received.Equal(b.Received) || !sameLedgerAttribution(a.Identity, b.Identity) {
+		return false
+	}
+	a.Received, b.Received = time.Time{}, time.Time{}
+	a.Identity, b.Identity = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+func sameLedgerAttempt(a, b sc.AttemptObservation) bool {
+	if !a.StartedAt.Equal(b.StartedAt) || (a.FinishedAt == nil) != (b.FinishedAt == nil) {
+		return false
+	}
+	if a.FinishedAt != nil && !a.FinishedAt.Equal(*b.FinishedAt) {
+		return false
+	}
+	a.StartedAt, b.StartedAt = time.Time{}, time.Time{}
+	a.FinishedAt, b.FinishedAt = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+func sameLedgerRows(a, b sc.LedgerObservation) bool {
+	if len(a.Sessions) != len(b.Sessions) || len(a.Observations) != len(b.Observations) || len(a.Intervals) != len(b.Intervals) || (a.Sessions == nil) != (b.Sessions == nil) || (a.Observations == nil) != (b.Observations == nil) || (a.Intervals == nil) != (b.Intervals == nil) {
+		return false
+	}
+	for i, x := range a.Sessions {
+		y := b.Sessions[i]
+		if !sameLedgerState(x.State, y.State) {
+			return false
+		}
+		x.State, y.State = accounting.State{}, accounting.State{}
+		if !reflect.DeepEqual(x, y) {
+			return false
+		}
+	}
+	for i, x := range a.Observations {
+		y := b.Observations[i]
+		if !x.ReceivedAt.Equal(y.ReceivedAt) || !sameLedgerEvent(x.Event, y.Event) {
+			return false
+		}
+		x.ReceivedAt, y.ReceivedAt = time.Time{}, time.Time{}
+		x.Event, y.Event = accounting.Event{}, accounting.Event{}
+		if !reflect.DeepEqual(x, y) {
+			return false
+		}
+	}
+	for i, x := range a.Intervals {
+		y := b.Intervals[i]
+		if !sameLedgerInterval(x.Interval, y.Interval) {
+			return false
+		}
+		x.Interval, y.Interval = accounting.Interval{}, accounting.Interval{}
+		if !reflect.DeepEqual(x, y) {
+			return false
+		}
+	}
+	return true
 }

@@ -92,6 +92,17 @@ and process-group cancellation. No operation under this source grant was run.
 
 ## Later separately authorized order
 
+After the actual321+26 prerequisite check, `task11-platform-assembly measure-base`
+records the actual347-row query, empty audit, 14 canonical executable hashes,
+bounded public lower projection with exact Unix modes, current statfs and existing
+loop occupancy. It exclusively publishes root0600 `control/base-after-prereqs.txt`,
+`control/lower-source.json` and `control/base-observations.json`; partial or prior
+outputs refuse replay. Symlinks are recorded without following targets, and private,
+excluded and special files are never opened. Free loops and space are observations,
+not reservations or readiness. Later staged inputs require a fresh capacity check.
+`measure-base --dry-run` prints its fixed plan without filesystem or process access;
+it accepts no path, root, tool or endpoint override and needs no platform plan.
+
 ```text
 task11-platform-assembly assemble --plan-sha256 PIN
 task11-platform-assembly start-primitive --plan-sha256 PIN

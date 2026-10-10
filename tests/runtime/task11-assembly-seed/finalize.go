@@ -127,6 +127,9 @@ func finalize(p plan, files map[string][]byte) (bundle, error) {
 			if e != nil {
 				return out, e
 			}
+			if ref.ID == "radius-task11-secret" {
+				v = "task11-" + v
+			}
 			values[ref.ID] = []byte(v)
 		}
 		resource := "projects/" + contract.ProjectNumber + "/secrets/" + ref.ID
@@ -136,6 +139,9 @@ func finalize(p plan, files map[string][]byte) (bundle, error) {
 			}
 			cloud.Secrets[resource] = map[string]string{"1": base64.StdEncoding.EncodeToString(values[ref.ID])}
 		}
+	}
+	if err = addNASInputs(out.Original, values); err != nil {
+		return out, err
 	}
 	ca, cert, key, err := tlsIdentity([]string{"secretmanager.googleapis.com", "cloudkms.googleapis.com", "sqladmin.googleapis.com", "fleet.task11.test", spec.Remote.IntakeHost, "otlp.task11.test", "unifi.task11.test"}, nil, spec.ObservedAt)
 	if err != nil {

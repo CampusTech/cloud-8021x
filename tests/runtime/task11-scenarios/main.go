@@ -95,6 +95,6 @@ func newScenarioCommand(in io.Reader, out io.Writer) *cobra.Command {
 	run.Flags().StringVar(&phase, "phase", "", "Explicit original, adopted or passive CA phase")
 	run.Flags().BoolVar(&dryRun, "dry-run", false, "Validate exact private stdin plan without installed operations")
 	run.Flags().BoolVar(&debug, "debug", false, "Log only sanitized closed invocation fields")
-	cmd.AddCommand(admit, nas, run)
+	cmd.AddCommand(admit, nas, run, prepareCommand(out))
 	return cmd
 }

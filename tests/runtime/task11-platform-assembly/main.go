@@ -115,6 +115,7 @@ func command() *cobra.Command {
 	cmd.Flags().StringVar(&result, "primitive-result-sha256", "", "Independent SHA256 of actual primitive verified-result.json; start-original only")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "Validate protected inputs without processes, connections or writes")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Log only public operation and input counts")
+	cmd.AddCommand(measureCommand())
 	return cmd
 }
 func main() {
