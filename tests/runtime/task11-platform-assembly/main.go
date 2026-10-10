@@ -119,8 +119,13 @@ func command() *cobra.Command {
 	return cmd
 }
 func main() {
-	if command().Execute() != nil {
-		logrus.WithField("component", "task11-platform-assembly").Error("development platform operation refused; inspect protected attempt evidence")
+	if err := command().Execute(); err != nil {
+		entry := logrus.WithField("component", "task11-platform-assembly")
+		var measurement *baseMeasurementError
+		if errors.As(err, &measurement) {
+			entry = entry.WithField("measurement_error", measurement.Error())
+		}
+		entry.Error("development platform operation refused; inspect protected attempt evidence")
 		os.Exit(1)
 	}
 }

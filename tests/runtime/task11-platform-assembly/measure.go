@@ -38,6 +38,13 @@ type baseObservations struct {
 	FreeLoopDevices                     []string
 }
 
+// Only failures from the fixed public measurement action may be diagnosed.
+// Business-stage failures never acquire this marker.
+type baseMeasurementError struct{ cause error }
+
+func (e *baseMeasurementError) Error() string { return e.cause.Error() }
+func (e *baseMeasurementError) Unwrap() error { return e.cause }
+
 var baseOutputNames = []string{"base-after-prereqs.txt", "lower-source.json", "base-observations.json"}
 
 func measureCommand() *cobra.Command { return measureCommandWith(measureBase) }
@@ -61,7 +68,10 @@ func measureCommandWith(run func(context.Context) error) *cobra.Command {
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Minute)
 		defer cancel()
-		return run(ctx)
+		if err := run(ctx); err != nil {
+			return &baseMeasurementError{cause: err}
+		}
+		return nil
 	}}
 	c.Flags().BoolVar(&dry, "dry-run", false, "Print the closed measurement plan without filesystem or process access")
 	c.Flags().BoolVar(&debug, "debug", false, "Log public measurement counts only")
@@ -138,7 +148,7 @@ func measureBase(ctx context.Context) error {
 	for n, p := range toolPaths {
 		h, err := measureBaseTool(ctx, p)
 		if err != nil {
-			return err
+			return fmt.Errorf("measure fixed tool %s: %w", n, err)
 		}
 		tools[n] = pin{p, h}
 	}
